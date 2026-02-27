@@ -110,10 +110,11 @@ func TestEngineReconciler_ReconcileIstioDriver(t *testing.T) {
 	}()
 
 	t.Log("Reconciling Istio Engine")
+	recorder := utils.NewFakeRecorder()
 	reconciler := &EngineReconciler{
 		Client:                    k8sClient,
 		Scheme:                    scheme,
-		Recorder:                  utils.NewTestRecorder(),
+		Recorder:                  recorder,
 		ruleSetCacheServerCluster: "test-cluster",
 	}
 	result, err := reconciler.Reconcile(ctx, ctrl.Request{
@@ -137,6 +138,9 @@ func TestEngineReconciler_ReconcileIstioDriver(t *testing.T) {
 	assert.Equal(t, "Ready", condition.Type)
 	assert.Equal(t, metav1.ConditionTrue, condition.Status)
 	assert.Equal(t, "Configured", condition.Reason)
+
+	assert.True(t, recorder.HasEvent("Normal", "WasmPluginCreated"),
+		"expected Normal/WasmPluginCreated event; got: %v", recorder.Events)
 }
 
 func TestEngineReconciler_StatusUpdateHandling(t *testing.T) {

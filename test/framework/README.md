@@ -107,6 +107,9 @@ SecRule ARGS "@contains attack" "id:1,phase:2,deny,status:403"`)
 | `ExpectResourceGone(ns, name, gvr)` | Poll until resource is deleted |
 | `ExpectCondition(ns, name, gvr, type, status)` | Generic condition poll |
 | `ExpectCreateFails(msg, fn)` | Assert fn returns error containing msg |
+| `GetEvents(ns)` | List all events.k8s.io/v1 events in namespace |
+| `ExpectEvent(ns, match)` | Poll until a matching event exists |
+| `ExpectNoEvent(ns, match)` | Assert no matching event currently exists (point-in-time) |
 
 ### GatewayProxy - Traffic Assertions
 

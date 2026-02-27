@@ -18,6 +18,7 @@ limitations under the License.
 package utils
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/go-logr/logr"
@@ -27,23 +28,76 @@ import (
 )
 
 // -----------------------------------------------------------------------------
-// Test Event Recorder
+// Test Event Recorder (no-op)
 // -----------------------------------------------------------------------------
+
+var (
+	_ events.EventRecorderLogger = (*testRecorder)(nil)
+	_ events.EventRecorderLogger = (*FakeRecorder)(nil)
+)
 
 type testRecorder struct{}
 
-// NewTestRecorder creates a no-op event recorder for testing
+// NewTestRecorder creates a no-op event recorder for testing.
 func NewTestRecorder() events.EventRecorder {
 	return &testRecorder{}
 }
 
-// Eventf records an event.
-func (r *testRecorder) Eventf(regarding runtime.Object, related runtime.Object, eventtype, reason, action, note string, args ...any) {
+// Eventf implements events.EventRecorder.
+func (r *testRecorder) Eventf(runtime.Object, runtime.Object, string, string, string, string, ...any) {
 }
 
-// WithLogger returns the recorder with a logger.
+// WithLogger implements events.EventRecorderLogger.
 func (r *testRecorder) WithLogger(logger klog.Logger) events.EventRecorderLogger {
 	return r
+}
+
+// -----------------------------------------------------------------------------
+// Fake Event Recorder (captures events for assertions)
+// -----------------------------------------------------------------------------
+
+// RecordedEvent holds a single event captured by FakeRecorder.
+type RecordedEvent struct {
+	Type   string
+	Reason string
+	Action string
+	Note   string
+}
+
+// FakeRecorder captures events for later inspection in tests.
+type FakeRecorder struct {
+	Events []RecordedEvent
+}
+
+// NewFakeRecorder creates a recorder that captures events instead of
+// discarding them.
+func NewFakeRecorder() *FakeRecorder {
+	return &FakeRecorder{}
+}
+
+// Eventf implements events.EventRecorder.
+func (r *FakeRecorder) Eventf(_ runtime.Object, _ runtime.Object, eventtype, reason, action, note string, args ...any) {
+	r.Events = append(r.Events, RecordedEvent{
+		Type:   eventtype,
+		Reason: reason,
+		Action: action,
+		Note:   fmt.Sprintf(note, args...),
+	})
+}
+
+// WithLogger implements events.EventRecorderLogger.
+func (r *FakeRecorder) WithLogger(_ klog.Logger) events.EventRecorderLogger {
+	return r
+}
+
+// HasEvent returns true if any recorded event matches the given type and reason.
+func (r *FakeRecorder) HasEvent(eventType, reason string) bool {
+	for _, e := range r.Events {
+		if e.Type == eventType && e.Reason == reason {
+			return true
+		}
+	}
+	return false
 }
 
 // -----------------------------------------------------------------------------

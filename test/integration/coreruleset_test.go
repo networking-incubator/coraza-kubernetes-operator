@@ -103,6 +103,10 @@ SecRule ARGS "@rx (?i:<script[^>]*>)" \
 	s.ExpectEngineReady(ns, "crs-engine")
 	s.ExpectWasmPluginExists(ns, "coraza-engine-crs-engine")
 
+	s.Step("verify operator emitted expected events")
+	s.ExpectEvent(ns, framework.EventMatch{Type: "Normal", Reason: "RulesCached"})
+	s.ExpectEvent(ns, framework.EventMatch{Type: "Normal", Reason: "WasmPluginCreated"})
+
 	// -------------------------------------------------------------------------
 	// Step 4: Deploy backend and verify WAF enforcement
 	// -------------------------------------------------------------------------

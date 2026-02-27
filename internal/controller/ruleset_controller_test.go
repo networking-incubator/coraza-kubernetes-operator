@@ -130,10 +130,11 @@ func TestRuleSetReconciler_ReconcileConfigMaps(t *testing.T) {
 			})
 
 			t.Logf("Reconciling RuleSet %s", tt.ruleSetName)
+			recorder := utils.NewFakeRecorder()
 			reconciler := &RuleSetReconciler{
 				Client:   k8sClient,
 				Scheme:   scheme,
-				Recorder: utils.NewTestRecorder(),
+				Recorder: recorder,
 				Cache:    ruleSetCache,
 			}
 			result, err := reconciler.Reconcile(ctx, ctrl.Request{
@@ -151,6 +152,9 @@ func TestRuleSetReconciler_ReconcileConfigMaps(t *testing.T) {
 			require.True(t, ok, "Cache entry should exist")
 			assert.Equal(t, tt.expectedRules, entry.Rules)
 			assert.NotEmpty(t, entry.UUID)
+
+			assert.True(t, recorder.HasEvent("Normal", "RulesCached"),
+				"expected Normal/RulesCached event; got: %v", recorder.Events)
 		})
 	}
 }
@@ -177,10 +181,11 @@ func TestRuleSetReconciler_MissingConfigMap(t *testing.T) {
 	}()
 
 	t.Log("Reconciling RuleSet - should requeue due to missing ConfigMap")
+	recorder := utils.NewFakeRecorder()
 	reconciler := &RuleSetReconciler{
 		Client:   k8sClient,
 		Scheme:   scheme,
-		Recorder: utils.NewTestRecorder(),
+		Recorder: recorder,
 		Cache:    ruleSetCache,
 	}
 	result, err := reconciler.Reconcile(ctx, ctrl.Request{
@@ -196,6 +201,9 @@ func TestRuleSetReconciler_MissingConfigMap(t *testing.T) {
 	cacheKey := testNamespace + "/missing-cm-ruleset"
 	_, ok := ruleSetCache.Get(cacheKey)
 	assert.False(t, ok)
+
+	assert.True(t, recorder.HasEvent("Warning", "ConfigMapNotFound"),
+		"expected Warning/ConfigMapNotFound event; got: %v", recorder.Events)
 }
 
 func TestRuleSetReconciler_ConfigMapMissingRulesKey(t *testing.T) {
@@ -233,10 +241,11 @@ func TestRuleSetReconciler_ConfigMapMissingRulesKey(t *testing.T) {
 	}()
 
 	t.Log("Reconciling RuleSet")
+	recorder := utils.NewFakeRecorder()
 	reconciler := &RuleSetReconciler{
 		Client:   k8sClient,
 		Scheme:   scheme,
-		Recorder: utils.NewTestRecorder(),
+		Recorder: recorder,
 		Cache:    ruleSetCache,
 	}
 	result, err := reconciler.Reconcile(ctx, ctrl.Request{
@@ -250,6 +259,9 @@ func TestRuleSetReconciler_ConfigMapMissingRulesKey(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "missing 'rules' key")
 	assert.False(t, result.Requeue)
+
+	assert.True(t, recorder.HasEvent("Warning", "InvalidConfigMap"),
+		"expected Warning/InvalidConfigMap event; got: %v", recorder.Events)
 }
 
 func TestRuleSetReconciler_ValidationRejection(t *testing.T) {
