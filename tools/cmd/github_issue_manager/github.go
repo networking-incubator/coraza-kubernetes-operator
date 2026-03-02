@@ -36,6 +36,7 @@ const (
 type Issue struct {
 	Number    int       `json:"number"`
 	State     string    `json:"state"`
+	Body      string    `json:"body"`
 	Labels    []string  `json:"-"`
 	Milestone *struct{} `json:"milestone"`
 }

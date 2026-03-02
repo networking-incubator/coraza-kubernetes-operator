@@ -102,9 +102,67 @@ func ComputeDeclined(labels []string, hasMilestone bool, state string) *Declined
 	return result
 }
 
+// areaRule maps keywords to an area label.
+type areaRule struct {
+	label    string
+	keywords []string
+}
+
+var areaRules = []areaRule{
+	{"area/testing", []string{"test", "testing", "e2e", "unit test", "integration test"}},
+	{"area/infrastructure", []string{"ci", "pipeline", "build", "makefile", "dockerfile", "github action", "workflow", "script"}},
+	{"area/documentation", []string{"docs", "documentation", "readme", "guide"}},
+	{"area/refinements", []string{"refactor", "improvement", "cleanup", "enhance", "technical debt"}},
+	{"area/perfscale", []string{"performance", "scale", "scaling", "latency", "throughput", "benchmark"}},
+}
+
+// ComputeSizeLabels returns "size/needs-sizing" when the issue is
+// triage/accepted but has no size/* label.
+func ComputeSizeLabels(labels []string) []string {
+	if contains(labels, "triage/accepted") && !hasLabelPrefix(labels, "size/") {
+		return []string{"size/needs-sizing"}
+	}
+	return nil
+}
+
+// ComputeAreaLabels returns area/* labels inferred from the issue body.
+// Only runs for triage/accepted issues with no existing area/* label.
+func ComputeAreaLabels(labels []string, body string) []string {
+	if !contains(labels, "triage/accepted") || hasLabelPrefix(labels, "area/") {
+		return nil
+	}
+
+	lower := strings.ToLower(body)
+	var out []string
+	for _, r := range areaRules {
+		for _, kw := range r.keywords {
+			if strings.Contains(lower, kw) {
+				out = append(out, r.label)
+				break
+			}
+		}
+	}
+	return out
+}
+
+// effectiveLabels returns labels as they would be after applying a TriageResult.
+func effectiveLabels(labels []string, result TriageResult) []string {
+	out := filter(labels, func(l string) bool { return !contains(result.LabelsToRemove, l) })
+	return append(out, result.LabelsToAdd...)
+}
+
 func contains(ss []string, s string) bool {
 	for _, v := range ss {
 		if v == s {
+			return true
+		}
+	}
+	return false
+}
+
+func hasLabelPrefix(labels []string, prefix string) bool {
+	for _, l := range labels {
+		if strings.HasPrefix(l, prefix) {
 			return true
 		}
 	}

@@ -169,3 +169,108 @@ func TestComputeDeclined(t *testing.T) {
 		})
 	}
 }
+
+func TestComputeSizeLabels(t *testing.T) {
+	tests := []struct {
+		name   string
+		labels []string
+		want   []string
+	}{
+		{
+			name:   "accepted without size adds needs-sizing",
+			labels: []string{"triage/accepted"},
+			want:   []string{"size/needs-sizing"},
+		},
+		{
+			name:   "accepted with size label is a no-op",
+			labels: []string{"triage/accepted", "size/M"},
+			want:   nil,
+		},
+		{
+			name:   "not accepted is a no-op",
+			labels: []string{"triage/needs-triage"},
+			want:   nil,
+		},
+		{
+			name:   "empty labels is a no-op",
+			labels: []string{},
+			want:   nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, ComputeSizeLabels(tt.labels))
+		})
+	}
+}
+
+func TestComputeAreaLabels(t *testing.T) {
+	tests := []struct {
+		name   string
+		labels []string
+		body   string
+		want   []string
+	}{
+		{
+			name:   "accepted detects test keyword",
+			labels: []string{"triage/accepted"},
+			body:   "We need to add integration test coverage",
+			want:   []string{"area/testing"},
+		},
+		{
+			name:   "accepted detects infrastructure keywords",
+			labels: []string{"triage/accepted"},
+			body:   "Fix the CI pipeline and add e2e coverage",
+			want:   []string{"area/testing", "area/infrastructure"},
+		},
+		{
+			name:   "accepted detects documentation keyword",
+			labels: []string{"triage/accepted"},
+			body:   "The README needs a new guide section",
+			want:   []string{"area/documentation"},
+		},
+		{
+			name:   "accepted detects refinements keyword",
+			labels: []string{"triage/accepted"},
+			body:   "Refactor the controller for cleanup",
+			want:   []string{"area/refinements"},
+		},
+		{
+			name:   "accepted detects perfscale keyword",
+			labels: []string{"triage/accepted"},
+			body:   "Benchmark latency under high throughput",
+			want:   []string{"area/perfscale"},
+		},
+		{
+			name:   "skips when area label already exists",
+			labels: []string{"triage/accepted", "area/testing"},
+			body:   "Refactor the test suite and improve performance",
+			want:   nil,
+		},
+		{
+			name:   "skips when not accepted",
+			labels: []string{"triage/needs-triage"},
+			body:   "Refactor the controller for cleanup",
+			want:   nil,
+		},
+		{
+			name:   "no match returns nil",
+			labels: []string{"triage/accepted"},
+			body:   "Something unrelated",
+			want:   nil,
+		},
+		{
+			name:   "case insensitive match",
+			labels: []string{"triage/accepted"},
+			body:   "PERFORMANCE benchmarks needed",
+			want:   []string{"area/perfscale"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, ComputeAreaLabels(tt.labels, tt.body))
+		})
+	}
+}
