@@ -15,6 +15,12 @@ rules:
   - watch
 - apiGroups:
   - ""
+  resources:
+  - pods
+  verbs:
+  - list
+- apiGroups:
+  - ""
   - events.k8s.io
   resources:
   - events
@@ -44,6 +50,13 @@ rules:
   - list
   - patch
   - update
+  - watch
+- apiGroups:
+  - gateway.networking.k8s.io
+  resources:
+  - gateways
+  verbs:
+  - list
   - watch
 - apiGroups:
   - waf.k8s.coraza.io
