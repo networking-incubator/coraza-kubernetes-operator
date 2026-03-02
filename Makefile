@@ -40,7 +40,7 @@ all: build
 
 .PHONY: build
 build: manifests generate fmt vet lint
-	go build -o bin/manager cmd/main.go
+	go build -o bin/manager cmd/main.go -tags no_fs_access
 
 .PHONY: build.image
 build.image:
@@ -173,6 +173,10 @@ test.integration:
 	go clean -testcache
 	KIND_CLUSTER_NAME=${KIND_CLUSTER_NAME} ISTIO_VERSION=${ISTIO_VERSION} go test -tags=integration ./test/integration/... -v
 
+.PHONY: test.tools
+test.tools:
+	cd tools/cmd/github_issue_manager && go test -v ./...
+
 
 # -------------------------------------------------------------------------------
 # Coraza Coreruleset targets
@@ -259,6 +263,17 @@ helm.template: ## Render the Helm chart templates locally
 .PHONY: helm.sync-crds
 helm.sync-crds: manifests ## Copy generated CRDs into the Helm chart
 	cp config/crd/bases/*.yaml $(HELM_CHART_DIR)/crds/
+
+.PHONY: helm.sync-rbac
+helm.sync-rbac: manifests ## Sync generated RBAC rules into the Helm chart ClusterRole
+	@GEN=config/rbac/role.yaml; \
+	CHART=$(HELM_CHART_DIR)/templates/clusterrole.yaml; \
+	sed '/^rules:/q' "$$CHART" > "$$CHART.tmp" && \
+	sed '1,/^rules:/d' "$$GEN" >> "$$CHART.tmp" && \
+	mv "$$CHART.tmp" "$$CHART"
+
+.PHONY: helm.sync
+helm.sync: helm.sync-crds helm.sync-rbac ## Sync all generated resources into the Helm chart
 
 # -------------------------------------------------------------------------------
 # Dependencies

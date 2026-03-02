@@ -5,69 +5,69 @@ metadata:
   labels:
     {{- include "coraza-operator.labels" . | nindent 4 }}
 rules:
-  - apiGroups:
-      - ""
-    resources:
-      - configmaps
-    verbs:
-      - get
-      - list
-      - watch
-  - apiGroups:
-      - ""
-      - events.k8s.io
-    resources:
-      - events
-    verbs:
-      - create
-      - patch
-  - apiGroups:
-      - coordination.k8s.io
-    resources:
-      - leases
-    verbs:
-      - create
-      - delete
-      - get
-      - list
-      - patch
-      - update
-      - watch
-  - apiGroups:
-      - extensions.istio.io
-    resources:
-      - wasmplugins
-    verbs:
-      - create
-      - delete
-      - get
-      - list
-      - patch
-      - update
-      - watch
-  - apiGroups:
-      - waf.k8s.coraza.io
-    resources:
-      - engines
-      - rulesets
-    verbs:
-      - get
-      - list
-      - patch
-      - update
-      - watch
-  - apiGroups:
-      - waf.k8s.coraza.io
-    resources:
-      - engines/finalizers
-    verbs:
-      - update
-  - apiGroups:
-      - waf.k8s.coraza.io
-    resources:
-      - engines/status
-      - rulesets/status
-    verbs:
-      - get
-      - patch
-      - update
+- apiGroups:
+  - ""
+  resources:
+  - configmaps
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - ""
+  - events.k8s.io
+  resources:
+  - events
+  verbs:
+  - create
+  - patch
+- apiGroups:
+  - coordination.k8s.io
+  resources:
+  - leases
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - extensions.istio.io
+  resources:
+  - wasmplugins
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - waf.k8s.coraza.io
+  resources:
+  - engines
+  - rulesets
+  verbs:
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - waf.k8s.coraza.io
+  resources:
+  - engines/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - waf.k8s.coraza.io
+  resources:
+  - engines/status
+  - rulesets/status
+  verbs:
+  - get
+  - patch
+  - update

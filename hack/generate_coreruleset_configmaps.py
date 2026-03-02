@@ -20,6 +20,13 @@ from typing import List, Tuple, Set
 
 # Base rules configmap content (from config/samples/ruleset.yaml)
 # this Base rules also contains the extra SecAction for Coreruleset deployment
+#
+# NOTE: SecAuditLogRelevantStatus uses "^(40[0-3]|40[5-9]|4[1-9][0-9]|5[0-9][0-9])$" instead of
+# the Perl-style "^(?:5|4(?!04))" because Coraza/Envoy WASM uses RE2 regex engine which does not
+# support negative lookahead (?!). This pattern matches all 4xx and 5xx status codes except 404.
+# The base rules present here are extracted from https://github.com/corazawaf/coraza-proxy-wasm/tree/3607c012f60c07263cd4d7a96e787e82b9047b7f/wasmplugin/rules
+# - crs-setup.conf.example
+# - coraza.conf-recommended.conf
 BASE_RULES_CONFIGMAP = """apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -28,11 +35,68 @@ data:
   rules: |
     SecRuleEngine On
     SecRequestBodyAccess On
+    SecRequestBodyLimit 131072
+    SecRequestBodyInMemoryLimit 131072
+    SecRequestBodyLimitAction Reject
     SecResponseBodyAccess Off
+    SecResponseBodyMimeType text/plain text/html text/xml
+    SecResponseBodyLimit 524288
+    SecResponseBodyLimitAction ProcessPartial
+    SecAuditEngine RelevantOnly
+    SecAuditLogType Serial
     SecAuditLog /dev/stdout
     SecAuditLogFormat JSON
-    SecAuditEngine RelevantOnly
+    SecAuditLogParts ABIJDEFHZ
+    SecAuditLogRelevantStatus "^(40[0-3]|40[5-9]|4[1-9][0-9]|5[0-9][0-9])$"
+    SecRule REQUEST_HEADERS:Content-Type "^(?:application(?:/soap\\+|/)|text/)xml" \\
+     "id:200000,\\
+     phase:1,\\
+     t:none,t:lowercase,\\
+     pass,\\
+     nolog,\\
+     ctl:requestBodyProcessor=XML"
+    SecRule REQUEST_HEADERS:Content-Type "^application/json" \\
+     "id:200001,\\
+     phase:1,\\
+     t:none,t:lowercase,\\
+     pass,\\
+     nolog,\\
+     ctl:requestBodyProcessor=JSON"
+    SecRule REQUEST_HEADERS:Content-Type "^application/[a-z0-9.-]+[+]json" \\
+     "id:200006,\\
+     phase:1,\\
+     t:none,t:lowercase,\\
+     pass,\\
+     nolog,\\
+     ctl:requestBodyProcessor=JSON"
+    SecRule REQBODY_ERROR "!@eq 0" \\
+     "id:200002,\\
+     phase:2,\\
+     t:none,\\
+     log,\\
+     deny,\\
+     status:400,\\
+     msg:'Failed to parse request body.',\\
+     logdata:'%{reqbody_error_msg}',\\
+     severity:2"
+    SecRule MULTIPART_STRICT_ERROR "!@eq 0" \\
+     "id:200003,\\
+     phase:2,\\
+     t:none,\\
+     log,\\
+     deny,\\
+     status:400,\\
+     msg:'Multipart request body failed strict validation.'"
     SecDefaultAction "phase:2,log,auditlog,deny,status:403"
+    SecAction \\
+     "id:900120,\\
+     phase:1,\\
+     pass,\\
+     t:none,\\
+     nolog,\\
+     tag:'OWASP_CRS',\\
+     ver:'OWASP_CRS/4.23.0',\\
+     setvar:tx.early_blocking=1"
     SecAction \\
      "id:900990,\\
      phase:1,\\
@@ -45,7 +109,29 @@ data:
 """
 
 # X-CRS-Test rule (optional)
-X_CRS_TEST_RULE = """    SecRule REQUEST_HEADERS:X-CRS-Test "@rx ^.*$" \\
+# Additional rules from https://github.com/corazawaf/coraza-proxy-wasm/blob/3607c012f60c07263cd4d7a96e787e82b9047b7f/wasmplugin/rules/ftw-config.conf
+X_CRS_TEST_RULE = """    SecResponseBodyMimeType text/plain text/html text/xml application/json
+    SecDefaultAction "phase:3,log,auditlog,pass"
+    SecDefaultAction "phase:4,log,auditlog,pass"
+    SecDefaultAction "phase:5,log,auditlog,pass"
+    SecDebugLogLevel 3
+    SecAction \\
+     "id:900005,\\
+     phase:1,\\
+     nolog,\\
+     pass,\\
+     t:none,\\
+     setvar:tx.blocking_paranoia_level=4,\\
+     setvar:tx.crs_validate_utf8_encoding=1,\\
+     setvar:tx.arg_name_length=100,\\
+     setvar:tx.arg_length=400,\\
+     setvar:tx.total_arg_length=64000,\\
+     setvar:tx.max_num_args=255,\\
+     setvar:tx.max_file_size=64100,\\
+     setvar:tx.combined_file_sizes=65535,\\
+     ctl:ruleEngine=DetectionOnly,\\
+     ctl:ruleRemoveById=910000"
+    SecRule REQUEST_HEADERS:X-CRS-Test "@rx ^.*$" \\
      "id:999999,\\
      pass,\\
      phase:1,\\

@@ -22,6 +22,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/corazawaf/coraza/v3"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
@@ -152,6 +153,21 @@ func (r *RuleSetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 			}
 
 			return ctrl.Result{}, err
+		}
+
+		if cm.Annotations["coraza.io/validation"] != "false" {
+			conf := coraza.NewWAFConfig()
+			if _, err := coraza.NewWAF(conf.WithDirectives(data)); err != nil {
+				patch := client.MergeFrom(ruleset.DeepCopy())
+				msg := fmt.Sprintf("ConfigMap %s doesn't contain valid rules:\n%v", rule.Name, err)
+				r.Recorder.Eventf(&ruleset, nil, "Warning", "InvalidConfigMap", "Reconcile", msg)
+				setStatusConditionDegraded(log, req, "RuleSet", &ruleset.Status.Conditions, ruleset.Generation, "InvalidConfigMap", msg)
+				if updateErr := r.Status().Patch(ctx, &ruleset, patch); updateErr != nil {
+					logError(log, req, "RuleSet", updateErr, "Failed to patch status")
+				}
+
+				return ctrl.Result{}, err
+			}
 		}
 
 		aggregatedRules.WriteString(data)

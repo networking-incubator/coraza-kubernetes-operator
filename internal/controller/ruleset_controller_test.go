@@ -78,11 +78,11 @@ func TestRuleSetReconciler_ReconcileConfigMaps(t *testing.T) {
 			name:        "multiple ConfigMaps",
 			ruleSetName: "multi-cm-ruleset",
 			configMaps: map[string]string{
-				"rules-1": "rule 1",
-				"rules-2": "rule 2",
-				"rules-3": "rule 3",
+				"rules-1": "SecCollectionTimeout 1",
+				"rules-2": "SecCollectionTimeout 2",
+				"rules-3": "SecCollectionTimeout 3",
 			},
-			expectedRules: "rule 1\nrule 2\nrule 3",
+			expectedRules: "SecCollectionTimeout 1\nSecCollectionTimeout 2\nSecCollectionTimeout 3",
 		},
 	}
 
@@ -321,7 +321,7 @@ func TestRuleSetReconciler_UpdateCache(t *testing.T) {
 	ruleSetCache := cache.NewRuleSetCache()
 
 	t.Log("Creating ConfigMap with initial rules")
-	cm := utils.NewTestConfigMap("update-rules", "default", "initial rules")
+	cm := utils.NewTestConfigMap("update-rules", "default", "SecDefaultAction \"phase:1,log,auditlog,pass\"")
 	err := k8sClient.Create(ctx, cm)
 	require.NoError(t, err)
 	defer func() {
@@ -368,7 +368,7 @@ func TestRuleSetReconciler_UpdateCache(t *testing.T) {
 	var updatedCM corev1.ConfigMap
 	err = k8sClient.Get(ctx, types.NamespacedName{Name: "update-rules", Namespace: testNamespace}, &updatedCM)
 	require.NoError(t, err)
-	updatedCM.Data["rules"] = "updated rules"
+	updatedCM.Data["rules"] = "SecDefaultAction \"phase:2,log,auditlog,pass\""
 	err = k8sClient.Update(ctx, &updatedCM)
 	require.NoError(t, err)
 
@@ -383,6 +383,6 @@ func TestRuleSetReconciler_UpdateCache(t *testing.T) {
 
 	t.Log("Verifying cache was updated with new rules and UUID changed")
 	entry2, _ := ruleSetCache.Get(cacheKey)
-	assert.Equal(t, "updated rules", entry2.Rules)
+	assert.Equal(t, "SecDefaultAction \"phase:2,log,auditlog,pass\"", entry2.Rules)
 	assert.NotEqual(t, uuid1, entry2.UUID, "UUID should change when rules are updated")
 }
