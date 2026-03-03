@@ -65,6 +65,20 @@ func (s *Scenario) ExpectEngineDegraded(namespace, name string) {
 	s.ExpectCondition(namespace, name, EngineGVR, "Degraded", "True")
 }
 
+// ExpectRuleSetReady polls until the RuleSet has condition Ready=True.
+func (s *Scenario) ExpectRuleSetReady(namespace, name string) {
+	s.T.Helper()
+	s.T.Logf("Waiting for Rule Set %s/%s to be Ready", namespace, name)
+	s.ExpectCondition(namespace, name, RuleSetGVR, "Ready", "True")
+}
+
+// ExpectRuleSetDegraded polls until the RuleSet has condition Degraded=True.
+func (s *Scenario) ExpectRuleSetDegraded(namespace, name string) {
+	s.T.Helper()
+	s.T.Logf("Waiting for RuleSet %s/%s to be Degraded", namespace, name)
+	s.ExpectCondition(namespace, name, RuleSetGVR, "Degraded", "True")
+}
+
 // ExpectGatewayProgrammed polls until the Gateway has condition
 // Programmed=True.
 func (s *Scenario) ExpectGatewayProgrammed(namespace, name string) {

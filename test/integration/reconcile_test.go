@@ -46,6 +46,8 @@ func TestReconciliation(t *testing.T) {
 	)
 	s.CreateRuleSet(ns, "ruleset", []string{"base-rules", "block-evil"})
 
+	s.ExpectRuleSetReady(ns, "ruleset")
+
 	s.CreateEngine(ns, "engine", framework.EngineOpts{
 		RuleSetName: "ruleset",
 		GatewayName: "reconcile-gw",
@@ -86,4 +88,16 @@ func TestReconciliation(t *testing.T) {
 
 	gw.ExpectAllowed("/sinistermonkey")
 	gw.ExpectBlocked("/maniacalmonkey")
+
+	// --- ConfigMap content update: replace with garbage
+
+	s.Step("replace rules with garbage")
+	s.UpdateConfigMap(ns, "block-sinister", "SecDoesNotExist")
+
+	s.ExpectRuleSetDegraded(ns, "ruleset")
+
+	s.Step("cache remained untouched, old rules still apply")
+	gw.ExpectAllowed("/sinistermonkey")
+	gw.ExpectBlocked("/maniacalmonkey")
+
 }
