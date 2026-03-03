@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -84,6 +85,12 @@ func (r *EngineReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		For(&wafv1alpha1.Engine{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		Owns(wasmPlugin).
 		Watches(gateway, handler.EnqueueRequestsFromMapFunc(r.findEnginesForGateway)).
+		Watches(&corev1.Pod{}, handler.EnqueueRequestsFromMapFunc(r.findEnginesForGateway), builder.WithPredicates(
+			predicate.NewPredicateFuncs(func(object client.Object) bool {
+				_, hasGWAPI := object.GetLabels()[gatewayNameLabel]
+				return hasGWAPI
+			}),
+		)).
 		WithOptions(controller.Options{
 			RateLimiter: workqueue.NewTypedItemExponentialFailureRateLimiter[ctrl.Request](
 				1*time.Second,
