@@ -47,8 +47,12 @@ This will trigger workflows to test and create the release:
 
 You can follow along on the [actions page].
 
-Release will cut a `draft` release from the tag, however stop here and wait to
-make sure `build-test` is successful for this tag before proceeding.
+The `release` workflow will build and push a container image to GHCR tagged
+with a `-dev` suffix (e.g. `ghcr.io/networking-incubator/coraza-kubernetes-operator:v0.1.1-dev`).
+This `-dev` tag indicates the image is not yet validated for production use.
+
+Release will also cut a `draft` release from the tag, however stop here and
+wait to make sure `build-test` is successful for this tag before proceeding.
 
 > **Note**: tags that start with `v0` or have suffixes including `rc`, `alpha`,
 > or `beta` (e.g. `v0.1.1`, `v1.0.0-rc1`, `v0.1.0-alpha1`) will be
@@ -76,7 +80,33 @@ Once you've verified the release integrity, publish the release.
 
 [releases page]:https://github.com/networking-incubator/coraza-kubernetes-operator/releases
 
-### Step 4 - Announcement
+### Step 4 - Container Image Tagging
+
+The release workflow pushes a container image tagged with a `-dev` suffix
+(e.g. `v0.1.1-dev`). This image is **not** intended for end users. Once you
+have validated the release and published it, you must re-tag the image to
+produce the final tags:
+
+```console
+# Pull the -dev image
+docker pull ghcr.io/networking-incubator/coraza-kubernetes-operator:v0.1.1-dev
+
+# Tag it with the release version (no -dev suffix)
+docker tag ghcr.io/networking-incubator/coraza-kubernetes-operator:v0.1.1-dev ghcr.io/networking-incubator/coraza-kubernetes-operator:v0.1.1
+
+# For stable (non-pre-release) versions, also tag as latest
+docker tag ghcr.io/networking-incubator/coraza-kubernetes-operator:v0.1.1-dev ghcr.io/networking-incubator/coraza-kubernetes-operator:latest
+
+# Push the final tags
+docker push ghcr.io/networking-incubator/coraza-kubernetes-operator:v0.1.1
+docker push ghcr.io/networking-incubator/coraza-kubernetes-operator:latest # conditionally
+```
+
+> **Warning**: Do **not** push the final (non `-dev`) tag or `latest` until you
+> are confident the release is correct. Pre-release versions (`v0.x.x`,
+> `-alpha`, `-beta`, `-rc`) should **not** be tagged as `latest`.
+
+### Step 5 - Announcement
 
 The release page will ask you if you want to create a discussion to announce
 the release. Either say yes to that and publish an `announcement` type
