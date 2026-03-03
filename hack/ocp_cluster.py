@@ -7,6 +7,9 @@ import argparse
 import shutil
 from pathlib import Path
 
+helm_chart_dir: str = "charts/coraza-kubernetes-operator"
+helm_release_name: str = "coraza-kubernetes-operator"
+
 def run(cmd, input_str=None, capture_output=True, check=True):
     """Unified execution helper with logging"""
     print(f"+ {cmd}")
@@ -153,8 +156,8 @@ def deploy_coraza_operator(args):
     res = run("oc get route default-route -n openshift-image-registry --template='{{ .spec.host }}'")
     registry_host_external = res.stdout.strip()
     push_image = f"{registry_host_external}/{args.coraza_ns}/coraza-operator:dev"
-    
-    pull_image = f"image-registry.openshift-image-registry.svc:5000/{args.coraza_ns}/coraza-operator:dev"
+    pull_image_repo = f"image-registry.openshift-image-registry.svc:5000/{args.coraza_ns}/coraza-operator"
+    pull_image_tag = "dev"
 
     print(f"Logging in to OpenShift registry at {registry_host_external}...")
     run(f"docker login -u kubeadmin -p $(oc whoami -t) {registry_host_external}")
@@ -163,21 +166,24 @@ def deploy_coraza_operator(args):
     run(f"docker tag ghcr.io/networking-incubator/coraza-kubernetes-operator:dev {push_image}")
     run(f"docker push {push_image}")
 
-    print(f"Updating manifests to pull from internal registry: {pull_image}...")
-    os.chdir(project_root / "config" / "default")
-    run(f"kustomize edit set image ghcr.io/networking-incubator/coraza-kubernetes-operator:dev={pull_image}")
-    
-    os.chdir(project_root)
-    run("oc apply -k config/default")
+    print(f"Deploying operator via Helm (pulling from internal registry: {pull_image_repo}:{pull_image_tag})...")
+    run(
+        f"helm upgrade --install {helm_release_name} {helm_chart_dir} "
+        f"--namespace {args.coraza_ns} "
+        f"--create-namespace "
+        f"--set image.repository={pull_image_repo} "
+        f"--set image.tag={pull_image_tag} "
+        f"--set openshift.enabled=true "
+        f"--set createNamespace=false"
+    )
 
-    # --- THE SCC PATCH ---
-    print("Patching deployment to remove incompatible hardcoded SCC values...")
-    patch = "'[{\"op\": \"remove\", \"path\": \"/spec/template/spec/securityContext/runAsUser\"}, {\"op\": \"remove\", \"path\": \"/spec/template/spec/securityContext/fsGroup\"}, {\"op\": \"remove\", \"path\": \"/spec/template/spec/securityContext/seccompProfile\"}]'"
-    
-    run(f"oc patch deployment coraza-controller-manager -n {args.coraza_ns} --type=json -p={patch}", check=False)
+    # seccompProfile: RuntimeDefault may conflict with some OCP SCC configurations
+    print("Patching deployment to remove seccompProfile (SCC compatibility)...")
+    patch = "'[{\"op\": \"remove\", \"path\": \"/spec/template/spec/securityContext/seccompProfile\"}]'"
+    run(f"oc patch deployment {helm_release_name} -n {args.coraza_ns} --type=json -p={patch}", check=False)
 
     print(f"Waiting for Coraza Operator to become Available (Timeout: {args.timeout}s)...")
-    run(f"oc wait --for=condition=Available deployment/coraza-controller-manager -n {args.coraza_ns} --timeout={args.timeout}s")
+    run(f"oc wait --for=condition=Available deployment/{helm_release_name} -n {args.coraza_ns} --timeout={args.timeout}s")
 
 
 def create_gateway(args, use_lb):
@@ -253,8 +259,6 @@ def main():
         print("\n=======================================================")
         print("--- Initiating Cleanup ---")
         print("=======================================================")
-        
-        project_root = Path(__file__).parent.parent.absolute()
 
         print("Cleaning up Coraza WAF instances (clearing finalizers)...")
         run("oc delete engines.waf.k8s.coraza.io --all -A", check=False)
@@ -263,9 +267,8 @@ def main():
         print("Cleaning up Istio control planes...")
         run(f"oc delete istio --all -n {args.coraza_ns}", check=False)
 
-        print("Removing Coraza Operator and cluster-scoped RBAC/CRDs...")
-        os.chdir(project_root)
-        run("oc delete -k config/default", check=False)
+        print("Removing Coraza Operator...")
+        run(f"helm uninstall {helm_release_name} --namespace {args.coraza_ns}", check=False)
 
         print("Removing GatewayClasses...")
         run("oc delete gatewayclass openshift-default", check=False)
