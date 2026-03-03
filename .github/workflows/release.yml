@@ -51,7 +51,10 @@ jobs:
           go-version-file: "go.mod"
           cache: false
 
-      - name: build manifest bundles # crds.yaml, operator.yaml, samples.yaml
+      - name: set up helm
+        uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
+
+      - name: build manifest bundles
         run: make release.manifests
         env:
           VERSION: ${{ github.ref_name }}
@@ -121,6 +124,7 @@ jobs:
             dist/crds.yaml
             dist/operator.yaml
             dist/samples.yaml
+            dist/*.tgz
           fail_on_unmatched_files: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

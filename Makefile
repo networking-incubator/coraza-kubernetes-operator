@@ -47,26 +47,35 @@ build.image:
 	$(CONTAINER_TOOL) build -t ${CONTROLLER_MANAGER_CONTAINER_IMAGE} .
 
 .PHONY: build.installer
-build.installer: manifests generate kustomize
+build.installer: manifests generate helm.sync ## Build a single install manifest (CRDs + operator)
 	mkdir -p dist
-	cd config/manager && "$(KUSTOMIZE)" edit set image controller=${CONTROLLER_MANAGER_CONTAINER_IMAGE}
-	"$(KUSTOMIZE)" build config/default > dist/install.yaml
+	helm template $(HELM_RELEASE_NAME) $(HELM_CHART_DIR) \
+		--namespace $(HELM_RELEASE_NAMESPACE) \
+		--include-crds \
+		--set image.repository=$(CONTROLLER_MANAGER_CONTAINER_IMAGE_BASE) \
+		--set image.tag=$(CONTROLLER_MANAGER_CONTAINER_IMAGE_TAG) \
+		> dist/install.yaml
 
 .PHONY: release.manifests
-release.manifests: manifests generate kustomize
+release.manifests: manifests generate helm.sync ## Build release manifest bundles (crds, operator, samples)
 	@echo "Building release manifest bundles..."
 	@mkdir -p dist
 	@echo "Building CRDs bundle..."
-	"$(KUSTOMIZE)" build config/crd > dist/crds.yaml
-	@echo "Building controller-manager bundle..."
-	cd config/manager && "$(KUSTOMIZE)" edit set image controller=${CONTROLLER_MANAGER_CONTAINER_IMAGE_BASE}:${VERSION}
-	"$(KUSTOMIZE)" build config/manager > dist/operator.yaml
+	cat $(HELM_CHART_DIR)/crds/*.yaml > dist/crds.yaml
+	@echo "Building operator bundle..."
+	helm template $(HELM_RELEASE_NAME) $(HELM_CHART_DIR) \
+		--namespace $(HELM_RELEASE_NAMESPACE) \
+		--set image.repository=$(CONTROLLER_MANAGER_CONTAINER_IMAGE_BASE) \
+		--set image.tag=$(VERSION) \
+		> dist/operator.yaml
 	@echo "Building samples bundle..."
 	cat config/samples/gateway.yaml > dist/samples.yaml
 	echo "---" >> dist/samples.yaml
 	cat config/samples/ruleset.yaml >> dist/samples.yaml
 	echo "---" >> dist/samples.yaml
 	cat config/samples/engine.yaml >> dist/samples.yaml
+	@echo "Packaging Helm chart..."
+	helm package $(HELM_CHART_DIR) --version $(VERSION:v%=%) --app-version $(VERSION) --destination dist/
 	@echo "Manifest bundles built successfully in dist/"
 	@ls -lh dist/
 
