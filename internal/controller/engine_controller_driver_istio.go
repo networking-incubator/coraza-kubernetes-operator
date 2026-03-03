@@ -97,9 +97,7 @@ func (r *EngineReconciler) provisionIstioEngineWithWasm(ctx context.Context, log
 	}
 	r.Recorder.Eventf(&engine, nil, "Normal", "WasmPluginCreated", "Provision", "Created WasmPlugin %s/%s", wasmPlugin.GetNamespace(), wasmPlugin.GetName())
 
-	// Requeue to refresh gateway status. Pod changes (scaling, rollouts)
-	// don't trigger reconciliation, so periodic re-check keeps status current.
-	return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+	return ctrl.Result{}, nil
 }
 
 // -----------------------------------------------------------------------------
