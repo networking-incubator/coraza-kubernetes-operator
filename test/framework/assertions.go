@@ -94,6 +94,35 @@ func (s *Scenario) ExpectGatewayAccepted(namespace, name string) {
 	s.ExpectCondition(namespace, name, GatewayGVR, "Accepted", "True")
 }
 
+// ExpectEngineGateways polls until the Engine's status.gateways matches the
+// expected list of Gateway names. Pass an empty slice for engines with no
+// matching gateways.
+func (s *Scenario) ExpectEngineGateways(namespace, name string, expectedNames []string) {
+	s.T.Helper()
+	s.T.Logf("Waiting for Engine %s/%s to have gateways: %v", namespace, name, expectedNames)
+	require.EventuallyWithT(s.T, func(collect *assert.CollectT) {
+		obj, err := s.F.DynamicClient.Resource(EngineGVR).Namespace(namespace).Get(
+			s.T.Context(), name, metav1.GetOptions{},
+		)
+		if !assert.NoError(collect, err, "get Engine %s/%s", namespace, name) {
+			return
+		}
+		gateways, _, _ := unstructured.NestedSlice(obj.Object, "status", "gateways")
+		var gotNames []string
+		for _, g := range gateways {
+			gw, ok := g.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			if n, ok := gw["name"].(string); ok {
+				gotNames = append(gotNames, n)
+			}
+		}
+		assert.Equal(collect, expectedNames, gotNames,
+			"Engine %s/%s: expected gateways %v, got %v", namespace, name, expectedNames, gotNames)
+	}, DefaultTimeout, DefaultInterval)
+}
+
 // -----------------------------------------------------------------------------
 // Resource Existence Assertions
 // -----------------------------------------------------------------------------

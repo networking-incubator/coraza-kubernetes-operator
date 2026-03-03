@@ -76,8 +76,14 @@ type EngineOpts struct {
 
 	// GatewayName sets the workload selector to target this gateway's pods
 	// via the gateway.networking.k8s.io/gateway-name label. Ignored if
-	// WorkloadLabels is set.
+	// WorkloadLabels or GatewayNames is set.
 	GatewayName string
+
+	// GatewayNames sets the workload selector to target pods from multiple
+	// Gateways using a matchExpressions In selector on the
+	// gateway.networking.k8s.io/gateway-name label. Takes precedence over
+	// GatewayName and WorkloadLabels.
+	GatewayNames []string
 
 	// WorkloadLabels overrides the workload selector. Takes precedence over
 	// GatewayName.
@@ -203,20 +209,38 @@ func BuildEngine(namespace, name string, opts EngineOpts) *unstructured.Unstruct
 		opts.PollInterval = 5
 	}
 
-	workloadLabels := opts.WorkloadLabels
-	if workloadLabels == nil && opts.GatewayName != "" {
-		workloadLabels = map[string]string{
-			"gateway.networking.k8s.io/gateway-name": opts.GatewayName,
+	var workloadSelector map[string]interface{}
+	if len(opts.GatewayNames) > 0 {
+		values := make([]interface{}, len(opts.GatewayNames))
+		for i, n := range opts.GatewayNames {
+			values[i] = n
 		}
-	}
-	if workloadLabels == nil {
-		workloadLabels = map[string]string{"app": "gateway"}
-	}
-
-	// Convert to map[string]interface{} for unstructured
-	labels := make(map[string]interface{}, len(workloadLabels))
-	for k, v := range workloadLabels {
-		labels[k] = v
+		workloadSelector = map[string]interface{}{
+			"matchExpressions": []interface{}{
+				map[string]interface{}{
+					"key":      "gateway.networking.k8s.io/gateway-name",
+					"operator": "In",
+					"values":   values,
+				},
+			},
+		}
+	} else {
+		workloadLabels := opts.WorkloadLabels
+		if workloadLabels == nil && opts.GatewayName != "" {
+			workloadLabels = map[string]string{
+				"gateway.networking.k8s.io/gateway-name": opts.GatewayName,
+			}
+		}
+		if workloadLabels == nil {
+			workloadLabels = map[string]string{"app": "gateway"}
+		}
+		labels := make(map[string]interface{}, len(workloadLabels))
+		for k, v := range workloadLabels {
+			labels[k] = v
+		}
+		workloadSelector = map[string]interface{}{
+			"matchLabels": labels,
+		}
 	}
 
 	ruleSetRef := map[string]interface{}{
@@ -237,11 +261,9 @@ func BuildEngine(namespace, name string, opts EngineOpts) *unstructured.Unstruct
 				"driver": map[string]interface{}{
 					"istio": map[string]interface{}{
 						"wasm": map[string]interface{}{
-							"image": opts.WasmImage,
-							"mode":  "gateway",
-							"workloadSelector": map[string]interface{}{
-								"matchLabels": labels,
-							},
+							"image":            opts.WasmImage,
+							"mode":             "gateway",
+							"workloadSelector": workloadSelector,
 							"ruleSetCacheServer": map[string]interface{}{
 								"pollIntervalSeconds": opts.PollInterval,
 							},
