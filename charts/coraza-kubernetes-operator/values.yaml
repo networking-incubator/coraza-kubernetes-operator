@@ -29,6 +29,8 @@ istio:
 openshift:
   enabled: false
 
+createNamespace: true
+
 podSecurityStandard:
   version: latest  # v1.35
 

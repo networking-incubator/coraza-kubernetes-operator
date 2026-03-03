@@ -17,6 +17,9 @@ gateway_api: str = (
     "releases/download/v1.4.1/standard-install.yaml"
 )
 sail_repo: str = "https://istio-ecosystem.github.io/sail-operator"
+helm_chart_dir: str = "charts/coraza-kubernetes-operator"
+helm_release_name: str = "coraza-kubernetes-operator"
+helm_release_namespace: str = "coraza-system"
 
 
 def get_istio_version() -> str:
@@ -268,26 +271,26 @@ spec:
 def deploy_coraza_operator(context: str) -> None:
     print("Deploying Coraza Operator")
 
-    result = run(
-        f"kubectl --context {context} --namespace coraza-system "
-        f"get deployment coraza-controller-manager 2>/dev/null",
-        check=False
+    image_repo = os.environ.get(
+        "CONTROLLER_MANAGER_CONTAINER_IMAGE_BASE",
+        "ghcr.io/networking-incubator/coraza-kubernetes-operator",
     )
-    deployment_exists = result.returncode == 0
-
-    run(f"kubectl --context {context} apply -k config/default")
-
-    if deployment_exists:
-        print("Restarting existing controller-manager deployment to pick up any image updates")
-        run(
-            f"kubectl --context {context} --namespace coraza-system "
-            f"rollout restart deployment/coraza-controller-manager"
-        )
+    image_tag = os.environ.get("CONTROLLER_MANAGER_CONTAINER_IMAGE_TAG", "dev")
 
     run(
-        f"kubectl --context {context} --namespace coraza-system wait "
+        f"helm upgrade --install {helm_release_name} {helm_chart_dir} "
+        f"--namespace {helm_release_namespace} "
+        f"--create-namespace "
+        f"--set image.repository={image_repo} "
+        f"--set image.tag={image_tag} "
+        f"--set createNamespace=false "
+        f"--kube-context {context}"
+    )
+
+    run(
+        f"kubectl --context {context} --namespace {helm_release_namespace} wait "
         "--for=condition=Available "
-        "deployment/coraza-controller-manager --timeout=300s"
+        "deployment/coraza-kubernetes-operator --timeout=300s"
     )
 
 def detect_docker() -> bool:
