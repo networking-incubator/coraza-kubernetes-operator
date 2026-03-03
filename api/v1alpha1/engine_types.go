@@ -29,6 +29,16 @@ type RuleSetReference struct {
 	Name string `json:"name"`
 }
 
+// GatewayReference is a reference to a Gateway resource in the same namespace
+// as the Engine.
+type GatewayReference struct {
+	// Name is the name of the Gateway in the same namespace as the Engine.
+	//
+	// +required
+	// +kubebuilder:validation:MinLength=1
+	Name string `json:"name"`
+}
+
 // -----------------------------------------------------------------------------
 // Engine - Schema Registration
 // -----------------------------------------------------------------------------
@@ -144,6 +154,14 @@ type EngineStatus struct {
 	// +patchMergeKey=type
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty" patchStrategy:"merge" patchMergeKey:"type"`
+
+	// Gateways is the list of Gateways in the same namespace that match
+	// the Engine's workload selector.
+	//
+	// +listType=map
+	// +listMapKey=name
+	// +optional
+	Gateways []GatewayReference `json:"gateways,omitempty"`
 }
 
 // -----------------------------------------------------------------------------

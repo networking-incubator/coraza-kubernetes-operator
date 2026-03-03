@@ -22,19 +22,23 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/events"
 	"k8s.io/client-go/util/workqueue"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	wafv1alpha1 "github.com/networking-incubator/coraza-kubernetes-operator/api/v1alpha1"
 )
@@ -46,6 +50,7 @@ import (
 // +kubebuilder:rbac:groups=waf.k8s.coraza.io,resources=engines,verbs=get;list;watch;patch;update
 // +kubebuilder:rbac:groups=waf.k8s.coraza.io,resources=engines/finalizers,verbs=update
 // +kubebuilder:rbac:groups=waf.k8s.coraza.io,resources=engines/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gateways,verbs=list;watch
 
 // -----------------------------------------------------------------------------
 // Engine Controller
@@ -69,9 +74,23 @@ func (r *EngineReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Kind:    "WasmPlugin",
 	})
 
+	gateway := &unstructured.Unstructured{}
+	gateway.SetGroupVersionKind(schema.GroupVersionKind{
+		Group:   "gateway.networking.k8s.io",
+		Version: "v1",
+		Kind:    "Gateway",
+	})
+
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&wafv1alpha1.Engine{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		Owns(wasmPlugin).
+		Watches(gateway, handler.EnqueueRequestsFromMapFunc(r.findEnginesForGateway)).
+		Watches(&corev1.Pod{}, handler.EnqueueRequestsFromMapFunc(r.findEnginesForGateway), builder.WithPredicates(
+			predicate.NewPredicateFuncs(func(object client.Object) bool {
+				_, hasGWAPI := object.GetLabels()[gatewayNameLabel]
+				return hasGWAPI
+			}),
+		)).
 		WithOptions(controller.Options{
 			RateLimiter: workqueue.NewTypedItemExponentialFailureRateLimiter[ctrl.Request](
 				1*time.Second,
@@ -80,6 +99,29 @@ func (r *EngineReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		}).
 		Named("engine").
 		Complete(r)
+}
+
+// findEnginesForGateway maps a Gateway to the Engines in the same namespace.
+func (r *EngineReconciler) findEnginesForGateway(ctx context.Context, gateway client.Object) []reconcile.Request {
+	log := logf.FromContext(ctx)
+
+	var engineList wafv1alpha1.EngineList
+	if err := r.List(ctx, &engineList, client.InNamespace(gateway.GetNamespace())); err != nil {
+		log.Error(err, "Engine: Failed to list Engines", "namespace", gateway.GetNamespace())
+		return nil
+	}
+
+	requests := make([]reconcile.Request, 0, len(engineList.Items))
+	for _, engine := range engineList.Items {
+		requests = append(requests, reconcile.Request{
+			NamespacedName: types.NamespacedName{
+				Name:      engine.Name,
+				Namespace: engine.Namespace,
+			},
+		})
+	}
+
+	return requests
 }
 
 // -----------------------------------------------------------------------------

@@ -19,8 +19,11 @@ package controller
 import (
 	"context"
 	"fmt"
+	"slices"
 
 	"github.com/go-logr/logr"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -35,6 +38,7 @@ import (
 // -----------------------------------------------------------------------------
 
 // +kubebuilder:rbac:groups=extensions.istio.io,resources=wasmplugins,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=pods,verbs=list
 
 // -----------------------------------------------------------------------------
 // Engine Controller - Istio Consts
@@ -74,8 +78,17 @@ func (r *EngineReconciler) provisionIstioEngineWithWasm(ctx context.Context, log
 	}
 	logInfo(log, req, "Engine", "WasmPlugin provisioned", "wasmNamespace", wasmPlugin.GetNamespace(), "wasmName", wasmPlugin.GetName())
 
+	logDebug(log, req, "Engine", "Finding matched Gateways")
+	gateways, err := r.matchedGateways(ctx, log, req, &engine)
+	if err != nil {
+		logError(log, req, "Engine", err, "Failed to find matched Gateways, not updating Gateway status")
+	}
+
 	logDebug(log, req, "Engine", "Updating status after successful provisioning")
 	patch := client.MergeFrom(engine.DeepCopy())
+	if err == nil {
+		engine.Status.Gateways = gateways
+	}
 	setStatusReady(log, req, "Engine", &engine.Status.Conditions, engine.Generation, "Configured", "WasmPlugin successfully created/updated")
 	if err := r.Status().Patch(ctx, &engine, patch); err != nil {
 		logError(log, req, "Engine", err, "Failed to patch status")
@@ -102,6 +115,11 @@ func (r *EngineReconciler) buildWasmPlugin(engine *wafv1alpha1.Engine) *unstruct
 		pluginConfig["rule_reload_interval_seconds"] = engine.Spec.Driver.Istio.Wasm.RuleSetCacheServer.PollIntervalSeconds
 	}
 
+	matchLabels := engine.Spec.Driver.Istio.Wasm.WorkloadSelector.MatchLabels
+	if matchLabels == nil {
+		matchLabels = map[string]string{}
+	}
+
 	wasmPlugin := &unstructured.Unstructured{
 		Object: map[string]any{
 			"apiVersion": "extensions.istio.io/v1alpha1",
@@ -114,7 +132,7 @@ func (r *EngineReconciler) buildWasmPlugin(engine *wafv1alpha1.Engine) *unstruct
 				"url":          engine.Spec.Driver.Istio.Wasm.Image,
 				"pluginConfig": pluginConfig,
 				"selector": map[string]any{
-					"matchLabels": engine.Spec.Driver.Istio.Wasm.WorkloadSelector.MatchLabels,
+					"matchLabels": matchLabels,
 				},
 			},
 		},
@@ -127,4 +145,48 @@ func (r *EngineReconciler) buildWasmPlugin(engine *wafv1alpha1.Engine) *unstruct
 	})
 
 	return wasmPlugin
+}
+
+// -----------------------------------------------------------------------------
+// Engine Controller - Istio Driver - Gateway Matching
+// -----------------------------------------------------------------------------
+
+// gatewayNameLabel is the well-known label that Istio applies to Gateway pods
+// to identify which Gateway resource they belong to.
+const gatewayNameLabel = "gateway.networking.k8s.io/gateway-name"
+
+// matchedGateways finds Gateways whose pods match the Engine's workload selector.
+// It lists pods matching the selector, then extracts unique Gateway names from
+// the well-known gateway-name label on each pod.
+func (r *EngineReconciler) matchedGateways(ctx context.Context, log logr.Logger, req ctrl.Request, engine *wafv1alpha1.Engine) ([]wafv1alpha1.GatewayReference, error) {
+	if engine.Spec.Driver.Istio.Wasm.WorkloadSelector == nil {
+		return nil, nil
+	}
+
+	selector, err := metav1.LabelSelectorAsSelector(engine.Spec.Driver.Istio.Wasm.WorkloadSelector)
+	if err != nil {
+		return nil, fmt.Errorf("invalid workload selector: %w", err)
+	}
+
+	var podList corev1.PodList
+	if err := r.List(ctx, &podList, client.InNamespace(engine.Namespace), client.MatchingLabelsSelector{Selector: selector}); err != nil {
+		return nil, fmt.Errorf("failed to list pods: %w", err)
+	}
+
+	var names []string
+	for _, pod := range podList.Items {
+		if gwName := pod.Labels[gatewayNameLabel]; gwName != "" {
+			names = append(names, gwName)
+		}
+	}
+	slices.Sort(names)
+	names = slices.Compact(names)
+
+	gateways := make([]wafv1alpha1.GatewayReference, len(names))
+	for i, name := range names {
+		gateways[i] = wafv1alpha1.GatewayReference{Name: name}
+	}
+
+	logDebug(log, req, "Engine", "Matched Gateways", "count", len(gateways))
+	return gateways, nil
 }
