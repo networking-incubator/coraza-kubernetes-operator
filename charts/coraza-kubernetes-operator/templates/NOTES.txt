@@ -4,8 +4,5 @@ Check the operator status:
 
   kubectl get pods -n {{ .Release.Namespace }} -l control-plane=coraza-controller-manager
 
-{{- if .Values.istio.enabled }}
-
-Istio integration is enabled (revision: {{ .Values.istio.revision }}).
+Istio integration is configured (revision: {{ .Values.istio.revision }}).
 ServiceEntry and DestinationRule have been created for the ruleset cache.
-{{- end }}
