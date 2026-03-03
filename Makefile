@@ -74,28 +74,26 @@ release.manifests: manifests generate kustomize
 # Deployment
 # ------------------------------------------------------------------------------
 
-ifndef ignore-not-found
-  ignore-not-found = false
-endif
+HELM_RELEASE_NAME ?= coraza-kubernetes-operator
+HELM_RELEASE_NAMESPACE ?= coraza-system
 
 .PHONY: install
-install: manifests kustomize
-	@out="$$( "$(KUSTOMIZE)" build config/crd 2>/dev/null || true )"; \
-	if [ -n "$$out" ]; then echo "$$out" | "$(KUBECTL)" apply -f -; else echo "No CRDs to install; skipping."; fi
+install: deploy ## Alias for deploy (Helm installs CRDs and operator together)
 
 .PHONY: uninstall
-uninstall: manifests kustomize
-	@out="$$( "$(KUSTOMIZE)" build config/crd 2>/dev/null || true )"; \
-	if [ -n "$$out" ]; then echo "$$out" | "$(KUBECTL)" delete --ignore-not-found=$(ignore-not-found) -f -; else echo "No CRDs to delete; skipping."; fi
+uninstall: undeploy ## Alias for undeploy
 
 .PHONY: deploy
-deploy: manifests kustomize
-	cd config/manager && "$(KUSTOMIZE)" edit set image controller=${CONTROLLER_MANAGER_CONTAINER_IMAGE}
-	"$(KUSTOMIZE)" build config/default | "$(KUBECTL)" apply -f -
+deploy: helm.sync ## Deploy operator into the cluster using Helm
+	helm upgrade --install $(HELM_RELEASE_NAME) $(HELM_CHART_DIR) \
+		--namespace $(HELM_RELEASE_NAMESPACE) \
+		--create-namespace \
+		--set image.repository=$(CONTROLLER_MANAGER_CONTAINER_IMAGE_BASE) \
+		--set image.tag=$(CONTROLLER_MANAGER_CONTAINER_IMAGE_TAG)
 
 .PHONY: undeploy
-undeploy: kustomize
-	"$(KUSTOMIZE)" build config/default | "$(KUBECTL)" delete --ignore-not-found=$(ignore-not-found) -f -
+undeploy: ## Remove operator from the cluster using Helm
+	helm uninstall $(HELM_RELEASE_NAME) --namespace $(HELM_RELEASE_NAMESPACE)
 
 .PHONY: run
 run: manifests generate fmt vet
@@ -285,18 +283,11 @@ $(LOCALBIN):
 
 KUBECTL ?= kubectl
 KIND ?= kind
-KUSTOMIZE ?= $(LOCALBIN)/kustomize
 CONTROLLER_GEN ?= $(LOCALBIN)/controller-gen
 GOLANGCI_LINT = $(LOCALBIN)/golangci-lint
 
-KUSTOMIZE_VERSION ?= v5.7.1
 CONTROLLER_TOOLS_VERSION ?= v0.19.0
 GOLANGCI_LINT_VERSION ?= v2.5.0
-
-.PHONY: kustomize
-kustomize: $(KUSTOMIZE)
-$(KUSTOMIZE): $(LOCALBIN)
-	$(call go-install-tool,$(KUSTOMIZE),sigs.k8s.io/kustomize/kustomize/v5,$(KUSTOMIZE_VERSION))
 
 .PHONY: controller-gen
 controller-gen: $(CONTROLLER_GEN)
