@@ -67,6 +67,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: prepare
     permissions:
+      contents: read
       packages: write
     env:
       REGISTRY: ghcr.io
