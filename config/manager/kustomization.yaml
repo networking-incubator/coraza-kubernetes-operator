@@ -1,6 +1,0 @@
-resources:
-  - manager.yaml
-  - pod_disruption_budget.yaml
-  - service.yaml
-  - service_entry.yaml
-  - destination_rule.yaml

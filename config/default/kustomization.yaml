@@ -1,4 +1,0 @@
-resources:
-  - ../crd
-  - ../rbac
-  - ../manager

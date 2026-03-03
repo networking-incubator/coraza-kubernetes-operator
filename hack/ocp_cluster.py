@@ -47,14 +47,41 @@ def setup_internal_registry(args):
 
     run(f"oc create namespace {args.coraza_ns} --dry-run=client -o yaml | oc apply -f -")
 
-    # Resolve the absolute path to the external YAML file
-    project_root = Path(__file__).parent.parent.absolute()
-    rbac_file = project_root / "config" / "rbac" / "internal_registry.yaml"
-    
-    print(f"Applying registry RoleBindings from {rbac_file}...")
-    
-    # Apply the file and inject the target namespace dynamically
-    run(f"oc apply -f {rbac_file} -n {args.coraza_ns}")
+    rbac_manifest = """\
+apiVersion: v1
+kind: List
+items:
+- apiVersion: rbac.authorization.k8s.io/v1
+  kind: RoleBinding
+  metadata:
+    name: image-puller
+  roleRef:
+    apiGroup: rbac.authorization.k8s.io
+    kind: ClusterRole
+    name: system:image-puller
+  subjects:
+  - apiGroup: rbac.authorization.k8s.io
+    kind: Group
+    name: system:unauthenticated
+  - apiGroup: rbac.authorization.k8s.io
+    kind: Group
+    name: system:serviceaccounts
+- apiVersion: rbac.authorization.k8s.io/v1
+  kind: RoleBinding
+  metadata:
+    name: image-pusher
+  roleRef:
+    apiGroup: rbac.authorization.k8s.io
+    kind: ClusterRole
+    name: system:image-builder
+  subjects:
+  - apiGroup: rbac.authorization.k8s.io
+    kind: Group
+    name: system:unauthenticated
+"""
+
+    print(f"Applying registry RoleBindings in {args.coraza_ns}...")
+    run(f"oc apply -f - -n {args.coraza_ns}", input_str=rbac_manifest)
 
 def deploy_gateway_class(args, istio_version, ossm_version):    
     # Safeguard: Ensure the OSSM version has the required prefix for the annotation
