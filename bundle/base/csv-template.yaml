@@ -1,0 +1,98 @@
+apiVersion: operators.coreos.com/v1alpha1
+kind: ClusterServiceVersion
+metadata:
+  annotations:
+    alm-examples: '[]'
+    capabilities: Basic Install
+    categories: Security
+    containerImage: REPLACE_IMAGE
+    repository: https://github.com/networking-incubator/coraza-kubernetes-operator
+    support: networking-incubator
+  name: coraza-kubernetes-operator.vREPLACE_VERSION
+  namespace: placeholder
+spec:
+  apiservicedefinitions: {}
+  customresourcedefinitions:
+    owned:
+      - description: Engine configures a Coraza WAF instance attached to a Gateway.
+        displayName: Engine
+        kind: Engine
+        name: engines.waf.k8s.coraza.io
+        version: v1alpha1
+      - description: RuleSet defines an ordered set of WAF rules sourced from ConfigMaps.
+        displayName: RuleSet
+        kind: RuleSet
+        name: rulesets.waf.k8s.coraza.io
+        version: v1alpha1
+    required:
+      - description: Gateway represents an instance of a service-traffic handling infrastructure.
+        displayName: Gateway
+        kind: Gateway
+        name: gateways.gateway.networking.k8s.io
+        version: v1
+      - description: WasmPlugin provides a mechanism to extend the functionality provided by the Istio proxy.
+        displayName: WasmPlugin
+        kind: WasmPlugin
+        name: wasmplugins.extensions.istio.io
+        version: v1alpha1
+  description: |
+    The Coraza Kubernetes Operator provides Web Application Firewall (WAF)
+    support for Kubernetes Gateways via Istio. It manages Coraza WAF
+    engine instances and rule sets, automatically configuring Istio
+    WasmPlugins to enforce security policies at the gateway level.
+
+    ### Features
+    - Declarative WAF configuration via Kubernetes custom resources
+    - Automatic Istio WasmPlugin management
+    - Rule set caching for performance
+    - Support for OWASP CoreRuleSet
+
+    ### Prerequisites
+    - Istio service mesh installed
+    - Gateway API CRDs installed
+  displayName: Coraza Kubernetes Operator
+  icon:
+    - base64data: ""
+      mediatype: image/png
+  install:
+    spec:
+      clusterPermissions: []
+      deployments: []
+    strategy: deployment
+  installModes:
+    - supported: false
+      type: OwnNamespace
+    - supported: false
+      type: SingleNamespace
+    - supported: false
+      type: MultiNamespace
+    - supported: true
+      type: AllNamespaces
+  keywords:
+    - waf
+    - coraza
+    - security
+    - kubernetes
+    - gateway
+    - istio
+  links:
+    - name: GitHub
+      url: https://github.com/networking-incubator/coraza-kubernetes-operator
+    - name: Coraza WAF
+      url: https://coraza.io/
+  maintainers:
+    - email: ""
+      name: networking-incubator
+  maturity: alpha
+  minKubeVersion: "1.33.0"
+  nativeAPIs:
+    - group: ""
+      kind: ConfigMap
+      version: v1
+    - group: ""
+      kind: Pod
+      version: v1
+  provider:
+    name: networking-incubator
+    url: https://github.com/networking-incubator
+  version: REPLACE_VERSION

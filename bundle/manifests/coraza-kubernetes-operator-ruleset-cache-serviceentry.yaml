@@ -1,0 +1,21 @@
+apiVersion: networking.istio.io/v1
+kind: ServiceEntry
+metadata:
+  name: coraza-kubernetes-operator-ruleset-cache
+  labels:
+    app.kubernetes.io/name: coraza-kubernetes-operator
+    app.kubernetes.io/instance: coraza-kubernetes-operator
+    control-plane: coraza-controller-manager
+    app.kubernetes.io/version: 0.2.0
+    istio.io/rev: coraza
+spec:
+  hosts:
+  - coraza-kubernetes-operator.coraza-system.svc.cluster.local
+  ports:
+  - number: 80
+    name: http
+    protocol: HTTP
+  location: MESH_INTERNAL
+  resolution: DNS
+  endpoints:
+  - address: coraza-kubernetes-operator.coraza-system.svc.cluster.local

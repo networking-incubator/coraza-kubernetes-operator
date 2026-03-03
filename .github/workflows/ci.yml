@@ -53,6 +53,40 @@ jobs:
         run: make lint
 
 
+  bundle-validate:
+    name: bundle validate
+    runs-on: ubuntu-latest
+    needs: [build]
+    steps:
+      - name: checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: set up python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.x"
+      - name: install python dependencies
+        run: pip install PyYAML
+      - name: set up helm
+        uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
+      - name: set up go
+        uses: actions/setup-go@4b73464bb391d4059bd26b0524d20df3927bd417 # v6.3.0
+        with:
+          go-version-file: "go.mod"
+          cache: false
+      - name: install operator-sdk
+        run: |
+          export ARCH=$(case $(uname -m) in x86_64) echo -n amd64 ;; aarch64) echo -n arm64 ;; *) echo -n $(uname -m) ;; esac)
+          export OS=$(uname | awk '{print tolower($0)}')
+          export OPERATOR_SDK_DL_URL=https://github.com/operator-framework/operator-sdk/releases/download/v1.39.2
+          curl -sSLo /usr/local/bin/operator-sdk ${OPERATOR_SDK_DL_URL}/operator-sdk_${OS}_${ARCH}
+          chmod +x /usr/local/bin/operator-sdk
+      - name: generate and validate bundle
+        run: |
+          make bundle
+          operator-sdk bundle validate ./bundle
+
   chart-lint:
     name: chart-lint
     runs-on: ubuntu-latest

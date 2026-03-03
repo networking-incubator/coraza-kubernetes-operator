@@ -240,6 +240,41 @@ test.conformance:
 	cd test/conformance &&  $(CONFORMANCE_EXTRA_FLAGS) FTW_CONFIG=$(shell pwd)/test/conformance/ftw.yml TESTMANIFESTS_PATH=$(CORERULESET_DIR)/tests/tests RULESET_PATH=$(LOCALRULES)/rules.yaml KIND_CLUSTER_NAME=${KIND_CLUSTER_NAME} ISTIO_VERSION=${ISTIO_VERSION} go test -tags=conformance ./... -v
 
 # -------------------------------------------------------------------------------
+# OLM Bundle
+# -------------------------------------------------------------------------------
+
+BUNDLE_IMG ?= ghcr.io/networking-incubator/coraza-kubernetes-operator-bundle:$(VERSION)
+CATALOG_IMG ?= ghcr.io/networking-incubator/coraza-kubernetes-operator-catalog:$(VERSION)
+BUNDLE_DIR ?= bundle
+CATALOG_DIR ?= catalog
+
+.PHONY: bundle
+bundle: helm.sync ## Generate OLM bundle from Helm chart
+	python3 hack/generate_bundle.py \
+		--chart-dir $(HELM_CHART_DIR) \
+		--bundle-dir $(BUNDLE_DIR) \
+		--version $(VERSION) \
+		--image $(CONTROLLER_MANAGER_CONTAINER_IMAGE) \
+		--channels alpha \
+		--default-channel alpha
+
+.PHONY: bundle-build
+bundle-build: ## Build the OLM bundle image
+	$(CONTAINER_TOOL) build -f $(BUNDLE_DIR)/bundle.Dockerfile -t $(BUNDLE_IMG) $(BUNDLE_DIR)
+
+.PHONY: bundle-push
+bundle-push: ## Push the OLM bundle image
+	$(CONTAINER_TOOL) push $(BUNDLE_IMG)
+
+.PHONY: catalog-build
+catalog-build: ## Build the OLM catalog image
+	$(CONTAINER_TOOL) build -f $(CATALOG_DIR)/Dockerfile -t $(CATALOG_IMG) $(CATALOG_DIR)
+
+.PHONY: catalog-push
+catalog-push: ## Push the OLM catalog image
+	$(CONTAINER_TOOL) push $(CATALOG_IMG)
+
+# -------------------------------------------------------------------------------
 # Helm
 # -------------------------------------------------------------------------------
 
