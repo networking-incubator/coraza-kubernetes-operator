@@ -69,8 +69,8 @@ following are correct:
 * The release **name** should just be the tag name
 * Add the major themes and most important changes to the top of the **description**
 * The remainder of the **description** should include the auto-generated release notes
-* The **crds.yaml**, **operator.yaml** & **samples.yaml** artifacts are attached
-  * Check each manifest, and verify its correctness
+* The **crds.yaml**, **operator.yaml**, **samples.yaml** & Helm chart **.tgz** artifacts are attached
+  * Check each manifest and the chart package, and verify their correctness
 * Make sure the **previous release** is set correctly
   * e.g. for a `v1.0.0` release, _don't_ target `rc`, patch or other pre-releases. Target the last major/minor.
 
