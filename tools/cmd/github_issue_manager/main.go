@@ -102,7 +102,7 @@ func run(args []string) error {
 
 	switch command {
 	case "update-labels":
-		return runUpdateLabels(client, issue, iss.Labels, iss.HasMilestone(), dryRun, log)
+		return runUpdateLabels(client, issue, iss.Labels, iss.HasMilestone(), iss.Body, dryRun, log)
 
 	case "close-declined":
 		return runCloseDeclined(client, issue, iss.Labels, iss.HasMilestone(), iss.State, dryRun, log)
@@ -112,7 +112,7 @@ func run(args []string) error {
 	}
 }
 
-func runUpdateLabels(client *GitHubClient, number int, labels []string, hasMilestone, dryRun bool, log func(string, ...any)) error {
+func runUpdateLabels(client *GitHubClient, number int, labels []string, hasMilestone bool, body string, dryRun bool, log func(string, ...any)) error {
 	// Skip declined issues — they are handled entirely by close-declined.
 	if contains(labels, "triage/declined") {
 		log("Issue is declined, skipping label updates")
@@ -120,6 +120,11 @@ func runUpdateLabels(client *GitHubClient, number int, labels []string, hasMiles
 	}
 
 	result := ComputeLabelUpdates(labels, hasMilestone)
+	effective := effectiveLabels(labels, result)
+
+	// add size/needs-sizing label (if missing) and area labels based on content
+	result.LabelsToAdd = append(result.LabelsToAdd, ComputeSizeLabels(effective)...)
+	result.LabelsToAdd = append(result.LabelsToAdd, ComputeAreaLabels(effective, body)...)
 
 	if len(result.LabelsToAdd) == 0 && len(result.LabelsToRemove) == 0 {
 		log("No label changes needed")
