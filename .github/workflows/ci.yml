@@ -229,7 +229,7 @@ jobs:
           echo "Collecting envoy/ingress gateway logs..."
           kubectl logs -n istio-system -l app=istio-ingressgateway > envoy.log || echo "Failed to collect envoy logs"
           echo "Collecting controller manager logs..."
-          kubectl logs -n coraza-system -l control-plane=controller-manager > controller.log || echo "Failed to collect controller logs"
+          kubectl logs -n coraza-system -l control-plane=coraza-controller-manager > controller.log || echo "Failed to collect controller logs"
           echo "Collecting cluster info..."
           kubectl cluster-info dump --output-directory=cluster-dump --namespaces=istio-system,coraza-system,default || echo "Failed to collect cluster dump"
 
