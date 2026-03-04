@@ -266,6 +266,13 @@ bundle-build: ## Build the OLM bundle image
 bundle-push: ## Push the OLM bundle image
 	$(CONTAINER_TOOL) push $(BUNDLE_IMG)
 
+.PHONY: catalog-update
+catalog-update: ## Add the current VERSION to the OLM catalog
+	python3 hack/update_catalog.py \
+		--catalog-file $(CATALOG_DIR)/coraza-kubernetes-operator/catalog.yaml \
+		--bundle-image $(BUNDLE_IMG) \
+		--version $(VERSION)
+
 .PHONY: catalog-build
 catalog-build: ## Build the OLM catalog image
 	$(CONTAINER_TOOL) build -f $(CATALOG_DIR)/Dockerfile -t $(CATALOG_IMG) $(CATALOG_DIR)

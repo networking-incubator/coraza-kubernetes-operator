@@ -1,4 +1,4 @@
-FROM registry.operatorhub.io/opm:latest
+FROM quay.io/operator-framework/opm:latest
 
 COPY coraza-kubernetes-operator /configs/coraza-kubernetes-operator
 

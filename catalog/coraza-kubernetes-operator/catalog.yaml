@@ -3,6 +3,11 @@ schema: olm.package
 name: coraza-kubernetes-operator
 defaultChannel: alpha
 ---
+schema: olm.bundle
+package: coraza-kubernetes-operator
+name: coraza-kubernetes-operator.v0.2.0
+image: ghcr.io/networking-incubator/coraza-kubernetes-operator-bundle:v0.2.0
+---
 schema: olm.channel
 package: coraza-kubernetes-operator
 name: alpha
