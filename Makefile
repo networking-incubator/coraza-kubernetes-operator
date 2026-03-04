@@ -244,9 +244,11 @@ test.conformance:
 # -------------------------------------------------------------------------------
 
 BUNDLE_IMG ?= ghcr.io/networking-incubator/coraza-kubernetes-operator-bundle:$(VERSION)
+BUNDLE_IMG_BASE ?= $(word 1,$(subst :, ,$(BUNDLE_IMG)))
 CATALOG_IMG ?= ghcr.io/networking-incubator/coraza-kubernetes-operator-catalog:$(VERSION)
 BUNDLE_DIR ?= bundle
 CATALOG_DIR ?= catalog
+CATALOG_FILE ?= $(CATALOG_DIR)/coraza-kubernetes-operator/catalog.yaml
 
 .PHONY: bundle
 bundle: helm.sync ## Generate OLM bundle from Helm chart
@@ -258,28 +260,51 @@ bundle: helm.sync ## Generate OLM bundle from Helm chart
 		--channels alpha \
 		--default-channel alpha
 
-.PHONY: bundle-build
-bundle-build: ## Build the OLM bundle image
+.PHONY: bundle.build
+bundle.build: ## Build the OLM bundle image
 	$(CONTAINER_TOOL) build -f $(BUNDLE_DIR)/bundle.Dockerfile -t $(BUNDLE_IMG) $(BUNDLE_DIR)
 
-.PHONY: bundle-push
-bundle-push: ## Push the OLM bundle image
+.PHONY: bundle.push
+bundle.push: ## Push the OLM bundle image
 	$(CONTAINER_TOOL) push $(BUNDLE_IMG)
 
-.PHONY: catalog-update
-catalog-update: ## Add the current VERSION to the OLM catalog
-	python3 hack/update_catalog.py \
-		--catalog-file $(CATALOG_DIR)/coraza-kubernetes-operator/catalog.yaml \
-		--bundle-image $(BUNDLE_IMG) \
-		--version $(VERSION)
+.PHONY: catalog.update
+catalog.update: ## Add the current VERSION to the OLM catalog channel
+	python3 hack/update_catalog.py $(CATALOG_FILE) $(VERSION)
 
-.PHONY: catalog-build
-catalog-build: ## Build the OLM catalog image
-	$(CONTAINER_TOOL) build -f $(CATALOG_DIR)/Dockerfile -t $(CATALOG_IMG) $(CATALOG_DIR)
+.PHONY: catalog.build
+catalog.build: ## Build the OLM catalog image (renders bundles via opm)
+	$(CONTAINER_TOOL) build \
+		--build-arg BUNDLE_IMGS="$${BUNDLE_IMGS:-$$(grep -oP '(?<=- name: )\S+' $(CATALOG_FILE) | sed 's|^.*\.v|$(BUNDLE_IMG_BASE):v|')}" \
+		-f $(CATALOG_DIR)/Dockerfile -t $(CATALOG_IMG) $(CATALOG_DIR)
 
-.PHONY: catalog-push
-catalog-push: ## Push the OLM catalog image
+.PHONY: catalog.push
+catalog.push: ## Push the OLM catalog image
 	$(CONTAINER_TOOL) push $(CATALOG_IMG)
+
+CATALOG_NAMESPACE ?= olm
+
+.PHONY: catalog.deploy
+catalog.deploy: ## Deploy the CatalogSource CR to the cluster
+	@printf '%s\n' \
+	  'apiVersion: operators.coreos.com/v1alpha1' \
+	  'kind: CatalogSource' \
+	  'metadata:' \
+	  '  name: coraza-kubernetes-operator' \
+	  '  namespace: $(CATALOG_NAMESPACE)' \
+	  'spec:' \
+	  '  sourceType: grpc' \
+	  '  image: $(CATALOG_IMG)' \
+	  '  displayName: Coraza Kubernetes Operator' \
+	  '  updateStrategy:' \
+	  '    registryPoll:' \
+	  '      interval: 10m' \
+	  | kubectl apply -f -
+	kubectl -n $(CATALOG_NAMESPACE) wait --for=jsonpath='{.status.connectionState.lastObservedState}'=READY catalogsource/coraza-kubernetes-operator --timeout=60s
+
+.PHONY: catalog.undeploy
+catalog.undeploy: ## Remove the CatalogSource CR from the cluster
+	kubectl delete catalogsource coraza-kubernetes-operator -n $(CATALOG_NAMESPACE) --ignore-not-found
 
 # -------------------------------------------------------------------------------
 # Helm

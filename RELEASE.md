@@ -99,6 +99,67 @@ docker push ghcr.io/networking-incubator/coraza-kubernetes-operator:latest
 > is correct. Pre-release versions (`v0.x.x`, `-alpha`, `-beta`, `-rc`) should
 > **not** be tagged as `latest`.
 
+### OLM (Operator Lifecycle Manager)
+
+The release workflow builds and pushes three container images. Two of them
+are specific to OLM:
+
+```
+  Operator image (:v0.2.0-dev)
+       │
+       │  generate_bundle.py (make bundle)
+       │  Renders Helm chart, extracts Deployment/RBAC/CRDs,
+       │  injects into CSV template
+       ▼
+  Bundle image (:v0.2.0)
+  ┌─────────────────────┐
+  │ manifests/          │  CSV, CRDs, Service, etc.
+  │ metadata/           │  OLM annotations
+  │ tests/scorecard/    │  scorecard config
+  └─────────────────────┘
+       │
+       │  opm render (inside catalog docker build)
+       │  Pulls bundle image, extracts full content
+       ▼
+  Catalog image (:v0.2.0)
+  ┌─────────────────────┐
+  │ catalog.yaml        │  olm.package + olm.channel
+  │ + rendered bundles  │  full CSV/CRD content from opm render
+  └─────────────────────┘
+       │
+       │  deployed as CatalogSource CR
+       ▼
+  OLM / OperatorHub UI
+```
+
+**What the release workflow does automatically:**
+
+1. `make bundle` — generates bundle manifests from the Helm chart
+2. `make bundle.build bundle.push` — builds and pushes the bundle image
+3. `make catalog.update` — adds the new version to `catalog.yaml` channel entries
+   (with `replaces` pointing to the previous version)
+4. `make catalog.build catalog.push` — builds the catalog image (runs `opm render`
+   inside the Docker build to pull each bundle image and embed its full content)
+
+**Key files:**
+
+| File | Role |
+|---|---|
+| `bundle/base/csv-template.yaml` | CSV template — edit to change OLM metadata |
+| `hack/generate_bundle.py` | Generates bundle from Helm chart + CSV template |
+| `catalog/coraza-kubernetes-operator/catalog.yaml` | Package and channel definitions (no bundle content) |
+| `hack/update_catalog.py` | Adds new versions to catalog channel entries |
+| `catalog/Dockerfile` | Multi-stage build: uses `opm render` to embed bundle content |
+
+**What needs manual attention:**
+
+- `catalog.yaml` must be committed after `catalog-update` adds the new version.
+  The release workflow modifies it in the working tree but does not commit back.
+  Either run `make catalog.update VERSION=vX.Y.Z` before tagging, or set up
+  automation to commit the updated catalog after release.
+- If the CSV template needs changes (description, icon, install modes, etc.),
+  edit `bundle/base/csv-template.yaml` before the release.
+
 ### Step 5 - Publishing & Announcement
 
 > **Warning**: We enforce [immutable releases] so be _absolutely certain_ the

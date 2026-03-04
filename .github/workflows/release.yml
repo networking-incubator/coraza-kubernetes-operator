@@ -148,7 +148,7 @@ jobs:
           VERSION: ${{ github.ref_name }}
 
       - name: build and push bundle image
-        run: make bundle-build bundle-push
+        run: make bundle.build bundle.push
         env:
           VERSION: ${{ github.ref_name }}
 
@@ -187,12 +187,12 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: update catalog with new version
-        run: make catalog-update
+        run: make catalog.update
         env:
           VERSION: ${{ github.ref_name }}
 
       - name: build and push catalog image
-        run: make catalog-build catalog-push
+        run: make catalog.build catalog.push
         env:
           VERSION: ${{ github.ref_name }}
 
