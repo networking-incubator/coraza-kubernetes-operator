@@ -26,13 +26,17 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/intstr"
+
+	wafv1alpha1 "github.com/networking-incubator/coraza-kubernetes-operator/api/v1alpha1"
 )
 
 // Resource builders, GVRs, and CRUD helpers for integration tests.
-// These use unstructured objects and the dynamic client. Unit tests
-// use test/utils/resource_builders.go which builds typed API objects.
+// CRD builders (Engine, RuleSet) use typed API objects from api/v1alpha1
+// and convert to unstructured for the dynamic client. External resources
+// (Gateway, HTTPRoute) are built as unstructured directly.
 
 // -----------------------------------------------------------------------------
 // GVRs
@@ -93,12 +97,13 @@ type EngineOpts struct {
 	// CORAZA_WASM_IMAGE env var, or a built-in default.
 	WasmImage string
 
-	// FailurePolicy is "fail" or "allow". Defaults to "fail".
-	FailurePolicy string
+	// FailurePolicy determines behavior when the WAF is not ready.
+	// Defaults to wafv1alpha1.FailurePolicyFail.
+	FailurePolicy wafv1alpha1.FailurePolicy
 
 	// PollInterval is the ruleSetCacheServer poll interval in seconds.
 	// Defaults to 5.
-	PollInterval int64
+	PollInterval int32
 }
 
 // -----------------------------------------------------------------------------
@@ -130,6 +135,17 @@ func SimpleBlockRule(id int, target string) string {
 		`SecRule ARGS|REQUEST_URI|REQUEST_HEADERS "@contains %s" "id:%d,phase:2,deny,status:403,msg:'%s blocked'"`,
 		target, id, target,
 	)
+}
+
+// toUnstructured converts a typed runtime.Object to an unstructured
+// representation for use with the dynamic client. Panics on conversion
+// failure since this indicates a programming error in the builder.
+func toUnstructured(obj runtime.Object) *unstructured.Unstructured {
+	raw, err := runtime.DefaultUnstructuredConverter.ToUnstructured(obj)
+	if err != nil {
+		panic(fmt.Sprintf("failed to convert %T to unstructured: %v", obj, err))
+	}
+	return &unstructured.Unstructured{Object: raw}
 }
 
 // -----------------------------------------------------------------------------
@@ -175,26 +191,25 @@ func BuildGateway(namespace, name string) *unstructured.Unstructured {
 // Each entry in configMapNames refers to a ConfigMap by name in the same
 // namespace as the RuleSet.
 func BuildRuleSet(namespace, name string, configMapNames []string) *unstructured.Unstructured {
-	ruleList := make([]interface{}, len(configMapNames))
+	rules := make([]wafv1alpha1.RuleSourceReference, len(configMapNames))
 	for i, n := range configMapNames {
-		ruleList[i] = map[string]interface{}{
-			"name": n,
-		}
+		rules[i] = wafv1alpha1.RuleSourceReference{Name: n}
 	}
 
-	return &unstructured.Unstructured{
-		Object: map[string]interface{}{
-			"apiVersion": "waf.k8s.coraza.io/v1alpha1",
-			"kind":       "RuleSet",
-			"metadata": map[string]interface{}{
-				"name":      name,
-				"namespace": namespace,
-			},
-			"spec": map[string]interface{}{
-				"rules": ruleList,
-			},
+	rs := &wafv1alpha1.RuleSet{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: wafv1alpha1.GroupVersion.String(),
+			Kind:       "RuleSet",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: namespace,
+		},
+		Spec: wafv1alpha1.RuleSetSpec{
+			Rules: rules,
 		},
 	}
+	return toUnstructured(rs)
 }
 
 // BuildEngine builds an unstructured Engine object.
@@ -203,26 +218,20 @@ func BuildEngine(namespace, name string, opts EngineOpts) *unstructured.Unstruct
 		opts.WasmImage = defaultWasmImage()
 	}
 	if opts.FailurePolicy == "" {
-		opts.FailurePolicy = "fail"
+		opts.FailurePolicy = wafv1alpha1.FailurePolicyFail
 	}
 	if opts.PollInterval == 0 {
 		opts.PollInterval = 5
 	}
 
-	var workloadSelector map[string]interface{}
+	var labelSelector *metav1.LabelSelector
 	if len(opts.GatewayNames) > 0 {
-		values := make([]interface{}, len(opts.GatewayNames))
-		for i, n := range opts.GatewayNames {
-			values[i] = n
-		}
-		workloadSelector = map[string]interface{}{
-			"matchExpressions": []interface{}{
-				map[string]interface{}{
-					"key":      "gateway.networking.k8s.io/gateway-name",
-					"operator": "In",
-					"values":   values,
-				},
-			},
+		labelSelector = &metav1.LabelSelector{
+			MatchExpressions: []metav1.LabelSelectorRequirement{{
+				Key:      "gateway.networking.k8s.io/gateway-name",
+				Operator: metav1.LabelSelectorOpIn,
+				Values:   opts.GatewayNames,
+			}},
 		}
 	} else {
 		workloadLabels := opts.WorkloadLabels
@@ -234,45 +243,40 @@ func BuildEngine(namespace, name string, opts EngineOpts) *unstructured.Unstruct
 		if workloadLabels == nil {
 			workloadLabels = map[string]string{"app": "gateway"}
 		}
-		labels := make(map[string]interface{}, len(workloadLabels))
-		for k, v := range workloadLabels {
-			labels[k] = v
-		}
-		workloadSelector = map[string]interface{}{
-			"matchLabels": labels,
+		labelSelector = &metav1.LabelSelector{
+			MatchLabels: workloadLabels,
 		}
 	}
 
-	ruleSetRef := map[string]interface{}{
-		"name": opts.RuleSetName,
-	}
-
-	return &unstructured.Unstructured{
-		Object: map[string]interface{}{
-			"apiVersion": "waf.k8s.coraza.io/v1alpha1",
-			"kind":       "Engine",
-			"metadata": map[string]interface{}{
-				"name":      name,
-				"namespace": namespace,
+	engine := &wafv1alpha1.Engine{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: wafv1alpha1.GroupVersion.String(),
+			Kind:       "Engine",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: namespace,
+		},
+		Spec: wafv1alpha1.EngineSpec{
+			RuleSet: wafv1alpha1.RuleSetReference{
+				Name: opts.RuleSetName,
 			},
-			"spec": map[string]interface{}{
-				"ruleSet":       ruleSetRef,
-				"failurePolicy": opts.FailurePolicy,
-				"driver": map[string]interface{}{
-					"istio": map[string]interface{}{
-						"wasm": map[string]interface{}{
-							"image":            opts.WasmImage,
-							"mode":             "gateway",
-							"workloadSelector": workloadSelector,
-							"ruleSetCacheServer": map[string]interface{}{
-								"pollIntervalSeconds": opts.PollInterval,
-							},
+			FailurePolicy: opts.FailurePolicy,
+			Driver: wafv1alpha1.DriverConfig{
+				Istio: &wafv1alpha1.IstioDriverConfig{
+					Wasm: &wafv1alpha1.IstioWasmConfig{
+						Image:            opts.WasmImage,
+						Mode:             wafv1alpha1.IstioIntegrationModeGateway,
+						WorkloadSelector: labelSelector,
+						RuleSetCacheServer: &wafv1alpha1.RuleSetCacheServerConfig{
+							PollIntervalSeconds: opts.PollInterval,
 						},
 					},
 				},
 			},
 		},
 	}
+	return toUnstructured(engine)
 }
 
 // BuildHTTPRoute builds an unstructured HTTPRoute that routes all traffic
