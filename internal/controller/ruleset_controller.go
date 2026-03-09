@@ -106,6 +106,8 @@ func (r *RuleSetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 
 	logDebug(log, req, "RuleSet", "Aggregating rules from sources", "ruleCount", len(ruleset.Spec.Rules))
 	var aggregatedRules strings.Builder
+	aggregatedErrors := make([]error, 0)
+
 	for i, rule := range ruleset.Spec.Rules {
 		logDebug(log, req, "RuleSet", "Processing rule source", "index", i, "configMapName", rule.Name)
 		logDebug(log, req, "RuleSet", "Fetching ConfigMap", "configMapName", rule.Name, "configMapNamespace", ruleset.Namespace)
@@ -123,8 +125,8 @@ func (r *RuleSetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 				if updateErr := r.Status().Patch(ctx, &ruleset, patch); updateErr != nil {
 					logError(log, req, "RuleSet", updateErr, "Failed to patch status")
 				}
-
-				return ctrl.Result{Requeue: true}, nil
+				// Do not try to reconcile, wait a configmap to appear again
+				return ctrl.Result{}, nil
 			}
 			logError(log, req, "RuleSet", err, "Failed to get ConfigMap", "configMapName", rule.Name)
 
@@ -156,24 +158,34 @@ func (r *RuleSetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		}
 
 		if cm.Annotations["coraza.io/validation"] != "false" {
-			conf := coraza.NewWAFConfig()
-			if _, err := coraza.NewWAF(conf.WithDirectives(data)); err != nil {
-				patch := client.MergeFrom(ruleset.DeepCopy())
-				msg := fmt.Sprintf("ConfigMap %s doesn't contain valid rules:\n%v", rule.Name, err)
-				r.Recorder.Eventf(&ruleset, nil, "Warning", "InvalidConfigMap", "Reconcile", msg)
-				setStatusConditionDegraded(log, req, "RuleSet", &ruleset.Status.Conditions, ruleset.Generation, "InvalidConfigMap", msg)
-				if updateErr := r.Status().Patch(ctx, &ruleset, patch); updateErr != nil {
-					logError(log, req, "RuleSet", updateErr, "Failed to patch status")
-				}
-
-				return ctrl.Result{}, err
+			conf := coraza.NewWAFConfig().WithDirectives(data)
+			if _, err := coraza.NewWAF(conf); err != nil {
+				aggregatedErrors = append(aggregatedErrors, fmt.Errorf("ConfigMap %s doesn't contain valid rules: %w", rule.Name, err))
 			}
 		}
 
+		// Write the rules anyway to the buffer, so we can validate it as a single RuleSet
 		aggregatedRules.WriteString(data)
 		if i < len(ruleset.Spec.Rules)-1 {
 			aggregatedRules.WriteString("\n")
 		}
+	}
+
+	conf := coraza.NewWAFConfig().WithDirectives(aggregatedRules.String())
+	if _, err := coraza.NewWAF(conf); err != nil {
+		msg := fmt.Sprintf("Ruleset is invalid\n%v", err)
+		r.Recorder.Eventf(&ruleset, nil, "Warning", "InvalidRuleSet", "Reconcile", msg)
+		for _, cmapErr := range aggregatedErrors {
+			r.Recorder.Eventf(&ruleset, nil, "Warning", "InvalidConfigMap", "Reconcile", cmapErr.Error())
+			msg = fmt.Sprintf("%s\n%v", msg, cmapErr)
+		}
+		patch := client.MergeFrom(ruleset.DeepCopy())
+		setStatusConditionDegraded(log, req, "RuleSet", &ruleset.Status.Conditions, ruleset.Generation, "InvalidRuleSet", msg)
+		if updateErr := r.Status().Patch(ctx, &ruleset, patch); updateErr != nil {
+			logError(log, req, "RuleSet", updateErr, "Failed to patch status")
+		}
+
+		return ctrl.Result{}, err
 	}
 
 	logDebug(log, req, "RuleSet", "Storing aggregated rules in cache")

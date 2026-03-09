@@ -24,8 +24,11 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	wafv1alpha1 "github.com/networking-incubator/coraza-kubernetes-operator/api/v1alpha1"
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/rulesets/cache"
@@ -34,12 +37,11 @@ import (
 
 const (
 	testNamespace = "default"
-	testInstance  = "test_instance"
 )
 
 func TestRuleSetReconciler_ReconcileNotFound(t *testing.T) {
 	ctx, cleanup := setupTest(t)
-	defer cleanup()
+	t.Cleanup(cleanup)
 
 	t.Log("Reconciling non-existent RuleSet")
 	reconciler := &RuleSetReconciler{
@@ -56,7 +58,7 @@ func TestRuleSetReconciler_ReconcileNotFound(t *testing.T) {
 	})
 
 	require.NoError(t, err)
-	assert.False(t, result.Requeue)
+	assert.Equal(t, reconcile.Result{}, result)
 }
 
 func TestRuleSetReconciler_ReconcileConfigMaps(t *testing.T) {
@@ -146,7 +148,7 @@ func TestRuleSetReconciler_ReconcileConfigMaps(t *testing.T) {
 
 			t.Log("Verifying cache was populated with combined rules")
 			require.NoError(t, err)
-			assert.False(t, result.Requeue)
+			assert.Equal(t, reconcile.Result{}, result)
 			cacheKey := testNamespace + "/" + tt.ruleSetName
 			entry, ok := ruleSetCache.Get(cacheKey)
 			require.True(t, ok, "Cache entry should exist")
@@ -174,11 +176,11 @@ func TestRuleSetReconciler_MissingConfigMap(t *testing.T) {
 	})
 	err := k8sClient.Create(ctx, ruleSet)
 	require.NoError(t, err)
-	defer func() {
+	t.Cleanup(func() {
 		if err := k8sClient.Delete(ctx, ruleSet); err != nil {
 			t.Logf("Failed to delete RuleSet: %v", err)
 		}
-	}()
+	})
 
 	t.Log("Reconciling RuleSet - should requeue due to missing ConfigMap")
 	recorder := utils.NewFakeRecorder()
@@ -197,7 +199,7 @@ func TestRuleSetReconciler_MissingConfigMap(t *testing.T) {
 
 	t.Log("Verifying cache was not populated due to missing ConfigMap")
 	require.NoError(t, err)
-	assert.True(t, result.Requeue, "Should requeue when ConfigMap is not found")
+	assert.Equal(t, reconcile.Result{}, result, "Should requeue when ConfigMap is not found")
 	cacheKey := testNamespace + "/missing-cm-ruleset"
 	_, ok := ruleSetCache.Get(cacheKey)
 	assert.False(t, ok)
@@ -218,11 +220,11 @@ func TestRuleSetReconciler_ConfigMapMissingRulesKey(t *testing.T) {
 	cm.Data = map[string]string{"wrong-key": "some data"}
 	err := k8sClient.Create(ctx, cm)
 	require.NoError(t, err)
-	defer func() {
+	t.Cleanup(func() {
 		if err := k8sClient.Delete(ctx, cm); err != nil {
 			t.Logf("Failed to delete configmap: %v", err)
 		}
-	}()
+	})
 
 	t.Log("Creating RuleSet referencing invalid ConfigMap")
 	ruleSet := utils.NewTestRuleSet(utils.RuleSetOptions{
@@ -234,11 +236,11 @@ func TestRuleSetReconciler_ConfigMapMissingRulesKey(t *testing.T) {
 	})
 	err = k8sClient.Create(ctx, ruleSet)
 	require.NoError(t, err)
-	defer func() {
+	t.Cleanup(func() {
 		if err := k8sClient.Delete(ctx, ruleSet); err != nil {
 			t.Logf("Failed to delete RuleSet: %v", err)
 		}
-	}()
+	})
 
 	t.Log("Reconciling RuleSet")
 	recorder := utils.NewFakeRecorder()
@@ -258,7 +260,7 @@ func TestRuleSetReconciler_ConfigMapMissingRulesKey(t *testing.T) {
 	t.Log("Verifying error due to missing 'rules' key in ConfigMap")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "missing 'rules' key")
-	assert.False(t, result.Requeue)
+	assert.Equal(t, reconcile.Result{}, result)
 
 	assert.True(t, recorder.HasEvent("Warning", "InvalidConfigMap"),
 		"expected Warning/InvalidConfigMap event; got: %v", recorder.Events)
@@ -324,11 +326,11 @@ func TestRuleSetReconciler_UpdateCache(t *testing.T) {
 	cm := utils.NewTestConfigMap("update-rules", "default", "SecDefaultAction \"phase:1,log,auditlog,pass\"")
 	err := k8sClient.Create(ctx, cm)
 	require.NoError(t, err)
-	defer func() {
+	t.Cleanup(func() {
 		if err := k8sClient.Delete(ctx, cm); err != nil {
 			t.Logf("Failed to delete configmap: %v", err)
 		}
-	}()
+	})
 
 	t.Log("Creating RuleSet referencing ConfigMap")
 	ruleSet := utils.NewTestRuleSet(utils.RuleSetOptions{
@@ -340,11 +342,11 @@ func TestRuleSetReconciler_UpdateCache(t *testing.T) {
 	})
 	err = k8sClient.Create(ctx, ruleSet)
 	require.NoError(t, err)
-	defer func() {
+	t.Cleanup(func() {
 		if err := k8sClient.Delete(ctx, ruleSet); err != nil {
 			t.Logf("Failed to delete RuleSet: %v", err)
 		}
-	}()
+	})
 
 	t.Log("Performing initial reconciliation to populate cache")
 	reconciler := &RuleSetReconciler{
@@ -385,4 +387,146 @@ func TestRuleSetReconciler_UpdateCache(t *testing.T) {
 	entry2, _ := ruleSetCache.Get(cacheKey)
 	assert.Equal(t, "SecDefaultAction \"phase:2,log,auditlog,pass\"", entry2.Rules)
 	assert.NotEqual(t, uuid1, entry2.UUID, "UUID should change when rules are updated")
+}
+
+func TestRuleSetReconciler_ValidateRules(t *testing.T) {
+	ctx := context.Background()
+
+	ruleSetCache := cache.NewRuleSetCache()
+	reconciler := &RuleSetReconciler{
+		Client:   k8sClient,
+		Scheme:   scheme,
+		Recorder: utils.NewTestRecorder(),
+		Cache:    ruleSetCache,
+	}
+
+	rules := []struct {
+		name    string
+		content string
+	}{
+		{
+			name:    "update-rules",
+			content: "SecDefaultAction \"phase:1,log,auditlog,pass\"",
+		},
+		{
+			name:    "dumb-rule",
+			content: "SecRule REMOTE_ADDR \".*\" \"id:12345,phase:1,pass,nolog,msg:'Test rule'\"",
+		},
+		{
+			name:    "invalid-rule",
+			content: "SecDefaultActionXPTO \"THIS IS VERY MUCH INVALID\"",
+		},
+		{
+			name:    "referother",
+			content: "SecRuleUpdateTargetById 12345 \"REMOTE_ADDR\"",
+		},
+	}
+	for _, rule := range rules {
+		cm := utils.NewTestConfigMap(rule.name, "default", rule.content)
+		err := k8sClient.Create(ctx, cm)
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			if err := k8sClient.Delete(ctx, cm); err != nil {
+				t.Logf("Failed to delete configmap: %v", err)
+			}
+		})
+	}
+
+	t.Run("single rule should reconcile", func(t *testing.T) {
+		ruleSet := utils.NewTestRuleSet(utils.RuleSetOptions{
+			Name:      "ruleset-simple",
+			Namespace: testNamespace,
+			Rules: []wafv1alpha1.RuleSourceReference{
+				{Name: "update-rules"},
+			},
+		})
+		err := k8sClient.Create(ctx, ruleSet)
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			if err := k8sClient.Delete(ctx, ruleSet); err != nil {
+				t.Logf("Failed to delete RuleSet: %v", err)
+			}
+		})
+		t.Log("Performing initial reconciliation to populate cache")
+
+		_, err = reconciler.Reconcile(ctx, ctrl.Request{
+			NamespacedName: types.NamespacedName{
+				Name:      ruleSet.Name,
+				Namespace: ruleSet.Namespace,
+			},
+		})
+		require.NoError(t, err)
+	})
+
+	t.Run("ruleset containing invalid rule should fail", func(t *testing.T) {
+		ruleSet := utils.NewTestRuleSet(utils.RuleSetOptions{
+			Name:      "ruleset-invalid",
+			Namespace: testNamespace,
+			Rules: []wafv1alpha1.RuleSourceReference{
+				{Name: "update-rules"},
+				{Name: "invalid-rule"},
+			},
+		})
+		err := k8sClient.Create(ctx, ruleSet)
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			if err := k8sClient.Delete(ctx, ruleSet); err != nil {
+				t.Logf("Failed to delete RuleSet: %v", err)
+			}
+		})
+		t.Log("Performing initial reconciliation to populate cache")
+		resource := types.NamespacedName{
+			Name:      ruleSet.Name,
+			Namespace: ruleSet.Namespace,
+		}
+
+		_, err = reconciler.Reconcile(ctx, ctrl.Request{
+			NamespacedName: resource,
+		})
+		assert.ErrorContains(t, err, "invalid WAF config from string: unknown directive \"secdefaultactionxpto\"")
+		err = k8sClient.Get(ctx, resource, ruleSet)
+		require.NoError(t, err)
+		ready := apimeta.FindStatusCondition(ruleSet.Status.Conditions, "Ready")
+		assert.Equal(t, metav1.ConditionFalse, ready.Status)
+		assert.Equal(t, "InvalidRuleSet", ready.Reason)
+		assert.Contains(t, ready.Message, "ConfigMap invalid-rule doesn't contain valid rules: invalid WAF config from string: unknown directive \"secdefaultactionxpto\"")
+		degraded := apimeta.FindStatusCondition(ruleSet.Status.Conditions, "Degraded")
+		assert.Equal(t, metav1.ConditionTrue, degraded.Status)
+		assert.Equal(t, "InvalidRuleSet", degraded.Reason)
+		assert.Contains(t, degraded.Message, "ConfigMap invalid-rule doesn't contain valid rules: invalid WAF config from string: unknown directive \"secdefaultactionxpto\"")
+	})
+
+	t.Run("ruleset referring other rules should pass", func(t *testing.T) {
+		ruleSet := utils.NewTestRuleSet(utils.RuleSetOptions{
+			Name:      "ruleset-references",
+			Namespace: testNamespace,
+			Rules: []wafv1alpha1.RuleSourceReference{
+				{Name: "update-rules"},
+				{Name: "dumb-rule"},
+				{Name: "referother"},
+			},
+		})
+		err := k8sClient.Create(ctx, ruleSet)
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			if err := k8sClient.Delete(ctx, ruleSet); err != nil {
+				t.Logf("Failed to delete RuleSet: %v", err)
+			}
+		})
+		t.Log("Performing initial reconciliation to populate cache")
+		resource := types.NamespacedName{
+			Name:      ruleSet.Name,
+			Namespace: ruleSet.Namespace,
+		}
+
+		_, err = reconciler.Reconcile(ctx, ctrl.Request{
+			NamespacedName: resource,
+		})
+		require.NoError(t, err)
+		err = k8sClient.Get(ctx, resource, ruleSet)
+		require.NoError(t, err)
+		ready := apimeta.FindStatusCondition(ruleSet.Status.Conditions, "Ready")
+		assert.Equal(t, metav1.ConditionTrue, ready.Status)
+		assert.Equal(t, "RulesCached", ready.Reason)
+	})
 }
