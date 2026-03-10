@@ -29,6 +29,12 @@ engines enforce.
 
 [ModSecurity Seclang]:https://github.com/owasp-modsecurity/ModSecurity/wiki/Reference-Manual-(v3.x)
 
+### Supported Platforms
+
+The operator is designed to run on:
+- **Kubernetes**: v1.33+
+- **OpenShift Container Platform (OCP)**: v4.20+
+
 ### Supported Integrations
 
 The operator integrates with other tools to attach WAF instances to
