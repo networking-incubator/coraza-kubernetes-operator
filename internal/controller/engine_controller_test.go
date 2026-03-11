@@ -56,12 +56,11 @@ func TestEngineReconciler_ReconcileNotFound(t *testing.T) {
 
 func TestEngineReconciler_ReconcileMissingRuleSet(t *testing.T) {
 	ctx := context.Background()
-	ns := "default"
 
 	t.Log("Creating test engine referencing non-existent RuleSet")
 	engine := utils.NewTestEngine(utils.EngineOptions{
 		Name:        "test-engine-missing-ruleset",
-		Namespace:   ns,
+		Namespace:   testNamespace,
 		RuleSetName: "non-existent-ruleset",
 	})
 	err := k8sClient.Create(ctx, engine)
@@ -149,7 +148,7 @@ func TestEngineReconciler_StatusUpdateHandling(t *testing.T) {
 	t.Log("Creating test engine for status update testing")
 	engine := utils.NewTestEngine(utils.EngineOptions{
 		Name:      "status-test",
-		Namespace: "default",
+		Namespace: testNamespace,
 	})
 	require.NoError(t, k8sClient.Create(ctx, engine))
 	t.Cleanup(func() {
@@ -210,12 +209,11 @@ func TestEngineReconciler_FailurePolicyInWasmPluginConfig(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ns := "default"
 
 			t.Logf("Creating test engine with failure policy: %s", tt.failurePolicy)
 			engine := utils.NewTestEngine(utils.EngineOptions{
 				Name:          "test-engine-" + string(tt.failurePolicy),
-				Namespace:     ns,
+				Namespace:     testNamespace,
 				FailurePolicy: tt.failurePolicy,
 			})
 			err := k8sClient.Create(ctx, engine)
@@ -374,7 +372,7 @@ func TestEngineReconciler_ValidationRejection(t *testing.T) {
 			t.Logf("Attempting to create Engine with invalid configuration: %s", tt.name)
 			engine := tt.engineFunc()
 			engine.Name = "validation-test-" + t.Name()
-			engine.Namespace = "default"
+			engine.Namespace = testNamespace
 
 			err := k8sClient.Create(ctx, engine)
 			require.Error(t, err)
