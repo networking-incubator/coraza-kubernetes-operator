@@ -109,6 +109,7 @@ func (r *EngineReconciler) buildWasmPlugin(engine *wafv1alpha1.Engine) *unstruct
 	pluginConfig := map[string]any{
 		"cache_server_instance": rulesetKey,
 		"cache_server_cluster":  r.ruleSetCacheServerCluster,
+		"failure_policy":        string(engine.Spec.FailurePolicy),
 	}
 
 	if engine.Spec.Driver.Istio.Wasm.RuleSetCacheServer != nil {
