@@ -20,6 +20,11 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+const (
+	// RuleDataSecretType contains the type expected for a secret that contains Rules Data
+	RuleDataSecretType = "coraza/data"
+)
+
 // RuleSourceReference is a reference to a ConfigMap that contains WAF rules.
 type RuleSourceReference struct {
 	// Name is the name of the ConfigMap in the same namespace as the RuleSet.
@@ -99,6 +104,17 @@ type RuleSetSpec struct {
 	// +kubebuilder:validation:MinItems=1
 	// +kubebuilder:validation:MaxItems=2048
 	Rules []RuleSourceReference `json:"rules"`
+
+	// RuleData contains the name of a secret with the required data for rules.
+	// Usually rules that contain the directive '@pmFromFile'.
+	// This secret must be created containing the type coraza/data otherwise it will
+	// not be watched.
+	// Additionally, the secret must contain the name of each file as the key, and the content
+	// of the file as the value
+	//
+	// +kubebuilder:validation:MinLength=1
+	// +optional
+	RuleData string `json:"ruleData,omitempty,omitzero"`
 }
 
 // -----------------------------------------------------------------------------

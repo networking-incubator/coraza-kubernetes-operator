@@ -26,13 +26,19 @@ import (
 
 const skipCountAssertion = -1
 
+var testDataFile = map[string][]byte{
+	"something1.data": []byte("xpto blabla"),
+	"something2.data": []byte("another weird data"),
+}
+
 func TestRuleSetCache_PutAndGet(t *testing.T) {
 	cache := NewRuleSetCache()
 
 	tests := []struct {
-		name     string
-		instance string
-		rules    string
+		name      string
+		instance  string
+		rules     string
+		dataFiles map[string][]byte
 	}{
 		{
 			name:     "simple rules",
@@ -49,17 +55,35 @@ func TestRuleSetCache_PutAndGet(t *testing.T) {
 			instance: "multi-instance",
 			rules:    "SecRule REQUEST_URI \"@contains /admin\" \"id:1,deny\"\nSecRule REQUEST_URI \"@contains /api\" \"id:2,deny\"",
 		},
+		{
+			name:      "multi-line rules and datafiles",
+			instance:  "multi-instance",
+			rules:     "SecRule REQUEST_URI \"@contains /admin\" \"id:1,deny\"\nSecRule REQUEST_URI \"@contains /api\" \"id:2,deny\"",
+			dataFiles: testDataFile,
+		},
+		{
+			name:      "multi-line rules and empty",
+			instance:  "multi-instance",
+			rules:     "SecRule REQUEST_URI \"@contains /admin\" \"id:1,deny\"\nSecRule REQUEST_URI \"@contains /api\" \"id:2,deny\"",
+			dataFiles: map[string][]byte{},
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cache.Put(tt.instance, tt.rules)
+			cache.Put(tt.instance, tt.rules, tt.dataFiles)
 
 			entry, ok := cache.Get(tt.instance)
 			require.True(t, ok, "Entry should exist")
 			require.NotNil(t, entry)
 
 			assert.Equal(t, tt.rules, entry.Rules)
+			if len(tt.dataFiles) > 0 {
+				assert.Equal(t, tt.dataFiles, entry.DataFiles)
+			} else {
+				assert.Empty(t, entry.DataFiles)
+			}
+
 			assert.NotEmpty(t, entry.UUID, "UUID should be generated")
 			assert.False(t, entry.Timestamp.IsZero(), "Timestamp should be set")
 		})
@@ -78,9 +102,9 @@ func TestRuleSetCache_Pruning(t *testing.T) {
 		{
 			name: "prune old entries by age",
 			setup: func(c *RuleSetCache) {
-				c.Put("instance1", "old-rules")
-				c.Put("instance1", "new-rules")
-				c.Put("instance2", "rules2")
+				c.Put("instance1", "old-rules", nil)
+				c.Put("instance1", "new-rules", nil)
+				c.Put("instance2", "rules2", nil)
 				c.SetEntryTimestamp("instance1", 0, time.Now().Add(-25*time.Hour))
 			},
 			pruneMaxAge:   24 * time.Hour,
@@ -94,8 +118,8 @@ func TestRuleSetCache_Pruning(t *testing.T) {
 		{
 			name: "prune nothing when all entries are recent",
 			setup: func(c *RuleSetCache) {
-				c.Put("instance1", "rules1")
-				c.Put("instance2", "rules2")
+				c.Put("instance1", "rules1", nil)
+				c.Put("instance2", "rules2", nil)
 			},
 			pruneMaxAge:   48 * time.Hour,
 			expectedCount: 0,
@@ -103,31 +127,35 @@ func TestRuleSetCache_Pruning(t *testing.T) {
 		{
 			name: "prune by size",
 			setup: func(c *RuleSetCache) {
-				c.Put("instance1", "rules1")
-				c.Put("instance1", "new1")
-				c.Put("instance2", "rules2")
-				c.Put("instance2", "new2")
-				c.Put("instance3", "rules3")
+				c.Put("instance1", "rules1", nil)
+				c.Put("instance1", "new1", nil)
+				c.Put("instance2", "rules2", nil)
+				c.Put("instance2", "new2", nil)
+				c.Put("instance3", "rules3", nil)
+				c.Put("instance4", "rules4", testDataFile)
 				c.SetEntryTimestamp("instance1", 0, time.Now().Add(-2*time.Hour))
 				c.SetEntryTimestamp("instance2", 0, time.Now().Add(-1*time.Hour))
+				c.SetEntryTimestamp("instance4", 0, time.Now().Add(-2*time.Hour))
 			},
-			pruneMaxSize:  20,
+			pruneMaxSize:  80,
 			expectedCount: skipCountAssertion,
 			verifyLatest: func(t *testing.T, c *RuleSetCache) {
-				assert.LessOrEqual(t, c.TotalSize(), 20)
+				assert.LessOrEqual(t, c.TotalSize(), 80)
 				_, ok := c.Get("instance1")
 				assert.True(t, ok)
 				_, ok = c.Get("instance2")
 				assert.True(t, ok)
 				_, ok = c.Get("instance3")
 				assert.True(t, ok)
+				_, ok = c.Get("instance4")
+				assert.True(t, ok)
 			},
 		},
 		{
 			name: "prune by size under limit does nothing",
 			setup: func(c *RuleSetCache) {
-				c.Put("instance1", "rules1")
-				c.Put("instance2", "rules2")
+				c.Put("instance1", "rules1", nil)
+				c.Put("instance2", "rules2", nil)
 			},
 			pruneMaxSize:  1000,
 			expectedCount: 0,
@@ -135,11 +163,11 @@ func TestRuleSetCache_Pruning(t *testing.T) {
 		{
 			name: "never prune latest entry by age",
 			setup: func(c *RuleSetCache) {
-				c.Put("instance1", "v1")
+				c.Put("instance1", "v1", nil)
 				time.Sleep(10 * time.Millisecond)
-				c.Put("instance1", "v2")
+				c.Put("instance1", "v2", nil)
 				time.Sleep(10 * time.Millisecond)
-				c.Put("instance1", "v3")
+				c.Put("instance1", "v3", nil)
 				for i := range 3 {
 					c.SetEntryTimestamp("instance1", i, time.Now().Add(-48*time.Hour))
 				}
@@ -155,11 +183,11 @@ func TestRuleSetCache_Pruning(t *testing.T) {
 		{
 			name: "never prune latest entry by size",
 			setup: func(c *RuleSetCache) {
-				c.Put("instance1", "small")
+				c.Put("instance1", "small", nil)
 				time.Sleep(10 * time.Millisecond)
-				c.Put("instance1", "medium-size")
+				c.Put("instance1", "medium-size", nil)
 				time.Sleep(10 * time.Millisecond)
-				c.Put("instance1", "this-is-a-much-larger-entry")
+				c.Put("instance1", "this-is-a-much-larger-entry", testDataFile)
 			},
 			pruneMaxSize:  1,
 			expectedCount: 2,
@@ -202,9 +230,13 @@ func TestRuleSetCache_ListKeys(t *testing.T) {
 	cache := NewRuleSetCache()
 	keys := cache.ListKeys()
 	assert.Empty(t, keys)
-	cache.Put("instance1", "rules1")
-	cache.Put("instance2", "rules2")
-	cache.Put("instance3", "rules3")
+	cache.Put("instance1", "rules1", map[string][]byte{
+		"something.data": []byte("somedata"),
+	})
+	cache.Put("instance2", "rules2", nil)
+	cache.Put("instance3", "rules3", map[string][]byte{
+		"something.data": []byte("another data"),
+	})
 	keys = cache.ListKeys()
 	assert.Len(t, keys, 3)
 	assert.ElementsMatch(t, []string{"instance1", "instance2", "instance3"}, keys)
@@ -213,20 +245,26 @@ func TestRuleSetCache_ListKeys(t *testing.T) {
 func TestRuleSetCache_TotalSize(t *testing.T) {
 	cache := NewRuleSetCache()
 	assert.Equal(t, 0, cache.TotalSize())
-	cache.Put("instance1", "12345")
-	cache.Put("instance2", "1234567890")
+	cache.Put("instance1", "12345", nil)
+	cache.Put("instance2", "1234567890", nil)
 	assert.Equal(t, 15, cache.TotalSize())
-	cache.Put("instance1", "123")
+	cache.Put("instance1", "123", nil)
 	assert.Equal(t, 18, cache.TotalSize())
+
+	// Adds 18 (previous) + 5 (rule) + 5 (filename) + 5 (filecontent)
+	cache.Put("instance3", "12345", map[string][]byte{
+		"file1": []byte("abcde"),
+	})
+	assert.Equal(t, 33, cache.TotalSize())
 }
 
 func TestRuleSetCache_PutUpdatesUUID(t *testing.T) {
 	cache := NewRuleSetCache()
 	instance := "test-instance"
-	cache.Put(instance, "rules v1")
+	cache.Put(instance, "rules v1", nil)
 	entry1, _ := cache.Get(instance)
 	time.Sleep(10 * time.Millisecond)
-	cache.Put(instance, "rules v2")
+	cache.Put(instance, "rules v2", nil)
 	entry2, _ := cache.Get(instance)
 	assert.NotEqual(t, entry1.UUID, entry2.UUID, "UUID should change on update")
 	assert.NotEqual(t, entry1.Timestamp, entry2.Timestamp, "Timestamp should change on update")
@@ -238,4 +276,5 @@ func TestRuleSetCache_GetNonExistent(t *testing.T) {
 	entry, ok := cache.Get("non-existent")
 	assert.False(t, ok)
 	assert.Nil(t, entry)
+	assert.Zero(t, cache.CountEntries("non-existent"))
 }

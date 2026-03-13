@@ -34,6 +34,7 @@ type RuleSetOptions struct {
 	Name      string
 	Namespace string
 	Rules     []wafv1alpha1.RuleSourceReference
+	RuleData  string
 }
 
 // NewTestRuleSet creates a test RuleSet resource with sensible defaults
@@ -56,7 +57,8 @@ func NewTestRuleSet(opts RuleSetOptions) *wafv1alpha1.RuleSet {
 			Namespace: opts.Namespace,
 		},
 		Spec: wafv1alpha1.RuleSetSpec{
-			Rules: opts.Rules,
+			Rules:    opts.Rules,
+			RuleData: opts.RuleData,
 		},
 	}
 }
@@ -71,6 +73,18 @@ func NewTestConfigMap(name, namespace, rules string) *corev1.ConfigMap {
 		Data: map[string]string{
 			"rules": rules,
 		},
+	}
+}
+
+// NewTestRuleData creates a test Secret with WAF rules data
+func NewTestRuleData(name, namespace string, data map[string][]byte) *corev1.Secret {
+	return &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: namespace,
+		},
+		Type: wafv1alpha1.RuleDataSecretType,
+		Data: data,
 	}
 }
 

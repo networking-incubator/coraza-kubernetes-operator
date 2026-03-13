@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # pylint: disable=missing-function-docstring,missing-module-docstring
 """
-Generate Kubernetes ConfigMaps from OWASP CoreRuleSet rules.
+Generate Kubernetes ConfigMaps and Secrets from OWASP CoreRuleSet rules.
 
 This script processes CoreRuleSet rules from a specified directory and creates ConfigMaps
 for each rule file that contains SecRule or SecAction directives. Individual rules
@@ -9,6 +9,10 @@ containing @pmFromFile directives can optionally be removed with warnings via
 the --ignore-pmFromFile flag. Rules with specific IDs can also be excluded
 via the --ignore-rules argument. The X-CRS-Test rule can be included via
 the --include-test-rule flag.
+
+Additionally, the script processes .data files found in the rules directory and creates
+a single Kubernetes Secret containing all data files. The RuleSet resource will include
+a ruleData field referencing this secret when data files are present.
 """
 
 import argparse
@@ -156,6 +160,16 @@ def get_rule_files(rules_dir: str) -> List[Path]:
     conf_files = sorted(rules_path.glob("*.conf"))
     print(f"Found {len(conf_files)} .conf files in {rules_path}", file=sys.stderr)
     return conf_files
+
+
+def get_data_files(rules_dir: str) -> List[Path]:
+    """Get all .data files from the rules directory."""
+    rules_path = Path(rules_dir)
+
+    data_files = sorted(rules_path.glob("*.data"))
+    if data_files:
+        print(f"Found {len(data_files)} .data files in {rules_path}", file=sys.stderr)
+    return data_files
 
 
 def extract_rule_id(rule_text: str) -> str:
@@ -320,7 +334,7 @@ def generate_configmap(file_path: Path, ignore_rule_ids: Set[str], ignore_pmfrom
         return "", "", "No SecRule or SecAction directives found"
 
     # Indent the rules content for YAML
-    indented_rules = "\n".join(f"    {line}" if line.strip() else "" for line in processed_content.splitlines())
+    indented_rules = "\n".join(f"    {line}" if line.strip() else "    " for line in processed_content.splitlines())
 
     configmap = f"""apiVersion: v1
 kind: ConfigMap
@@ -334,7 +348,41 @@ data:
     return configmap_name, configmap, ""
 
 
-def generate_ruleset(configmap_names: List[str], include_base_rules: bool = True) -> str:
+def generate_data_secret(data_files: List[Path], secret_name: str = "coreruleset-data") -> str:
+    """Generate a Kubernetes Secret for data files."""
+    if not data_files:
+        return ""
+
+    # Build the stringData entries
+    data_entries = []
+    for data_file in data_files:
+        try:
+            content = data_file.read_text(encoding='utf-8', errors='ignore')
+            # Indent the content for YAML
+            indented_content = "\n".join(f"    {line}" if line.strip() else "    " for line in content.splitlines())
+            data_entries.append(f"  {data_file.name}: |\n{indented_content}")
+        except Exception as e:
+            print(f"ERROR: Failed to read data file {data_file}: {e}", file=sys.stderr)
+            continue
+
+    if not data_entries:
+        return ""
+
+    data_section = '\n'.join(data_entries)
+
+    secret = f"""apiVersion: v1
+kind: Secret
+metadata:
+  name: {secret_name}
+type: coraza/data
+stringData:
+{data_section}
+"""
+
+    return secret
+
+
+def generate_ruleset(configmap_names: List[str], include_base_rules: bool = True, ruledata_secret: str = "") -> str:
     """Generate a RuleSet resource referencing all ConfigMaps."""
     rules_entries = []
 
@@ -347,13 +395,18 @@ def generate_ruleset(configmap_names: List[str], include_base_rules: bool = True
 
     rules_section = '\n'.join(rules_entries)
 
+    # Add ruleData field if a secret name is provided
+    ruledata_section = ""
+    if ruledata_secret:
+        ruledata_section = f"\n  ruleData: {ruledata_secret}"
+
     ruleset = f"""apiVersion: waf.k8s.coraza.io/v1alpha1
 kind: RuleSet
 metadata:
   name: default-ruleset
 spec:
   rules:
-{rules_section}
+{rules_section}{ruledata_section}
 """
 
     return ruleset
@@ -413,13 +466,16 @@ Examples:
     # Get all rule files
     rule_files = get_rule_files(args.rules_dir)
 
+    # Get all data files
+    data_files = get_data_files(args.rules_dir)
+
     # Process each file
     processed_count = 0
     skipped_count = 0
     configmaps = []
     configmap_names = []
 
-    print(f"\nProcessing {len(rule_files)} files...\n", file=sys.stderr)
+    print(f"\nProcessing {len(rule_files)} rule files...\n", file=sys.stderr)
 
     for rule_file in rule_files:
         print(f"Processing: {rule_file.name}", file=sys.stderr)
@@ -434,16 +490,29 @@ Examples:
             print(f"  ✗ Skipped: {skip_reason}", file=sys.stderr)
             skipped_count += 1
 
+    # Generate data Secret if there are data files
+    secret_name = "coreruleset-data"
+    data_secret = ""
+    if data_files:
+        print(f"\nProcessing {len(data_files)} data files...\n", file=sys.stderr)
+        for data_file in data_files:
+            print(f"Processing: {data_file.name}", file=sys.stderr)
+            print(f"  ✓ Added to Secret: {secret_name}", file=sys.stderr)
+        data_secret = generate_data_secret(data_files, secret_name)
+
     # Generate RuleSet
-    ruleset = generate_ruleset(configmap_names)
+    ruleset = generate_ruleset(configmap_names, ruledata_secret=secret_name if data_files else "")
 
     # Output summary
     print(f"\n{'='*60}", file=sys.stderr)
     print(f"Summary:", file=sys.stderr)
     print(f"  Base rules: 1 (bundled)", file=sys.stderr)
-    print(f"  Processed: {processed_count} files", file=sys.stderr)
-    print(f"  Skipped: {skipped_count} files", file=sys.stderr)
+    print(f"  Processed: {processed_count} rule files", file=sys.stderr)
+    print(f"  Skipped: {skipped_count} rule files", file=sys.stderr)
     print(f"  Total ConfigMaps: {len(configmap_names) + 1}", file=sys.stderr)
+    print(f"  Data files: {len(data_files)}", file=sys.stderr)
+    if data_files:
+        print(f"  Data Secret: {secret_name}", file=sys.stderr)
     print(f"{'='*60}\n", file=sys.stderr)
 
     # Print base-rules ConfigMap first
@@ -456,6 +525,11 @@ Examples:
     for configmap in configmaps:
         print("---")
         print(configmap, end="")
+
+    # Print data Secret if generated
+    if data_secret:
+        print("---")
+        print(data_secret, end="")
 
     # Print RuleSet
     print("---")

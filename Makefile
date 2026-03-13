@@ -194,7 +194,7 @@ LOCALRULES ?= $(shell pwd)/tmp/rules
 CORERULESET_DIR ?= $(shell pwd)/tmp/coreruleset
 TMP_DOWNLOAD_DIR ?= $(shell pwd)/tmp/download
 NAMESPACE ?= default
-CORERULESET_EXTRA_FLAGS ?= --ignore-pmFromFile
+CORERULESET_EXTRA_FLAGS ?=
 
 $(LOCALRULES):
 	mkdir -p "$(LOCALRULES)"
@@ -221,37 +221,15 @@ coraza.coreruleset: coraza.generaterules
 	kubectl delete -n $(NAMESPACE) --ignore-not-found -f $(LOCALRULES)/*.yaml
 	kubectl apply -n $(NAMESPACE) --server-side -f $(LOCALRULES)/*.yaml
 
-# TODO: Deploy a Gateway, set port-forward and log-forward and run ftw passing the right flags
 # -------------------------------------------------------------------------------
-# Coraza Coreruleset - FTW testing
+# Coraza Coreruleset - Conformance test
 # -------------------------------------------------------------------------------
+CONFORMANCE_EXTRA_FLAGS ?= 
 
-FTW_NAMESPACE ?= ftw-test
-# TODO: we should get this from the created manifests
-GATEWAY_NAME ?= coraza-gateway 
-FTW_OUTPUT_FORMAT ?= plain
-FTW_EXTRA_ARGS ?= 
-
-.PHONY: ftw.environment
-ftw.environment: cluster.kind
-	kubectl delete ns --ignore-not-found $(FTW_NAMESPACE)
-	kubectl create ns $(FTW_NAMESPACE)
-	kubectl apply -n $(FTW_NAMESPACE) -f config/samples/
-	kubectl wait deploy -n $(FTW_NAMESPACE) -l gateway.networking.k8s.io/gateway-name=$(GATEWAY_NAME) --for=condition=Available
-
-.PHONY: ftw.coreruleset
-ftw.coreruleset:
-	$(MAKE) CORERULESET_EXTRA_FLAGS="--include-test-rule --ignore-pmFromFile" NAMESPACE=$(FTW_NAMESPACE) coraza.coreruleset
-
-.PHONY: ftw.run
-ftw.run: coraza.coreruleset.download
-	# Give some time for rules to be properly loaded by the Gateway
-	sleep 10
-	$(KIND) get kubeconfig --name $(KIND_CLUSTER_NAME) > $(shell pwd)/tmp/kubeconfig
-	python ftw/run.py --namespace $(FTW_NAMESPACE) --gateway $(GATEWAY_NAME) --config-file $(shell pwd)/ftw/ftw.yml --rules-directory $(CORERULESET_DIR)/tests/tests --kubeconfig $(shell pwd)/tmp/kubeconfig --output-format $(FTW_OUTPUT_FORMAT) $(FTW_EXTRA_ARGS)
-
-.PHONY: ftw
-ftw: ftw.environment ftw.coreruleset ftw.run
+.PHONY: test.conformance
+test.conformance:
+	$(MAKE) CORERULESET_EXTRA_FLAGS="--include-test-rule" coraza.generaterules
+	cd test/conformance &&  $(CONFORMANCE_EXTRA_FLAGS) FTW_CONFIG=$(shell pwd)/test/conformance/ftw.yml TESTMANIFESTS_PATH=$(CORERULESET_DIR)/tests/tests RULESET_PATH=$(LOCALRULES)/rules.yaml KIND_CLUSTER_NAME=${KIND_CLUSTER_NAME} ISTIO_VERSION=${ISTIO_VERSION} go test -tags=conformance ./... -v
 
 # -------------------------------------------------------------------------------
 # Helm

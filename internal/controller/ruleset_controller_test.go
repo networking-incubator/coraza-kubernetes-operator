@@ -420,6 +420,10 @@ func TestRuleSetReconciler_ValidateRules(t *testing.T) {
 			name:    "referother",
 			content: "SecRuleUpdateTargetById 12345 \"REMOTE_ADDR\"",
 		},
+		{
+			name:    "withdata",
+			content: "SecRule REQUEST_URI \"@pmFromFile rule1.data\" \"id:55555,phase:1,deny,status:403,msg:'File Match'\"",
+		},
 	}
 	for _, rule := range rules {
 		cm := utils.NewTestConfigMap(rule.name, "default", rule.content)
@@ -431,6 +435,25 @@ func TestRuleSetReconciler_ValidateRules(t *testing.T) {
 			}
 		})
 	}
+
+	ruleData := map[string][]byte{
+		"rule1.data": []byte("something\nanotherthing"),
+	}
+	secretdata := utils.NewTestRuleData("ruledata", "default", ruleData)
+	require.NoError(t, k8sClient.Create(ctx, secretdata))
+	t.Cleanup(func() {
+		if err := k8sClient.Delete(ctx, secretdata); err != nil {
+			t.Logf("Failed to delete secret: %v", err)
+		}
+	})
+	secretdataWrongType := utils.NewTestRuleData("ruledatawrongtype", "default", ruleData)
+	secretdataWrongType.Type = "generic"
+	require.NoError(t, k8sClient.Create(ctx, secretdataWrongType))
+	t.Cleanup(func() {
+		if err := k8sClient.Delete(ctx, secretdataWrongType); err != nil {
+			t.Logf("Failed to delete secret: %v", err)
+		}
+	})
 
 	t.Run("single rule should reconcile", func(t *testing.T) {
 		ruleSet := utils.NewTestRuleSet(utils.RuleSetOptions{
@@ -513,7 +536,7 @@ func TestRuleSetReconciler_ValidateRules(t *testing.T) {
 				t.Logf("Failed to delete RuleSet: %v", err)
 			}
 		})
-		t.Log("Performing initial reconciliation to populate cache")
+		t.Log("Performing initial reconciliation")
 		resource := types.NamespacedName{
 			Name:      ruleSet.Name,
 			Namespace: ruleSet.Namespace,
@@ -528,5 +551,140 @@ func TestRuleSetReconciler_ValidateRules(t *testing.T) {
 		ready := apimeta.FindStatusCondition(ruleSet.Status.Conditions, "Ready")
 		assert.Equal(t, metav1.ConditionTrue, ready.Status)
 		assert.Equal(t, "RulesCached", ready.Reason)
+	})
+
+	t.Run("ruleset using a valid ruledata should pass", func(t *testing.T) {
+		ruleSet := utils.NewTestRuleSet(utils.RuleSetOptions{
+			Name:      "ruleset-validdata",
+			Namespace: testNamespace,
+			Rules: []wafv1alpha1.RuleSourceReference{
+				{Name: "withdata"},
+			},
+			RuleData: "ruledata",
+		})
+		err := k8sClient.Create(ctx, ruleSet)
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			if err := k8sClient.Delete(ctx, ruleSet); err != nil {
+				t.Logf("Failed to delete RuleSet: %v", err)
+			}
+		})
+		t.Log("Performing initial reconciliation")
+		resource := types.NamespacedName{
+			Name:      ruleSet.Name,
+			Namespace: ruleSet.Namespace,
+		}
+
+		_, err = reconciler.Reconcile(ctx, ctrl.Request{
+			NamespacedName: resource,
+		})
+		require.NoError(t, err)
+		err = k8sClient.Get(ctx, resource, ruleSet)
+		require.NoError(t, err)
+		ready := apimeta.FindStatusCondition(ruleSet.Status.Conditions, "Ready")
+		assert.Equal(t, metav1.ConditionTrue, ready.Status)
+		assert.Equal(t, "RulesCached", ready.Reason)
+	})
+
+	t.Run("ruleset using a ruledata with wrong type should fail", func(t *testing.T) {
+		ruleSet := utils.NewTestRuleSet(utils.RuleSetOptions{
+			Name:      "ruleset-invaliddatatype",
+			Namespace: testNamespace,
+			Rules: []wafv1alpha1.RuleSourceReference{
+				{Name: "withdata"},
+			},
+			RuleData: "ruledatawrongtype",
+		})
+		err := k8sClient.Create(ctx, ruleSet)
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			if err := k8sClient.Delete(ctx, ruleSet); err != nil {
+				t.Logf("Failed to delete RuleSet: %v", err)
+			}
+		})
+		t.Log("Performing initial reconciliation")
+		resource := types.NamespacedName{
+			Name:      ruleSet.Name,
+			Namespace: ruleSet.Namespace,
+		}
+
+		_, err = reconciler.Reconcile(ctx, ctrl.Request{
+			NamespacedName: resource,
+		})
+		require.NoError(t, err)
+		err = k8sClient.Get(ctx, resource, ruleSet)
+		require.NoError(t, err)
+		ready := apimeta.FindStatusCondition(ruleSet.Status.Conditions, "Ready")
+		assert.Equal(t, metav1.ConditionFalse, ready.Status)
+		assert.Equal(t, "RuleDataSecretTypeMismatch", ready.Reason)
+		assert.Equal(t, "Failed to use RuleData secret ruledatawrongtype: the secret type must be of type coraza/data", ready.Message)
+
+	})
+
+	t.Run("ruleset referring invalid ruledata secret should fail", func(t *testing.T) {
+		ruleSet := utils.NewTestRuleSet(utils.RuleSetOptions{
+			Name:      "ruleset-invalidsecret",
+			Namespace: testNamespace,
+			Rules: []wafv1alpha1.RuleSourceReference{
+				{Name: "dumb-rule"},
+			},
+			RuleData: "notvalid",
+		})
+		err := k8sClient.Create(ctx, ruleSet)
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			if err := k8sClient.Delete(ctx, ruleSet); err != nil {
+				t.Logf("Failed to delete RuleSet: %v", err)
+			}
+		})
+		t.Log("Performing initial reconciliation")
+		resource := types.NamespacedName{
+			Name:      ruleSet.Name,
+			Namespace: ruleSet.Namespace,
+		}
+
+		_, err = reconciler.Reconcile(ctx, ctrl.Request{
+			NamespacedName: resource,
+		})
+		require.NoError(t, err)
+		err = k8sClient.Get(ctx, resource, ruleSet)
+		require.NoError(t, err)
+		ready := apimeta.FindStatusCondition(ruleSet.Status.Conditions, "Ready")
+		assert.Equal(t, metav1.ConditionFalse, ready.Status)
+		assert.Equal(t, "SecretNotFound", ready.Reason)
+		assert.Equal(t, "Referenced Secret notvalid does not exist", ready.Message)
+	})
+
+	t.Run("ruleset referring @pmFromFile without a RuleData should fail", func(t *testing.T) {
+		ruleSet := utils.NewTestRuleSet(utils.RuleSetOptions{
+			Name:      "ruleset-invaliddata",
+			Namespace: testNamespace,
+			Rules: []wafv1alpha1.RuleSourceReference{
+				{Name: "withdata"},
+			},
+		})
+		err := k8sClient.Create(ctx, ruleSet)
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			if err := k8sClient.Delete(ctx, ruleSet); err != nil {
+				t.Logf("Failed to delete RuleSet: %v", err)
+			}
+		})
+		t.Log("Performing initial reconciliation")
+		resource := types.NamespacedName{
+			Name:      ruleSet.Name,
+			Namespace: ruleSet.Namespace,
+		}
+
+		_, err = reconciler.Reconcile(ctx, ctrl.Request{
+			NamespacedName: resource,
+		})
+		assert.ErrorContains(t, err, "open rule1.data: data does not exist")
+		err = k8sClient.Get(ctx, resource, ruleSet)
+		require.NoError(t, err)
+		ready := apimeta.FindStatusCondition(ruleSet.Status.Conditions, "Ready")
+		assert.Equal(t, metav1.ConditionFalse, ready.Status)
+		assert.Equal(t, "InvalidRuleSet", ready.Reason)
+		assert.Contains(t, ready.Message, "open rule1.data: data does not exist")
 	})
 }

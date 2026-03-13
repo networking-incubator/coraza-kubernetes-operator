@@ -2,7 +2,7 @@
 
 Deploys the [Coraza Kubernetes Operator](https://github.com/networking-incubator/coraza-kubernetes-operator) — declarative Web Application Firewall (WAF) support for Kubernetes Gateways.
 
-> **Requires Kubernetes &#x2265;1.33.0.** The chart and operator use `resizePolicy` and the `Chart.yaml` enforces this minimum.
+> **Requires Kubernetes ≥1.33.0 or OpenShift Container Platform ≥4.20.** The chart and operator use `resizePolicy` and the `Chart.yaml` enforces this minimum.
 
 
 ## Installation

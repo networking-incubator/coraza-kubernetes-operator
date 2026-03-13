@@ -126,8 +126,8 @@ jobs:
       - name: run tools tests
         run: make test.tools
 
-  ftw-tests:
-    name: FTW tests
+  conformance-tests:
+    name: Coreruleset conformance test
     runs-on: ubuntu-latest
     continue-on-error: true # not yet enforced. TODO: https://github.com/networking-incubator/coraza-kubernetes-operator/issues/96
     steps:
@@ -165,18 +165,17 @@ jobs:
         run: go install sigs.k8s.io/kind@a323333ff9efd8099f95a8a6b5c86c75a210d00f # v0.31.0
       
       - name: setup environment
-        run: make ftw.environment ftw.coreruleset
+        run: make cluster.kind
         env:
           KIND_CLUSTER_NAME: coraza-kubernetes-operator-integration
 
-      - name: run FTW tests
+      - name: run Conformance tests
         run: |
-          make ftw.run
-          cat ftwreport.log >> $GITHUB_STEP_SUMMARY
+          make test.conformance
         env:
           KIND_CLUSTER_NAME: coraza-kubernetes-operator-integration
-          FTW_OUTPUT_FORMAT: github
-          FTW_EXTRA_ARGS: --output-log ftwreport.log
+          CONFORMANCE_EXTRA_FLAGS: OUTPUT_FORMAT=github
+          IGNORE_TEST_MANIFEST_ERRORS: true # Remove once datafiles are supported and ruleset >= 4.24
 
   integration-tests:
     name: integration tests

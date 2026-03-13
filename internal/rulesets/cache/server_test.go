@@ -19,6 +19,7 @@ package cache
 import (
 	"context"
 	"encoding/json"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -31,6 +32,12 @@ import (
 )
 
 const testServerAddr = ":38080"
+
+var (
+	dataFile = map[string][]byte{
+		"somefile.data": []byte("some file\nanother file"),
+	}
+)
 
 func TestNewServer(t *testing.T) {
 	cache := NewRuleSetCache()
@@ -77,7 +84,8 @@ func TestServer_HandleGetRules_Success(t *testing.T) {
 
 	t.Log("Adding test ruleset to cache")
 	testRules := "SecRule REQUEST_URI \"@contains /admin\" \"id:1,deny\""
-	cache.Put("test-instance", testRules)
+
+	cache.Put("test-instance", testRules, dataFile)
 
 	t.Log("Requesting ruleset from server")
 	req := httptest.NewRequest(http.MethodGet, "/rules/test-instance", nil)
@@ -95,6 +103,27 @@ func TestServer_HandleGetRules_Success(t *testing.T) {
 	assert.NotEmpty(t, response.UUID)
 	assert.NotEmpty(t, response.Timestamp)
 	assert.Equal(t, testRules, response.Rules)
+	assert.Equal(t, dataFile, response.DataFiles)
+
+	t.Log("do with null datafile")
+	w = httptest.NewRecorder()
+	cache.Put("test-instance", testRules, nil)
+
+	t.Log("Requesting ruleset from server")
+	server.handleRules(w, req)
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, "application/json", w.Header().Get("Content-Type"))
+
+	t.Log("Decoding response")
+	var response2 RuleSetEntry
+	err = json.NewDecoder(w.Body).Decode(&response2)
+	require.NoError(t, err)
+
+	t.Log("Verifying response contents")
+	assert.NotEmpty(t, response2.UUID)
+	assert.NotEmpty(t, response2.Timestamp)
+	assert.Equal(t, testRules, response2.Rules)
+	assert.Empty(t, response2.DataFiles)
 }
 
 func TestServer_HandleLatest_Success(t *testing.T) {
@@ -103,7 +132,7 @@ func TestServer_HandleLatest_Success(t *testing.T) {
 	server := NewServer(cache, testServerAddr, logger, nil)
 
 	t.Log("Adding test ruleset to cache")
-	cache.Put("test-instance", "test rules")
+	cache.Put("test-instance", "test rules", dataFile)
 
 	t.Log("Requesting latest from server")
 	req := httptest.NewRequest(http.MethodGet, "/rules/test-instance/latest", nil)
@@ -130,7 +159,7 @@ func TestServer_HandleRules_UUIDConsistency(t *testing.T) {
 	server := NewServer(cache, testServerAddr, logger, nil)
 
 	t.Log("Adding test ruleset to cache")
-	cache.Put("test-instance", "test rules")
+	cache.Put("test-instance", "test rules", nil)
 
 	t.Log("Requesting latest and rules endpoints")
 	req1 := httptest.NewRequest(http.MethodGet, "/rules/test-instance/latest", nil)
@@ -167,23 +196,30 @@ func TestServer_GCByAge(t *testing.T) {
 	}
 	server := NewServer(cache, testServerAddr, logger, gc)
 
+	modifiedData := make(map[string][]byte)
+	maps.Copy(modifiedData, testDataFile)
+	modifiedData["anotherfile.data"] = []byte("another content")
+
 	t.Log("Starting the GC")
 	ctx := t.Context()
 	go server.rungc(ctx)
 
 	t.Log("Adding entries across multiple instances")
-	cache.Put("instance1", "instance1 old")
-	cache.Put("instance1", "instance1 new")
-	cache.Put("instance2", "instance2 old")
-	cache.Put("instance2", "instance2 new")
-	cache.Put("instance3", "only version")
+	cache.Put("instance1", "instance1 old", nil)
+	cache.Put("instance1", "instance1 new", nil)
+	cache.Put("instance2", "instance2 old", nil)
+	cache.Put("instance2", "instance2 new", nil)
+	cache.Put("instance3", "only version", nil)
+	cache.Put("instancedata", "instancedata old", testDataFile)
+	cache.Put("instancedata", "instancedata new", modifiedData)
 
 	t.Log("Manually marking old entries with old timestamps")
 	cache.SetEntryTimestamp("instance1", 0, time.Now().Add(-200*time.Millisecond))
 	cache.SetEntryTimestamp("instance2", 0, time.Now().Add(-200*time.Millisecond))
 	cache.SetEntryTimestamp("instance3", 0, time.Now().Add(-50*time.Millisecond))
+	cache.SetEntryTimestamp("instancedata", 0, time.Now().Add(-200*time.Millisecond))
 
-	initialTotal := cache.CountEntries("instance1") + cache.CountEntries("instance2")
+	initialTotal := cache.CountEntries("instance1") + cache.CountEntries("instance2") + cache.CountEntries("instancedata")
 	t.Logf("Initial entries for instance1 and instance2: %d", initialTotal)
 
 	t.Log("Waiting for a coupleGC cycles to complete")
@@ -199,11 +235,16 @@ func TestServer_GCByAge(t *testing.T) {
 	entry3, ok3 := cache.Get("instance3")
 	assert.True(t, ok3)
 	assert.Equal(t, "only version", entry3.Rules)
+	entrydatafile, okdata := cache.Get("instancedata")
+	assert.True(t, okdata)
+	assert.Equal(t, "instancedata new", entrydatafile.Rules)
+	assert.Equal(t, modifiedData, entrydatafile.DataFiles)
 
 	t.Log("Verifying old entries were pruned")
 	assert.Equal(t, 1, cache.CountEntries("instance1"), "instance1 should have only latest entry")
 	assert.Equal(t, 1, cache.CountEntries("instance2"), "instance2 should have only latest entry")
 	assert.Equal(t, 1, cache.CountEntries("instance3"), "instance3 entry is recent enough to keep")
+	assert.Equal(t, 1, cache.CountEntries("instancedata"), "instancedata should have only latest entry")
 }
 
 func TestServer_GCBySize(t *testing.T) {
@@ -219,15 +260,15 @@ func TestServer_GCBySize(t *testing.T) {
 	server := NewServer(cache, ":0", logger, gc)
 
 	t.Log("Adding multiple versions for some instances to create prunable entries")
-	cache.Put("instance1", "instance1 old - 27 chars...")
-	cache.Put("instance1", "instance1 new - 27 chars...")
-	cache.Put("instance2", "instance2 old - 27 chars...")
-	cache.Put("instance2", "instance2 new - 27 chars...")
-	cache.Put("instance3", "instance3 - 25 characters..")
+	cache.Put("instance1", "instance1 old - 27 chars...", nil)
+	cache.Put("instance1", "instance1 new - 27 chars...", nil)
+	cache.Put("instance2", "instance2 old - 27 chars...", nil)
+	cache.Put("instance2", "instance2 new - 27 chars...", nil)
+	cache.Put("instance3", "instance3 - 25 characters..", nil)
 
 	t.Log("Adding large entry that alone exceeds max size (edge case)")
 	largeRules := "This is a large ruleset that exceeds the max size limit by itself"
-	cache.Put("instance4", largeRules)
+	cache.Put("instance4", largeRules, nil)
 
 	initialSize := cache.TotalSize()
 	initialCount := cache.CountEntries("instance1") + cache.CountEntries("instance2") + cache.CountEntries("instance3") + cache.CountEntries("instance4")
