@@ -32,6 +32,7 @@ engines enforce.
 ### Supported Platforms
 
 The operator is designed to run on:
+
 - **Kubernetes**: v1.33+
 - **OpenShift Container Platform (OCP)**: v4.20+
 
