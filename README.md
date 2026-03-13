@@ -108,7 +108,7 @@ the source of truth for each layer avoids editing the wrong file.
   bundle/metadata/          OLM annotations
   bundle/bundle.Dockerfile
        │
-       │  docker build (make bundle-build)
+       │  docker build (make bundle.build)
        ▼
   Bundle image              pushed to registry
        │
