@@ -5,10 +5,10 @@ metadata:
     alm-examples: '[]'
     capabilities: Basic Install
     categories: Security
-    containerImage: ghcr.io/networking-incubator/coraza-kubernetes-operator:v0.2.0
+    containerImage: ghcr.io/networking-incubator/coraza-kubernetes-operator:v0.0.0-dev
     repository: https://github.com/networking-incubator/coraza-kubernetes-operator
     support: networking-incubator
-  name: coraza-kubernetes-operator.v0.2.0
+  name: coraza-kubernetes-operator.v0.0.0-dev
 spec:
   apiservicedefinitions: {}
   customresourcedefinitions:
@@ -74,6 +74,7 @@ spec:
           - ''
           resources:
           - configmaps
+          - secrets
           verbs:
           - get
           - list
@@ -178,7 +179,7 @@ spec:
               enableServiceLinks: false
               containers:
               - name: manager
-                image: ghcr.io/networking-incubator/coraza-kubernetes-operator:v0.2.0
+                image: ghcr.io/networking-incubator/coraza-kubernetes-operator:v0.0.0-dev
                 imagePullPolicy: IfNotPresent
                 command:
                 - /manager
@@ -277,4 +278,4 @@ spec:
   provider:
     name: networking-incubator
     url: https://github.com/networking-incubator
-  version: 0.2.0
+  version: 0.0.0-dev

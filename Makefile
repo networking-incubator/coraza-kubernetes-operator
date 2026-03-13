@@ -21,7 +21,7 @@ ISTIO_VERSION ?= 1.28.2
 METALLB_VERSION ?= 0.15.3
 METALLB_POOL_SIZE ?= 128 # Defines the size of MetalLB pool, when being used
 
-VERSION ?= dev
+VERSION ?= v0.0.0-dev
 CONTROLLER_MANAGER_CONTAINER_IMAGE_BASE ?= ghcr.io/networking-incubator/coraza-kubernetes-operator
 CONTROLLER_MANAGER_CONTAINER_IMAGE_TAG ?= $(VERSION)
 CONTROLLER_MANAGER_CONTAINER_IMAGE ?= ${CONTROLLER_MANAGER_CONTAINER_IMAGE_BASE}:${CONTROLLER_MANAGER_CONTAINER_IMAGE_TAG}
@@ -279,10 +279,15 @@ catalog.update: ## Add the current VERSION to the OLM catalog channel
 
 .PHONY: catalog.build
 catalog.build: ## Build the OLM catalog image (renders bundles via opm)
+	@rm -rf $(CATALOG_DIR)/bundles && mkdir -p $(CATALOG_DIR)/bundles
+	@if [ -z "$${BUNDLE_IMGS}" ] && [ -d "$(BUNDLE_DIR)/manifests" ]; then \
+		cp -r $(BUNDLE_DIR) $(CATALOG_DIR)/bundles/local; \
+	fi
 	$(CONTAINER_TOOL) build \
 		--build-arg OPM_VERSION=$(OPM_VERSION) \
-		--build-arg BUNDLE_IMGS="$${BUNDLE_IMGS:-$$(python3 -c "import yaml; print(' '.join('$(BUNDLE_IMG_BASE):v'+e['name'].split('.v',1)[1] for d in yaml.safe_load_all(open('$(CATALOG_FILE)')) if d and d.get('schema')=='olm.channel' for e in d.get('entries',[])))") }" \
+		--build-arg BUNDLE_IMGS="$${BUNDLE_IMGS:-$$(if [ -d "$(CATALOG_DIR)/bundles/local" ]; then echo /tmp/bundles/local; else python3 -c "import yaml; print(' '.join('$(BUNDLE_IMG_BASE):v'+e['name'].split('.v',1)[1] for d in yaml.safe_load_all(open('$(CATALOG_FILE)')) if d and d.get('schema')=='olm.channel' for e in d.get('entries',[])))"; fi) }" \
 		-f $(CATALOG_DIR)/Dockerfile -t $(CATALOG_IMG) $(CATALOG_DIR)
+	@rm -rf $(CATALOG_DIR)/bundles
 
 .PHONY: catalog.push
 catalog.push: ## Push the OLM catalog image

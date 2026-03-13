@@ -46,6 +46,16 @@ spec:
           spec:
             description: Spec defines the desired state of RuleSet.
             properties:
+              ruleData:
+                description: |-
+                  RuleData contains the name of a secret with the required data for rules.
+                  Usually rules that contain the directive '@pmFromFile'.
+                  This secret must be created containing the type coraza/data otherwise it will
+                  not be watched.
+                  Additionally, the secret must contain the name of each file as the key, and the content
+                  of the file as the value
+                minLength: 1
+                type: string
               rules:
                 description: |-
                   Rules is an ordered list of references to ConfigMaps that contain the

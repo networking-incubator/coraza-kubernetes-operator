@@ -6,7 +6,11 @@ FROM registry.access.redhat.com/ubi9/ubi-minimal AS builder
 
 COPY --from=opm /bin/opm /bin/opm
 
+RUN mkdir -p /etc/containers && \
+    echo '{"default":[{"type":"insecureAcceptAnything"}]}' > /etc/containers/policy.json
+
 COPY coraza-kubernetes-operator /configs/coraza-kubernetes-operator
+COPY bundles/ /tmp/bundles/
 
 ARG BUNDLE_IMGS
 RUN for img in ${BUNDLE_IMGS}; do \
