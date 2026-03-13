@@ -31,7 +31,7 @@ func main() {
 }
 
 func run(args []string) error {
-	fs := flag.NewFlagSet("github_issue_manager", flag.ContinueOnError)
+	fs := flag.NewFlagSet("github_project_manager", flag.ContinueOnError)
 
 	var (
 		verbose bool
@@ -39,6 +39,7 @@ func run(args []string) error {
 		owner   string
 		repo    string
 		issue   int
+		project int
 	)
 
 	fs.BoolVar(&verbose, "verbose", false, "enable verbose output")
@@ -47,6 +48,7 @@ func run(args []string) error {
 	fs.StringVar(&owner, "owner", "", "repository owner")
 	fs.StringVar(&repo, "repo", "", "repository name")
 	fs.IntVar(&issue, "issue", 0, "issue number")
+	fs.IntVar(&project, "project", 1, "project board number")
 
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -54,7 +56,7 @@ func run(args []string) error {
 
 	remaining := fs.Args()
 	if len(remaining) == 0 {
-		return fmt.Errorf("missing command: expected 'update-labels' or 'close-declined'\n\n%s", usage())
+		return fmt.Errorf("missing command\n\n%s", usage())
 	}
 
 	command := remaining[0]
@@ -107,8 +109,11 @@ func run(args []string) error {
 	case "close-declined":
 		return runCloseDeclined(client, issue, iss.Labels, iss.HasMilestone(), iss.State, dryRun, log)
 
+	case "triage-pr":
+		return runTriagePR(client, issue, iss, project, dryRun, log)
+
 	default:
-		return fmt.Errorf("unknown command %q: expected 'update-labels' or 'close-declined'\n\n%s", command, usage())
+		return fmt.Errorf("unknown command %q\n\n%s", command, usage())
 	}
 }
 
@@ -202,19 +207,95 @@ func runCloseDeclined(client *GitHubClient, number int, labels []string, hasMile
 	return nil
 }
 
-func usage() string {
-	return `Usage: github_issue_manager [flags] <command>
+func runTriagePR(client *GitHubClient, number int, iss *Issue, projectNumber int, dryRun bool, log func(string, ...any)) error {
+	// Collect all labels to add
+	var labelsToAdd []string
 
-Commands:
+	// Area labels from changed files
+	files, err := client.GetPullRequestFiles(number)
+	if err != nil {
+		return err
+	}
+	log("PR #%d changed %d files", number, len(files))
+	labelsToAdd = append(labelsToAdd, ComputePRAreaLabels(iss.Labels, files)...)
+
+	// Size label from additions/deletions
+	additions, deletions, err := client.GetPullRequestStats(number)
+	if err != nil {
+		return err
+	}
+	labelsToAdd = append(labelsToAdd, ComputePRSizeLabel(iss.Labels, additions, deletions)...)
+
+	// Apply labels
+	if len(labelsToAdd) > 0 {
+		for _, l := range labelsToAdd {
+			log("Adding label: %s", l)
+		}
+		if !dryRun {
+			if err := client.AddLabels(number, labelsToAdd); err != nil {
+				return err
+			}
+		}
+	}
+
+	// Assign lowest semver milestone if none set
+	if !iss.HasMilestone() {
+		milestones, err := client.ListOpenMilestones()
+		if err != nil {
+			return err
+		}
+		m, err := FindLowestMilestone(milestones)
+		if err != nil {
+			log("Skipping milestone: %v", err)
+		} else {
+			log("Setting milestone: %s (#%d)", m.Title, m.Number)
+			if !dryRun {
+				if err := client.SetMilestone(number, m.Number); err != nil {
+					return err
+				}
+			}
+		}
+	} else {
+		log("PR already has a milestone, skipping")
+	}
+
+	// Add to project board
+	log("Adding PR to project board #%d under Review", projectNumber)
+	if !dryRun {
+		nodeID, err := client.GetPullRequestNodeID(number)
+		if err != nil {
+			return err
+		}
+		if err := client.AddToProjectBoard(nodeID, projectNumber, "Review"); err != nil {
+			log("Warning: could not add to project board: %v", err)
+			// Non-fatal — the PR may already be on the board or board may not exist
+		}
+	}
+
+	if dryRun {
+		fmt.Println("dry-run: no changes applied")
+	}
+
+	return nil
+}
+
+func usage() string {
+	return `Usage: github_project_manager [flags] <command>
+
+Issue Commands:
   update-labels     Apply triage label rules based on milestone status
   close-declined    Handle declined issues (close, remove labels/milestone)
+
+PR Commands:
+  triage-pr         Apply area labels, milestone, size labels, and add to project board
 
 Flags:
   -v, --verbose     Enable verbose output
   --dry-run         Display changes without making them
   --owner           Repository owner (or GITHUB_OWNER env)
   --repo            Repository name (or GITHUB_REPO env)
-  --issue           Issue number (or GITHUB_ISSUE env)
+  --issue           Issue/PR number (or GITHUB_ISSUE env)
+  --project         Project number for board management (default: 1)
 
 Environment:
   GITHUB_TOKEN      GitHub API token (required)`
