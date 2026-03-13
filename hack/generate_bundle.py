@@ -25,20 +25,24 @@ EXCLUDED_KINDS = {"Namespace", "PodDisruptionBudget", "ServiceMonitor",
                   "ServiceAccount", "ClusterRole", "ClusterRoleBinding"}
 
 
-def helm_template(chart_dir: str, image: str, version: str) -> list:
+def helm_template(chart_dir: str, release_name: str, namespace: str) -> list:
     """Render the Helm chart and return parsed YAML documents."""
     cmd = [
         "helm", "template",
-        "coraza-kubernetes-operator",
+        release_name,
         chart_dir,
-        "--namespace", "coraza-system",
-        "--set", f"image.repository={image.rsplit(':', 1)[0]}",
-        "--set", f"image.tag={image.rsplit(':', 1)[1] if ':' in image else version}",
+        "--namespace", namespace,
         "--kube-version", "1.33.0",
     ]
     result = subprocess.run(cmd, capture_output=True, text=True, check=True)
     docs = list(yaml.safe_load_all(result.stdout))
     return [d for d in docs if d is not None]
+
+
+def override_container_image(deployment: dict, image: str):
+    """Overwrite container images in a Deployment spec with the given image ref."""
+    for container in deployment["spec"]["template"]["spec"]["containers"]:
+        container["image"] = image
 
 
 def find_by_kind(docs: list, kind: str) -> dict:
@@ -56,12 +60,13 @@ def find_all_by_kind(docs: list, kind: str) -> list:
 
 def build_csv(template_path: str, deployment: dict, cluster_role: dict,
               sa_name: str, version: str, image: str,
-              replaces: str, channels: str, default_channel: str) -> dict:
+              replaces: str, channels: str, default_channel: str,
+              package_name: str) -> dict:
     """Build the CSV by injecting Helm-rendered resources into the template."""
     with open(template_path) as f:
         csv = yaml.safe_load(f)
 
-    csv["metadata"]["name"] = f"coraza-kubernetes-operator.v{version}"
+    csv["metadata"]["name"] = f"{package_name}.v{version}"
     csv["metadata"]["annotations"]["containerImage"] = image
     csv["spec"]["version"] = version
 
@@ -102,9 +107,10 @@ def write_bundle(bundle_dir: str, csv: dict, extra_manifests: list,
     metadata_dir = os.path.join(bundle_dir, "metadata")
     scorecard_dir = os.path.join(bundle_dir, "tests", "scorecard")
 
-    os.makedirs(manifests_dir, exist_ok=True)
-    os.makedirs(metadata_dir, exist_ok=True)
-    os.makedirs(scorecard_dir, exist_ok=True)
+    for d in (manifests_dir, metadata_dir, scorecard_dir):
+        if os.path.isdir(d):
+            shutil.rmtree(d)
+        os.makedirs(d)
 
     csv_path = os.path.join(manifests_dir, f"{package_name}.clusterserviceversion.yaml")
     with open(csv_path, "w") as f:
@@ -211,11 +217,13 @@ def main():
     parser.add_argument("--chart-dir", required=True, help="Path to the Helm chart directory")
     parser.add_argument("--bundle-dir", required=True, help="Path to the output bundle directory")
     parser.add_argument("--version", required=True, help="Operator version (semver, no 'v' prefix)")
-    parser.add_argument("--image", required=True, help="Operator container image (repo:tag)")
+    parser.add_argument("--image", required=True, help="Operator container image ref (repo:tag or repo@sha256:digest)")
     parser.add_argument("--channels", default="alpha", help="Comma-separated OLM channel list")
     parser.add_argument("--default-channel", default="alpha", help="Default OLM channel")
     parser.add_argument("--replaces", default="", help="CSV version this replaces (e.g. coraza-kubernetes-operator.v0.2.0)")
     parser.add_argument("--package-name", default="coraza-kubernetes-operator", help="OLM package name")
+    parser.add_argument("--release-name", default="coraza-kubernetes-operator", help="Helm release name for rendering")
+    parser.add_argument("--namespace", default="coraza-system", help="Namespace for Helm rendering")
     args = parser.parse_args()
 
     version = args.version.lstrip("v")
@@ -230,7 +238,7 @@ def main():
         sys.exit(1)
 
     print("Rendering Helm chart...", file=sys.stderr)
-    docs = helm_template(chart_dir, image, version)
+    docs = helm_template(chart_dir, args.release_name, args.namespace)
     print(f"  got {len(docs)} documents", file=sys.stderr)
 
     deployment = find_by_kind(docs, "Deployment")
@@ -247,6 +255,7 @@ def main():
         print("ERROR: No ServiceAccount found in Helm output", file=sys.stderr)
         sys.exit(1)
 
+    override_container_image(deployment, image)
     sa_name = service_account["metadata"]["name"]
 
     extra_manifests = []
@@ -266,6 +275,7 @@ def main():
         replaces=args.replaces,
         channels=args.channels,
         default_channel=args.default_channel,
+        package_name=args.package_name,
     )
 
     csv = strip_helm_labels(csv)

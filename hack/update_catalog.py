@@ -50,7 +50,7 @@ def main():
         print("ERROR: channel 'alpha' not found", file=sys.stderr)
         sys.exit(1)
 
-    entries = channel_doc.get("entries", [])
+    entries = channel_doc.setdefault("entries", [])
     for e in entries:
         if e["name"] == entry_name:
             print(f"Entry {entry_name} already exists, nothing to do",

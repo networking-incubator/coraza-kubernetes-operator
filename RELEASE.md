@@ -82,7 +82,11 @@ Once you've verified the release, we need to tag the container image appropriate
 
 ### Step 4 - Container Image Tagging
 
-For stable releases (non-prerelease) tag the image as `latest` manually:
+The release workflow pushes a container image tagged with a `-dev` suffix
+(e.g. `v0.1.1-dev`). This image is **not** intended for end users. The OLM
+bundle references the image by its immutable digest, so the tag does not
+affect OLM installs. Prior to publishing the release, you must re-tag the
+image to produce the final tags:
 
 ```console
 # Pull the image
@@ -109,7 +113,7 @@ are specific to OLM:
        │
        │  generate_bundle.py (make bundle)
        │  Renders Helm chart, extracts Deployment/RBAC/CRDs,
-       │  injects into CSV template
+       │  injects into CSV template (image pinned by digest)
        ▼
   Bundle image (:v0.2.0)
   ┌─────────────────────┐
@@ -153,7 +157,7 @@ are specific to OLM:
 
 **What needs manual attention:**
 
-- `catalog.yaml` must be committed after `catalog-update` adds the new version.
+- `catalog.yaml` must be committed after `catalog.update` adds the new version.
   The release workflow modifies it in the working tree but does not commit back.
   Either run `make catalog.update VERSION=vX.Y.Z` before tagging, or set up
   automation to commit the updated catalog after release.

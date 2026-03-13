@@ -1,6 +1,10 @@
+ARG OPM_VERSION=v1.64.0
+
+FROM quay.io/operator-framework/opm:${OPM_VERSION} AS opm
+
 FROM registry.access.redhat.com/ubi9/ubi-minimal AS builder
 
-COPY --from=quay.io/operator-framework/opm:latest /bin/opm /bin/opm
+COPY --from=opm /bin/opm /bin/opm
 
 COPY coraza-kubernetes-operator /configs/coraza-kubernetes-operator
 
@@ -10,7 +14,7 @@ RUN for img in ${BUNDLE_IMGS}; do \
     done && \
     /bin/opm validate /configs
 
-FROM quay.io/operator-framework/opm:latest
+FROM opm
 
 COPY --from=builder /configs /configs
 

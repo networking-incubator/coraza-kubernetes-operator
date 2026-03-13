@@ -69,6 +69,8 @@ jobs:
     name: build and push container image
     runs-on: ubuntu-latest
     needs: prepare
+    outputs:
+      digest: ${{ steps.push-image.outputs.digest }}
     permissions:
       contents: read
       packages: write
@@ -92,6 +94,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: build and push image
+        id: push-image
         uses: docker/build-push-action@d08e5c354a6adb9ed34480a06d141179aa583294 # v7.0.0
         with:
           context: .
@@ -146,6 +149,7 @@ jobs:
         run: make bundle
         env:
           VERSION: ${{ github.ref_name }}
+          CONTROLLER_MANAGER_CONTAINER_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ needs.build-push-image.outputs.digest }}
 
       - name: build and push bundle image
         run: make bundle.build bundle.push

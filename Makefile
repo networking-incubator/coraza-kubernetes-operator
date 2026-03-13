@@ -243,9 +243,14 @@ test.conformance:
 # OLM Bundle
 # -------------------------------------------------------------------------------
 
-BUNDLE_IMG ?= ghcr.io/networking-incubator/coraza-kubernetes-operator-bundle:$(VERSION)
-BUNDLE_IMG_BASE ?= $(word 1,$(subst :, ,$(BUNDLE_IMG)))
-CATALOG_IMG ?= ghcr.io/networking-incubator/coraza-kubernetes-operator-catalog:$(VERSION)
+BUNDLE_IMG_BASE ?= ghcr.io/networking-incubator/coraza-kubernetes-operator-bundle
+BUNDLE_IMG_TAG ?= $(VERSION)
+BUNDLE_IMG ?= $(BUNDLE_IMG_BASE):$(BUNDLE_IMG_TAG)
+
+CATALOG_IMG_BASE ?= ghcr.io/networking-incubator/coraza-kubernetes-operator-catalog
+CATALOG_IMG_TAG ?= $(VERSION)
+CATALOG_IMG ?= $(CATALOG_IMG_BASE):$(CATALOG_IMG_TAG)
+OPM_VERSION ?= v1.64.0
 BUNDLE_DIR ?= bundle
 CATALOG_DIR ?= catalog
 CATALOG_FILE ?= $(CATALOG_DIR)/coraza-kubernetes-operator/catalog.yaml
@@ -275,7 +280,8 @@ catalog.update: ## Add the current VERSION to the OLM catalog channel
 .PHONY: catalog.build
 catalog.build: ## Build the OLM catalog image (renders bundles via opm)
 	$(CONTAINER_TOOL) build \
-		--build-arg BUNDLE_IMGS="$${BUNDLE_IMGS:-$$(grep -oP '(?<=- name: )\S+' $(CATALOG_FILE) | sed 's|^.*\.v|$(BUNDLE_IMG_BASE):v|')}" \
+		--build-arg OPM_VERSION=$(OPM_VERSION) \
+		--build-arg BUNDLE_IMGS="$${BUNDLE_IMGS:-$$(python3 -c "import yaml; print(' '.join('$(BUNDLE_IMG_BASE):v'+e['name'].split('.v',1)[1] for d in yaml.safe_load_all(open('$(CATALOG_FILE)')) if d and d.get('schema')=='olm.channel' for e in d.get('entries',[])))") }" \
 		-f $(CATALOG_DIR)/Dockerfile -t $(CATALOG_IMG) $(CATALOG_DIR)
 
 .PHONY: catalog.push
