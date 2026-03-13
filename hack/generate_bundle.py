@@ -19,7 +19,7 @@ from pathlib import Path
 import yaml
 
 
-BUNDLE_RESOURCE_KINDS = {"Service", "ServiceEntry", "DestinationRule"}
+BUNDLE_RESOURCE_KINDS = {"Service"}
 
 EXCLUDED_KINDS = {"Namespace", "PodDisruptionBudget", "ServiceMonitor",
                   "ServiceAccount", "ClusterRole", "ClusterRoleBinding"}

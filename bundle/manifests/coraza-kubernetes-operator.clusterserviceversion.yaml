@@ -94,6 +94,12 @@ spec:
           - create
           - patch
         - apiGroups:
+          - apps
+          resources:
+          - deployments
+          verbs:
+          - get
+        - apiGroups:
           - coordination.k8s.io
           resources:
           - leases
@@ -124,6 +130,16 @@ spec:
           verbs:
           - list
           - watch
+        - apiGroups:
+          - networking.istio.io
+          resources:
+          - destinationrules
+          - serviceentries
+          verbs:
+          - create
+          - get
+          - patch
+          - update
         - apiGroups:
           - waf.k8s.coraza.io
           resources:
@@ -190,6 +206,13 @@ spec:
                 - --metrics-secure=false
                 - --envoy-cluster-name=outbound|80||coraza-kubernetes-operator.coraza-system.svc.cluster.local
                 - --cache-gc-interval=3s
+                - --istio-revision=coraza
+                - --operator-name=coraza-kubernetes-operator
+                env:
+                - name: POD_NAMESPACE
+                  valueFrom:
+                    fieldRef:
+                      fieldPath: metadata.namespace
                 securityContext:
                   runAsNonRoot: true
                   privileged: false

@@ -2,10 +2,9 @@
 # This file is used to track the info used to scaffold your project
 # and allow the plugins properly work.
 # More info: https://book.kubebuilder.io/reference/project-config.html
-cliVersion: 4.10.1
 domain: k8s.coraza.io
 layout:
-- go.kubebuilder.io/v4
+- go.kubebuilder.io/v3
 projectName: coraza-kubernetes-operator
 repo: github.com/networking-incubator/coraza-kubernetes-operator
 resources:

@@ -51,6 +51,13 @@ spec:
             {{- end }}
             - --envoy-cluster-name={{ printf "outbound|80||%s" (include "coraza-operator.serviceFQDN" .) }}
             - --cache-gc-interval=3s
+            - --istio-revision={{ .Values.istio.revision }}
+            - --operator-name={{ include "coraza-operator.fullname" . }}
+          env:
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
           securityContext:
             runAsNonRoot: true
             privileged: false

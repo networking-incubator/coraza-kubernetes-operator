@@ -82,6 +82,8 @@ func main() {
 	var cacheMaxSize int
 	var cacheServerPort int
 	var envoyClusterName string
+	var istioRevision string
+	var operatorName string
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
@@ -99,6 +101,8 @@ func main() {
 	flag.IntVar(&cacheMaxSize, "cache-max-size", cache.CacheMaxSize, fmt.Sprintf("Maximum total size of all cached rules in the RuleSet cache in bytes (default %dMB)", cache.CacheMaxSize/(1024*1024)))
 	flag.IntVar(&cacheServerPort, "cache-server-port", controller.DefaultRuleSetCacheServerPort, fmt.Sprintf("Port number for the RuleSet cache server to listen on (default %d)", controller.DefaultRuleSetCacheServerPort))
 	flag.StringVar(&envoyClusterName, "envoy-cluster-name", "", "The Envoy cluster name pointing to the RuleSet cache server (required)")
+	flag.StringVar(&istioRevision, "istio-revision", "", "The Istio revision label value for managed Istio resources")
+	flag.StringVar(&operatorName, "operator-name", "", "The operator release name used to derive managed resource names (required)")
 
 	opts := zap.Options{
 		Development: true,
@@ -111,6 +115,17 @@ func main() {
 
 	if envoyClusterName == "" {
 		setupLog.Error(errors.New("missing required flag"), "envoy-cluster-name is required")
+		os.Exit(1)
+	}
+
+	if operatorName == "" {
+		setupLog.Error(errors.New("missing required flag"), "operator-name is required")
+		os.Exit(1)
+	}
+
+	podNamespace := os.Getenv("POD_NAMESPACE")
+	if podNamespace == "" {
+		setupLog.Error(errors.New("missing required env var"), "POD_NAMESPACE must be set")
 		os.Exit(1)
 	}
 
@@ -210,6 +225,13 @@ func main() {
 	cacheServer := cache.NewServer(rulesetCache, fmt.Sprintf(":%d", cacheServerPort), ctrl.Log, cacheGC)
 	if err := mgr.Add(cacheServer); err != nil {
 		setupLog.Error(err, "unable to add cache server to manager")
+		os.Exit(1)
+	}
+
+	// ensure Istio prerequisites (ServiceEntry, DestinationRule) exist
+	istioPrereqs := controller.NewIstioPrerequisites(mgr.GetClient(), operatorName, podNamespace, istioRevision)
+	if err := mgr.Add(istioPrereqs); err != nil {
+		setupLog.Error(err, "unable to add Istio prerequisites runnable to manager")
 		os.Exit(1)
 	}
 
