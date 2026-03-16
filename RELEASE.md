@@ -47,12 +47,14 @@ This will trigger workflows to test and create the release:
 
 You can follow along on the [actions page].
 
-The `release` workflow will build and push a container image to GHCR tagged
-with a `-dev` suffix (e.g. `ghcr.io/networking-incubator/coraza-kubernetes-operator:v0.1.1-dev`).
-This `-dev` tag indicates the image is not yet validated for production use.
+The `release` workflow will:
 
-Release will also cut a `draft` release from the tag, however stop here and
-wait to make sure `build-test` is successful for this tag before proceeding.
+1. build and tag a container image (e.g. `ghcr.io/networking-incubator/coraza-kubernetes-operator:v0.1.1`)
+2. push the tag to GHCR
+3. cut a `draft` release from the tag
+
+Stop here and verify that CI has been successful on `main` where the release
+was tagged.
 
 > **Note**: tags that start with `v0` or have suffixes including `rc`, `alpha`,
 > or `beta` (e.g. `v0.1.1`, `v1.0.0-rc1`, `v0.1.0-alpha1`) will be
@@ -62,17 +64,17 @@ wait to make sure `build-test` is successful for this tag before proceeding.
 
 ### Step 3 - Validating The Release
 
-Once you've confirmed the `build-test` workflow has succeeded for this tag,
-review the `draft` release for your tag on the [releases page]. Verify the
-following are correct:
+Once you've confirmed the CI workflows have succeeded for this tag, review the
+`draft` release for your tag on the [releases page]. Verify the following are
+correct:
 
-* The release **name** should just be the tag name
-* Add the major themes and most important changes to the top of the **description**
-* The remainder of the **description** should include the auto-generated release notes
-* The **crds.yaml**, **operator.yaml**, **samples.yaml** & Helm chart **.tgz** artifacts are attached
-  * Check each manifest and the chart package, and verify their correctness
-* Make sure the **previous release** is set correctly
-  * e.g. for a `v1.0.0` release, _don't_ target `rc`, patch or other pre-releases. Target the last major/minor.
+- The release **name** should just be the tag name
+- Add the major themes and most important changes to the top of the **description**
+- The remainder of the **description** should include the auto-generated release notes
+- The **crds.yaml**, **operator.yaml**, **samples.yaml** & Helm chart **.tgz** artifacts are attached
+  - Check each manifest and the chart package, and verify their correctness
+- Make sure the **previous release** is set correctly
+  - e.g. for a `v1.0.0` release, _don't_ target `rc`, patch or other pre-releases. Target the last major/minor.
 
 Once you've verified the release, we need to tag the container image appropriately _before_ we publish.
 
@@ -80,30 +82,22 @@ Once you've verified the release, we need to tag the container image appropriate
 
 ### Step 4 - Container Image Tagging
 
-The release workflow pushes a container image tagged with a `-dev` suffix
-(e.g. `v0.1.1-dev`). This image is **not** intended for end users. Prior to the
-final step of publishing the release, you must re-tag the image to produce the final tags:
+For stable releases (non-prerelease) tag the image as `latest` manually:
 
 ```console
-# Pull the -dev image
-docker pull ghcr.io/networking-incubator/coraza-kubernetes-operator:v0.1.1-dev
+# Pull the image
+docker pull ghcr.io/networking-incubator/coraza-kubernetes-operator:v0.1.1
 
-# Tag it with the release version (no -dev suffix)
-docker tag ghcr.io/networking-incubator/coraza-kubernetes-operator:v0.1.1-dev ghcr.io/networking-incubator/coraza-kubernetes-operator:v0.1.1
-
-# For stable (non-pre-release) versions, also tag as latest
-docker tag ghcr.io/networking-incubator/coraza-kubernetes-operator:v0.1.1-dev ghcr.io/networking-incubator/coraza-kubernetes-operator:latest
+# For stable (non-pre-release) versions, also tag as lat
+docker tag ghcr.io/networking-incubator/coraza-kubernetes-operator:v0.1.1 ghcr.io/networking-incubator/coraza-kubernetes-operator:latest
 
 # Push the final tags
-docker push ghcr.io/networking-incubator/coraza-kubernetes-operator:v0.1.1
-docker push ghcr.io/networking-incubator/coraza-kubernetes-operator:latest # conditionally
+docker push ghcr.io/networking-incubator/coraza-kubernetes-operator:latest
 ```
 
-Delete `-dev` tag once all is complete to avoid confusion.
-
-> **Warning**: Do **not** push the final (non `-dev`) tag or `latest` until you
-> are confident the release is correct. Pre-release versions (`v0.x.x`,
-> `-alpha`, `-beta`, `-rc`) should **not** be tagged as `latest`.
+> **Warning**: Do **not** push the `latest` until you are confident the release
+> is correct. Pre-release versions (`v0.x.x`, `-alpha`, `-beta`, `-rc`) should
+> **not** be tagged as `latest`.
 
 ### Step 5 - Publishing & Announcement
 
