@@ -88,7 +88,7 @@ For stable releases (non-prerelease) tag the image as `latest` manually:
 # Pull the image
 docker pull ghcr.io/networking-incubator/coraza-kubernetes-operator:v0.1.1
 
-# For stable (non-pre-release) versions, also tag as lat
+# For stable (non-pre-release) versions, also tag as latest
 docker tag ghcr.io/networking-incubator/coraza-kubernetes-operator:v0.1.1 ghcr.io/networking-incubator/coraza-kubernetes-operator:latest
 
 # Push the final tags
