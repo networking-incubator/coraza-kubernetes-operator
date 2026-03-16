@@ -16,15 +16,22 @@ limitations under the License.
 
 package main
 
-import "strings"
+import (
+	"slices"
+	"strings"
+)
 
-// TriageResult holds the changes to apply to an issue.
-type TriageResult struct {
+// -----------------------------------------------------------------------------
+// Issue triage — label updates
+// -----------------------------------------------------------------------------
+
+// triageResult holds the changes to apply to an issue.
+type triageResult struct {
 	LabelsToAdd    []string
 	LabelsToRemove []string
 }
 
-// ComputeLabelUpdates determines label changes based on milestone status.
+// computeLabelUpdates determines label changes based on milestone status.
 //
 // Rules:
 //  1. If no milestone and no triage label: add "triage/needs-triage".
@@ -32,29 +39,32 @@ type TriageResult struct {
 //  3. If no milestone and another triage label exists alongside
 //     "triage/needs-triage" (except "triage/accepted"): remove "triage/needs-triage".
 //  4. If milestone present: ensure "triage/accepted", remove other triage labels.
-func ComputeLabelUpdates(labels []string, hasMilestone bool) TriageResult {
-	var result TriageResult
+func computeLabelUpdates(labels []string, hasMilestone bool) triageResult {
+	var result triageResult
 
 	if !hasMilestone {
 		// Remove triage/accepted when there's no milestone
-		if contains(labels, "triage/accepted") {
+		if slices.Contains(labels, "triage/accepted") {
 			result.LabelsToRemove = append(result.LabelsToRemove, "triage/accepted")
 		}
 
 		// Count remaining triage labels (excluding triage/accepted which we're removing)
-		remaining := filter(labels, func(l string) bool {
-			return strings.HasPrefix(l, "triage/") && l != "triage/accepted"
-		})
+		var triageCount int
+		for _, l := range labels {
+			if strings.HasPrefix(l, "triage/") && l != "triage/accepted" {
+				triageCount++
+			}
+		}
 
-		if len(remaining) == 0 {
+		if triageCount == 0 {
 			result.LabelsToAdd = append(result.LabelsToAdd, "triage/needs-triage")
-		} else if contains(labels, "triage/needs-triage") && len(remaining) > 1 {
+		} else if slices.Contains(labels, "triage/needs-triage") && triageCount > 1 {
 			// Another triage label exists alongside needs-triage
 			result.LabelsToRemove = append(result.LabelsToRemove, "triage/needs-triage")
 		}
 	} else {
 		// Has milestone: ensure triage/accepted, remove others
-		if !contains(labels, "triage/accepted") {
+		if !slices.Contains(labels, "triage/accepted") {
 			result.LabelsToAdd = append(result.LabelsToAdd, "triage/accepted")
 		}
 
@@ -68,14 +78,18 @@ func ComputeLabelUpdates(labels []string, hasMilestone bool) TriageResult {
 	return result
 }
 
-// DeclinedResult holds the changes to apply when an issue is declined.
-type DeclinedResult struct {
+// -----------------------------------------------------------------------------
+// Issue triage — declined handling
+// -----------------------------------------------------------------------------
+
+// declinedResult holds the changes to apply when an issue is declined.
+type declinedResult struct {
 	LabelsToRemove  []string
 	RemoveMilestone bool
 	CloseIssue      bool
 }
 
-// ComputeDeclined determines changes for a declined issue.
+// computeDeclined determines changes for a declined issue.
 //
 // If the issue has "triage/declined":
 //   - Remove all other triage/* labels.
@@ -83,12 +97,12 @@ type DeclinedResult struct {
 //   - Close the issue if it's open.
 //
 // Returns nil if the issue is not declined.
-func ComputeDeclined(labels []string, hasMilestone bool, state string) *DeclinedResult {
-	if !contains(labels, "triage/declined") {
+func computeDeclined(labels []string, hasMilestone bool, state string) *declinedResult {
+	if !slices.Contains(labels, "triage/declined") {
 		return nil
 	}
 
-	result := &DeclinedResult{
+	result := &declinedResult{
 		RemoveMilestone: hasMilestone,
 		CloseIssue:      state != "closed",
 	}
@@ -102,13 +116,14 @@ func ComputeDeclined(labels []string, hasMilestone bool, state string) *Declined
 	return result
 }
 
-// areaRule maps keywords to an area label.
-type areaRule struct {
+// -----------------------------------------------------------------------------
+// Issue triage — area and size labels
+// -----------------------------------------------------------------------------
+
+var areaRules = []struct {
 	label    string
 	keywords []string
-}
-
-var areaRules = []areaRule{
+}{
 	{"area/testing", []string{"test", "testing", "e2e", "unit test", "integration test"}},
 	{"area/infrastructure", []string{"ci", "pipeline", "build", "makefile", "dockerfile", "github action", "workflow", "script"}},
 	{"area/documentation", []string{"docs", "documentation", "readme", "guide"}},
@@ -116,65 +131,45 @@ var areaRules = []areaRule{
 	{"area/perfscale", []string{"performance", "scale", "scaling", "latency", "throughput", "benchmark"}},
 }
 
-// ComputeSizeLabels returns "size/needs-sizing" when the issue is
-// triage/accepted but has no size/* label.
-func ComputeSizeLabels(labels []string) []string {
-	if contains(labels, "triage/accepted") && !hasLabelPrefix(labels, "size/") {
-		return []string{"size/needs-sizing"}
-	}
-	return nil
-}
-
-// ComputeAreaLabels returns area/* labels inferred from the issue body.
+// computeAreaLabels returns area/* labels inferred from the issue body.
 // Only runs for triage/accepted issues with no existing area/* label.
-func ComputeAreaLabels(labels []string, body string) []string {
-	if !contains(labels, "triage/accepted") || hasLabelPrefix(labels, "area/") {
+func computeAreaLabels(labels []string, body string) []string {
+	if !slices.Contains(labels, "triage/accepted") || hasLabelPrefix(labels, "area/") {
 		return nil
 	}
 
 	lower := strings.ToLower(body)
 	var out []string
 	for _, r := range areaRules {
-		for _, kw := range r.keywords {
-			if strings.Contains(lower, kw) {
-				out = append(out, r.label)
-				break
-			}
+		if slices.ContainsFunc(r.keywords, func(kw string) bool {
+			return strings.Contains(lower, kw)
+		}) {
+			out = append(out, r.label)
 		}
 	}
+
 	return out
 }
 
-// effectiveLabels returns labels as they would be after applying a TriageResult.
-func effectiveLabels(labels []string, result TriageResult) []string {
-	out := filter(labels, func(l string) bool { return !contains(result.LabelsToRemove, l) })
+// computeSizeLabels returns "size/needs-sizing" when the issue is
+// triage/accepted but has no size/* label.
+func computeSizeLabels(labels []string) []string {
+	if slices.Contains(labels, "triage/accepted") && !hasLabelPrefix(labels, "size/") {
+		return []string{"size/needs-sizing"}
+	}
+
+	return nil
+}
+
+// -----------------------------------------------------------------------------
+// private helpers
+// -----------------------------------------------------------------------------
+
+// effectiveLabels returns labels as they would be after applying a triageResult.
+func effectiveLabels(labels []string, result triageResult) []string {
+	out := slices.DeleteFunc(slices.Clone(labels), func(l string) bool {
+		return slices.Contains(result.LabelsToRemove, l)
+	})
+
 	return append(out, result.LabelsToAdd...)
-}
-
-func contains(ss []string, s string) bool {
-	for _, v := range ss {
-		if v == s {
-			return true
-		}
-	}
-	return false
-}
-
-func hasLabelPrefix(labels []string, prefix string) bool {
-	for _, l := range labels {
-		if strings.HasPrefix(l, prefix) {
-			return true
-		}
-	}
-	return false
-}
-
-func filter(ss []string, fn func(string) bool) []string {
-	var out []string
-	for _, s := range ss {
-		if fn(s) {
-			out = append(out, s)
-		}
-	}
-	return out
 }

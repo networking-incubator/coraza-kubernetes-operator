@@ -95,7 +95,7 @@ func TestComputeLabelUpdates(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := ComputeLabelUpdates(tt.labels, tt.hasMilestone)
+			result := computeLabelUpdates(tt.labels, tt.hasMilestone)
 
 			assert.Equal(t, tt.wantAdd, result.LabelsToAdd, "LabelsToAdd")
 			assert.Equal(t, tt.wantRemove, result.LabelsToRemove, "LabelsToRemove")
@@ -155,7 +155,7 @@ func TestComputeDeclined(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := ComputeDeclined(tt.labels, tt.hasMilestone, tt.state)
+			result := computeDeclined(tt.labels, tt.hasMilestone, tt.state)
 
 			if tt.wantNil {
 				require.Nil(t, result)
@@ -200,7 +200,7 @@ func TestComputeSizeLabels(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, ComputeSizeLabels(tt.labels))
+			assert.Equal(t, tt.want, computeSizeLabels(tt.labels))
 		})
 	}
 }
@@ -270,7 +270,7 @@ func TestComputeAreaLabels(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, ComputeAreaLabels(tt.labels, tt.body))
+			assert.Equal(t, tt.want, computeAreaLabels(tt.labels, tt.body))
 		})
 	}
 }

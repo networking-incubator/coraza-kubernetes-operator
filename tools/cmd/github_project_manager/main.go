@@ -20,8 +20,13 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"slices"
 	"strconv"
 )
+
+// -----------------------------------------------------------------------------
+// Entry point
+// -----------------------------------------------------------------------------
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
@@ -31,7 +36,7 @@ func main() {
 }
 
 func run(args []string) error {
-	fs := flag.NewFlagSet("github_issue_manager", flag.ContinueOnError)
+	fs := flag.NewFlagSet("github_project_manager", flag.ContinueOnError)
 
 	var (
 		verbose bool
@@ -39,6 +44,7 @@ func run(args []string) error {
 		owner   string
 		repo    string
 		issue   int
+		project int
 	)
 
 	fs.BoolVar(&verbose, "verbose", false, "enable verbose output")
@@ -47,6 +53,7 @@ func run(args []string) error {
 	fs.StringVar(&owner, "owner", "", "repository owner")
 	fs.StringVar(&repo, "repo", "", "repository name")
 	fs.IntVar(&issue, "issue", 0, "issue number")
+	fs.IntVar(&project, "project", 1, "project board number")
 
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -54,7 +61,7 @@ func run(args []string) error {
 
 	remaining := fs.Args()
 	if len(remaining) == 0 {
-		return fmt.Errorf("missing command: expected 'update-labels' or 'close-declined'\n\n%s", usage())
+		return fmt.Errorf("missing command\n\n%s", usage())
 	}
 
 	command := remaining[0]
@@ -107,24 +114,29 @@ func run(args []string) error {
 	case "close-declined":
 		return runCloseDeclined(client, issue, iss.Labels, iss.HasMilestone(), iss.State, dryRun, log)
 
+	case "triage-pr":
+		return runTriagePR(client, issue, iss, project, dryRun, log)
+
 	default:
-		return fmt.Errorf("unknown command %q: expected 'update-labels' or 'close-declined'\n\n%s", command, usage())
+		return fmt.Errorf("unknown command %q\n\n%s", command, usage())
 	}
 }
 
+// -----------------------------------------------------------------------------
+// Issue commands
+// -----------------------------------------------------------------------------
+
 func runUpdateLabels(client *GitHubClient, number int, labels []string, hasMilestone bool, body string, dryRun bool, log func(string, ...any)) error {
-	// Skip declined issues — they are handled entirely by close-declined.
-	if contains(labels, "triage/declined") {
+	if slices.Contains(labels, "triage/declined") {
 		log("Issue is declined, skipping label updates")
 		return nil
 	}
 
-	result := ComputeLabelUpdates(labels, hasMilestone)
+	result := computeLabelUpdates(labels, hasMilestone)
 	effective := effectiveLabels(labels, result)
 
-	// add size/needs-sizing label (if missing) and area labels based on content
-	result.LabelsToAdd = append(result.LabelsToAdd, ComputeSizeLabels(effective)...)
-	result.LabelsToAdd = append(result.LabelsToAdd, ComputeAreaLabels(effective, body)...)
+	result.LabelsToAdd = append(result.LabelsToAdd, computeSizeLabels(effective)...)
+	result.LabelsToAdd = append(result.LabelsToAdd, computeAreaLabels(effective, body)...)
 
 	if len(result.LabelsToAdd) == 0 && len(result.LabelsToRemove) == 0 {
 		log("No label changes needed")
@@ -159,7 +171,7 @@ func runUpdateLabels(client *GitHubClient, number int, labels []string, hasMiles
 }
 
 func runCloseDeclined(client *GitHubClient, number int, labels []string, hasMilestone bool, state string, dryRun bool, log func(string, ...any)) error {
-	result := ComputeDeclined(labels, hasMilestone, state)
+	result := computeDeclined(labels, hasMilestone, state)
 
 	if result == nil {
 		log("Issue is not declined, nothing to do")
@@ -202,19 +214,92 @@ func runCloseDeclined(client *GitHubClient, number int, labels []string, hasMile
 	return nil
 }
 
-func usage() string {
-	return `Usage: github_issue_manager [flags] <command>
+// -----------------------------------------------------------------------------
+// PR commands
+// -----------------------------------------------------------------------------
 
-Commands:
+func runTriagePR(client *GitHubClient, number int, iss *Issue, projectNumber int, dryRun bool, log func(string, ...any)) error {
+	prInfo, err := client.GetPullRequestInfo(number)
+	if err != nil {
+		return err
+	}
+
+	files, err := client.GetPullRequestFiles(number)
+	if err != nil {
+		return err
+	}
+	log("PR #%d changed %d files", number, len(files))
+
+	var labelsToAdd []string
+	labelsToAdd = append(labelsToAdd, computePRAreaLabels(iss.Labels, files)...)
+	labelsToAdd = append(labelsToAdd, computePRSizeLabel(iss.Labels, prInfo.Additions, prInfo.Deletions)...)
+
+	if len(labelsToAdd) > 0 {
+		for _, l := range labelsToAdd {
+			log("Adding label: %s", l)
+		}
+		if !dryRun {
+			if err := client.AddLabels(number, labelsToAdd); err != nil {
+				return err
+			}
+		}
+	}
+
+	if !iss.HasMilestone() {
+		milestones, err := client.ListOpenMilestones()
+		if err != nil {
+			return err
+		}
+		m, err := findLowestMilestone(milestones)
+		if err != nil {
+			log("Skipping milestone: %v", err)
+		} else {
+			log("Setting milestone: %s (#%d)", m.Title, m.Number)
+			if !dryRun {
+				if err := client.SetMilestone(number, m.Number); err != nil {
+					return err
+				}
+			}
+		}
+	} else {
+		log("PR already has a milestone, skipping")
+	}
+
+	log("Adding PR to project board #%d under Review", projectNumber)
+	if !dryRun {
+		if err := client.AddToProjectBoard(prInfo.NodeID, projectNumber, "Review"); err != nil {
+			log("Warning: could not add to project board: %v", err)
+		}
+	}
+
+	if dryRun {
+		fmt.Println("dry-run: no changes applied")
+	}
+
+	return nil
+}
+
+// -----------------------------------------------------------------------------
+// Usage
+// -----------------------------------------------------------------------------
+
+func usage() string {
+	return `Usage: github_project_manager [flags] <command>
+
+Issue Commands:
   update-labels     Apply triage label rules based on milestone status
   close-declined    Handle declined issues (close, remove labels/milestone)
+
+PR Commands:
+  triage-pr         Apply area labels, milestone, size labels, and add to project board
 
 Flags:
   -v, --verbose     Enable verbose output
   --dry-run         Display changes without making them
   --owner           Repository owner (or GITHUB_OWNER env)
   --repo            Repository name (or GITHUB_REPO env)
-  --issue           Issue number (or GITHUB_ISSUE env)
+  --issue           Issue/PR number (or GITHUB_ISSUE env)
+  --project         Project number for board management (default: 1)
 
 Environment:
   GITHUB_TOKEN      GitHub API token (required)`

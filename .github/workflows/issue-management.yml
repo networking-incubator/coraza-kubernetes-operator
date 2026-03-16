@@ -12,29 +12,30 @@ jobs:
     runs-on: ubuntu-latest
     if: ${{ !github.event.issue.pull_request }}
     permissions:
+      contents: read
       issues: write
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          sparse-checkout: tools/cmd/github_issue_manager
+          sparse-checkout: tools/cmd/github_project_manager
           persist-credentials: false
 
       - name: Setup Go
         uses: actions/setup-go@4b73464bb391d4059bd26b0524d20df3927bd417 # v6.3.0
         with:
-          go-version-file: tools/cmd/github_issue_manager/go.mod
+          go-version-file: tools/cmd/github_project_manager/go.mod
 
-      - name: Build issue manager
-        working-directory: tools/cmd/github_issue_manager
-        run: go build -o "${{ github.workspace }}/github_issue_manager" .
+      - name: Build project manager
+        working-directory: tools/cmd/github_project_manager
+        run: go build -o "${{ github.workspace }}/github_project_manager" .
 
       - name: Close declined issues
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_EVENT_REPOSITORY_NAME: ${{ github.event.repository.name }}
         run: |
-          ./github_issue_manager -v \
+          ./github_project_manager -v \
             --owner "${{ github.repository_owner }}" \
             --repo "${GITHUB_EVENT_REPOSITORY_NAME}" \
             --issue "${{ github.event.issue.number }}" \
@@ -45,7 +46,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_EVENT_REPOSITORY_NAME: ${{ github.event.repository.name }}
         run: |
-          ./github_issue_manager -v \
+          ./github_project_manager -v \
             --owner "${{ github.repository_owner }}" \
             --repo "${GITHUB_EVENT_REPOSITORY_NAME}" \
             --issue "${{ github.event.issue.number }}" \

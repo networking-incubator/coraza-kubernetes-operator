@@ -120,7 +120,7 @@ jobs:
       - name: set up go
         uses: actions/setup-go@4b73464bb391d4059bd26b0524d20df3927bd417 # v6.3.0
         with:
-          go-version-file: "tools/cmd/github_issue_manager/go.mod"
+          go-version-file: "tools/cmd/github_project_manager/go.mod"
           cache: false
 
       - name: run tools tests

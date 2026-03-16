@@ -1,9 +1,12 @@
 version: 2
 updates:
+  # Dependencies listed in go.mod
   - package-ecosystem: "gomod"
-    directory: "/"
+    directories:
+    - "/"
+    - "/test/conformance"
+    - "/tools/cmd/github_issue_manager"
     schedule:
-      interval: "weekly"
       day: "monday"
       time: "07:00"
       timezone: "Canada/Eastern"
@@ -15,14 +18,22 @@ updates:
       prefix: "deps"
       include: "scope"
     groups:
-      kubernetes:
+      all-updates:
         patterns:
-          - "k8s.io/*"
-          - "sigs.k8s.io/*"
-      testing:
-        patterns:
-          - "github.com/stretchr/testify"
+          - "*"
 
+  # Dependencies listed in Dockerfile
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    labels:
+      - docker
+      - dependencies
+      - ok-to-test
+      - release-note-none
+  
+  #  Github actions updates
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
@@ -37,3 +48,7 @@ updates:
     commit-message:
       prefix: "ci"
       include: "scope"
+    groups:
+      actions-updates:
+        patterns:
+          - "*"

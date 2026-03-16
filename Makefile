@@ -190,7 +190,7 @@ test.e2e:
 
 .PHONY: test.tools
 test.tools:
-	cd tools/cmd/github_issue_manager && go test -v ./...
+	cd tools/cmd/github_project_manager && go test -v ./...
 
 
 # -------------------------------------------------------------------------------
