@@ -102,7 +102,7 @@ func main() {
 	flag.IntVar(&cacheServerPort, "cache-server-port", controller.DefaultRuleSetCacheServerPort, fmt.Sprintf("Port number for the RuleSet cache server to listen on (default %d)", controller.DefaultRuleSetCacheServerPort))
 	flag.StringVar(&envoyClusterName, "envoy-cluster-name", "", "The Envoy cluster name pointing to the RuleSet cache server (required)")
 	flag.StringVar(&istioRevision, "istio-revision", "", "The Istio revision label value for managed Istio resources")
-	flag.StringVar(&operatorName, "operator-name", "", "The operator release name used to derive managed resource names (required)")
+	flag.StringVar(&operatorName, "operator-name", "", "The operator release name used to derive managed resource names (when unset, Istio prerequisites are skipped)")
 
 	opts := zap.Options{
 		Development: true,
