@@ -220,7 +220,7 @@ func main() {
 	}
 
 	if operatorName != "" && podNamespace != "" {
-		istioPrereqs := controller.NewIstioPrerequisites(mgr.GetClient(), operatorName, podNamespace, istioRevision)
+		istioPrereqs := controller.NewIstioPrerequisites(mgr.GetClient(), mgr.GetAPIReader(), operatorName, podNamespace, istioRevision)
 		if err := mgr.Add(istioPrereqs); err != nil {
 			setupLog.Error(err, "unable to add Istio prerequisites runnable to manager")
 			os.Exit(1)

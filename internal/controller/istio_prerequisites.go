@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/go-logr/logr"
 	appsv1 "k8s.io/api/apps/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -38,15 +39,19 @@ import (
 // startup using server-side apply.
 type IstioPrerequisites struct {
 	client        client.Client
+	reader        client.Reader
 	operatorName  string
 	namespace     string
 	istioRevision string
 }
 
 // NewIstioPrerequisites returns a new IstioPrerequisites runnable.
-func NewIstioPrerequisites(c client.Client, operatorName, namespace, istioRevision string) *IstioPrerequisites {
+// The reader should be a direct API reader (not cached) to avoid
+// setting up a cluster-wide Deployment informer for a one-shot lookup.
+func NewIstioPrerequisites(c client.Client, reader client.Reader, operatorName, namespace, istioRevision string) *IstioPrerequisites {
 	return &IstioPrerequisites{
 		client:        c,
+		reader:        reader,
 		operatorName:  operatorName,
 		namespace:     namespace,
 		istioRevision: istioRevision,
@@ -58,8 +63,15 @@ func NewIstioPrerequisites(c client.Client, operatorName, namespace, istioRevisi
 func (p *IstioPrerequisites) Start(ctx context.Context) error {
 	log := ctrl.Log.WithName("istio-prerequisites")
 
+	if err := p.apply(ctx, log); err != nil {
+		log.Error(err, "Failed to apply Istio prerequisites (controllers will continue without them)")
+	}
+	return nil
+}
+
+func (p *IstioPrerequisites) apply(ctx context.Context, log logr.Logger) error {
 	var deploy appsv1.Deployment
-	if err := p.client.Get(ctx, types.NamespacedName{Name: p.operatorName, Namespace: p.namespace}, &deploy); err != nil {
+	if err := p.reader.Get(ctx, types.NamespacedName{Name: p.operatorName, Namespace: p.namespace}, &deploy); err != nil {
 		return fmt.Errorf("looking up owner Deployment %s/%s: %w", p.namespace, p.operatorName, err)
 	}
 	ownerRef := metav1.OwnerReference{
