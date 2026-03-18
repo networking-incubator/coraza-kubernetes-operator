@@ -118,16 +118,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	if operatorName == "" {
-		setupLog.Error(errors.New("missing required flag"), "operator-name is required")
-		os.Exit(1)
-	}
-
 	podNamespace := os.Getenv("POD_NAMESPACE")
-	if podNamespace == "" {
-		setupLog.Error(errors.New("missing required env var"), "POD_NAMESPACE must be set")
-		os.Exit(1)
-	}
 
 	// if the enable-http2 flag is false (the default), http/2 should be disabled
 	// due to its vulnerabilities. More specifically, disabling http/2 will
@@ -228,11 +219,14 @@ func main() {
 		os.Exit(1)
 	}
 
-	// ensure Istio prerequisites (ServiceEntry, DestinationRule) exist
-	istioPrereqs := controller.NewIstioPrerequisites(mgr.GetClient(), operatorName, podNamespace, istioRevision)
-	if err := mgr.Add(istioPrereqs); err != nil {
-		setupLog.Error(err, "unable to add Istio prerequisites runnable to manager")
-		os.Exit(1)
+	if operatorName != "" && podNamespace != "" {
+		istioPrereqs := controller.NewIstioPrerequisites(mgr.GetClient(), operatorName, podNamespace, istioRevision)
+		if err := mgr.Add(istioPrereqs); err != nil {
+			setupLog.Error(err, "unable to add Istio prerequisites runnable to manager")
+			os.Exit(1)
+		}
+	} else {
+		setupLog.Info("Skipping Istio prerequisites: --operator-name and/or POD_NAMESPACE not set")
 	}
 
 	// set up controllers
