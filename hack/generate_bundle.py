@@ -4,8 +4,7 @@ Generate an OLM operator bundle from the Helm chart.
 
 Runs helm template, extracts the Deployment spec, ClusterRole rules,
 and ServiceAccount name, then injects them into the CSV template.
-Additional manifests (Service, ServiceEntry, DestinationRule, CRDs)
-are copied into bundle/manifests/.
+Additional manifests (Service, CRDs) are copied into bundle/manifests/.
 """
 
 import argparse
