@@ -20,6 +20,7 @@ rules:
   - pods
   verbs:
   - list
+  - watch
 - apiGroups:
   - ""
   - events.k8s.io

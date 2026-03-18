@@ -97,9 +97,9 @@ uninstall: undeploy ## Alias for undeploy
 
 .PHONY: deploy
 deploy: helm.sync ## Deploy operator into the cluster using Helm
-	kubectl create namespace $(HELM_RELEASE_NAMESPACE) 2>/dev/null || true
 	helm upgrade --install $(HELM_RELEASE_NAME) $(HELM_CHART_DIR) \
 		--namespace $(HELM_RELEASE_NAMESPACE) \
+		--create-namespace \
 		--set image.repository=$(CONTROLLER_MANAGER_CONTAINER_IMAGE_BASE) \
 		--set image.tag=$(CONTROLLER_MANAGER_CONTAINER_IMAGE_TAG)
 

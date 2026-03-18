@@ -38,7 +38,7 @@ import (
 // -----------------------------------------------------------------------------
 
 // +kubebuilder:rbac:groups=extensions.istio.io,resources=wasmplugins,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups="",resources=pods,verbs=list
+// +kubebuilder:rbac:groups="",resources=pods,verbs=list;watch
 
 // -----------------------------------------------------------------------------
 // Engine Controller - Istio Consts
