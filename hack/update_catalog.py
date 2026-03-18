@@ -25,9 +25,11 @@ def write_catalog(path: str, docs: list):
                       explicit_start=True)
 
 
-def find_channel(docs: list, channel: str) -> dict:
+def find_channel(docs: list, channel: str, package_name: str) -> dict:
     for doc in docs:
-        if doc.get("schema") == "olm.channel" and doc.get("name") == channel:
+        if (doc.get("schema") == "olm.channel"
+                and doc.get("name") == channel
+                and doc.get("package") == package_name):
             return doc
     return None
 
@@ -45,7 +47,7 @@ def main():
     entry_name = f"{package_name}.v{version}"
 
     docs = load_catalog(catalog_file)
-    channel_doc = find_channel(docs, "alpha")
+    channel_doc = find_channel(docs, "alpha", package_name)
     if not channel_doc:
         print("ERROR: channel 'alpha' not found", file=sys.stderr)
         sys.exit(1)
