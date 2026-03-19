@@ -79,7 +79,7 @@ func (p *IstioPrerequisites) apply(ctx context.Context, log logr.Logger) error {
 		Kind:               "Deployment",
 		Name:               deploy.Name,
 		UID:                deploy.UID,
-		BlockOwnerDeletion: boolPtr(true),
+		BlockOwnerDeletion: new(true),
 	}
 
 	serviceFQDN := fmt.Sprintf("%s.%s.svc.cluster.local", p.operatorName, p.namespace)
@@ -108,7 +108,6 @@ func (p *IstioPrerequisites) apply(ctx context.Context, log logr.Logger) error {
 	return nil
 }
 
-func boolPtr(b bool) *bool { return &b }
 
 func (p *IstioPrerequisites) buildServiceEntry(name, serviceFQDN string, labels map[string]any, ownerRef metav1.OwnerReference) *unstructured.Unstructured {
 	obj := &unstructured.Unstructured{
