@@ -157,7 +157,7 @@ def write_bundle(bundle_dir: str, csv: dict, extra_manifests: list,
                         "entrypoint": [
                             "scorecard-test", "basic-check-spec",
                         ],
-                        "image": "quay.io/operator-framework/scorecard-test:latest",
+                        "image": "quay.io/operator-framework/scorecard-test:v1.42.0",
                         "labels": {
                             "suite": "basic",
                             "test": "basic-check-spec-test",
@@ -167,7 +167,7 @@ def write_bundle(bundle_dir: str, csv: dict, extra_manifests: list,
                         "entrypoint": [
                             "scorecard-test", "olm-bundle-validation",
                         ],
-                        "image": "quay.io/operator-framework/scorecard-test:latest",
+                        "image": "quay.io/operator-framework/scorecard-test:v1.42.0",
                         "labels": {
                             "suite": "olm",
                             "test": "olm-bundle-validation-test",
