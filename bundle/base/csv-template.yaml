@@ -38,8 +38,7 @@ spec:
   description: |
     The Coraza Kubernetes Operator provides Web Application Firewall (WAF)
     support for Kubernetes Gateways. It manages Coraza WAF
-    engine instances and rule sets, automatically configuring Istio
-    WasmPlugins to enforce security policies at the gateway level.
+    engine instances which can be loaded with user-provided rule sets.
 
     ### Features
     - Declarative WAF configuration via Kubernetes custom resources
