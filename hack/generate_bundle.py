@@ -204,7 +204,11 @@ def strip_helm_labels(doc: dict) -> dict:
     doc = copy.deepcopy(doc)
     labels = doc.get("metadata", {}).get("labels", {})
     for key in list(labels.keys()):
-        if key.startswith("helm.sh/") or key == "app.kubernetes.io/managed-by":
+        if (
+            key.startswith("helm.sh/")
+            or key == "app.kubernetes.io/managed-by"
+            or key == "app.kubernetes.io/version"
+        ):
             del labels[key]
     if "namespace" in doc.get("metadata", {}):
         del doc["metadata"]["namespace"]
