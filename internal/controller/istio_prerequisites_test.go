@@ -153,7 +153,7 @@ func TestNewIstioObject_IstioRevisionLabel(t *testing.T) {
 		labels := map[string]string{
 			"app.kubernetes.io/name":     "op",
 			"app.kubernetes.io/instance": "op",
-			"istio.io/rev":              "canary",
+			"istio.io/rev":               "canary",
 		}
 		obj := p.newIstioObject("ServiceEntry", "test", labels, testOwnerRef(), map[string]any{})
 		assert.Equal(t, "canary", obj.GetLabels()["istio.io/rev"])
