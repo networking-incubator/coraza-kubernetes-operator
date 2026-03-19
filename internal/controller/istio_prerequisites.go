@@ -129,7 +129,7 @@ func (p *IstioPrerequisites) buildServiceEntry(name, serviceFQDN string, labels 
 		"ports": []any{
 			map[string]any{
 				"number":   int64(80),
-				"name":     "http",
+				"name":     "http-ruleset-cache-server",
 				"protocol": "HTTP",
 			},
 		},

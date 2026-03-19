@@ -97,7 +97,7 @@ func TestBuildServiceEntry_Shape(t *testing.T) {
 	require.Len(t, ports, 1)
 	port, _ := ports[0].(map[string]any)
 	assert.Equal(t, int64(80), port["number"])
-	assert.Equal(t, "http", port["name"])
+	assert.Equal(t, "http-ruleset-cache-server", port["name"])
 	assert.Equal(t, "HTTP", port["protocol"])
 }
 

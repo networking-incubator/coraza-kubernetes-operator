@@ -36,11 +36,9 @@ spec:
       version: v1alpha1
   description: 'The Coraza Kubernetes Operator provides Web Application Firewall (WAF)
 
-    support for Kubernetes Gateways via Istio. It manages Coraza WAF
+    support for Kubernetes Gateways. It manages Coraza WAF
 
-    engine instances and rule sets, automatically configuring Istio
-
-    WasmPlugins to enforce security policies at the gateway level.
+    engine instances which can be loaded with user-provided rule sets.
 
 
     ### Features
@@ -54,11 +52,11 @@ spec:
     - Support for OWASP CoreRuleSet
 
 
-    ### Prerequisites
+    ### Requirements
 
-    - Istio service mesh installed
+    - OpenShift 4.20+
 
-    - Gateway API CRDs installed
+    - A Gateway API implementation (currently only OpenShift Service Mesh and Istio are supported)
 
     '
   displayName: Coraza Kubernetes Operator
