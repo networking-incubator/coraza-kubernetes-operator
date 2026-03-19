@@ -46,9 +46,9 @@ spec:
     - Rule set caching for performance
     - Support for OWASP CoreRuleSet
 
-    ### Prerequisites
-    - Istio service mesh installed
-    - Gateway API CRDs installed
+    ### Requirements
+    - OpenShift 4.20+
+    - A Gateway API implementation (currently only OpenShift Service Mesh and Istio are supported)
   displayName: Coraza Kubernetes Operator
   icon:
     - base64data: ""
