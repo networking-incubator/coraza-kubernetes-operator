@@ -366,9 +366,11 @@ KUBECTL ?= kubectl
 KIND ?= kind
 CONTROLLER_GEN ?= $(LOCALBIN)/controller-gen
 GOLANGCI_LINT = $(LOCALBIN)/golangci-lint
+OPERATOR_SDK ?= $(LOCALBIN)/operator-sdk
 
 CONTROLLER_TOOLS_VERSION ?= v0.19.0
 GOLANGCI_LINT_VERSION ?= v2.5.0
+OPERATOR_SDK_VERSION ?= v1.42.0
 
 .PHONY: controller-gen
 controller-gen: $(CONTROLLER_GEN)
@@ -379,6 +381,23 @@ $(CONTROLLER_GEN): $(LOCALBIN)
 golangci-lint: $(GOLANGCI_LINT)
 $(GOLANGCI_LINT): $(LOCALBIN)
 	$(call go-install-tool,$(GOLANGCI_LINT),github.com/golangci/golangci-lint/v2/cmd/golangci-lint,$(GOLANGCI_LINT_VERSION))
+
+.PHONY: operator-sdk
+operator-sdk: $(OPERATOR_SDK)
+$(OPERATOR_SDK): $(LOCALBIN)
+	@[ -f "$(OPERATOR_SDK)-$(OPERATOR_SDK_VERSION)" ] || { \
+	set -e; \
+	os=$$(go env GOOS); arch=$$(go env GOARCH); \
+	url=https://github.com/operator-framework/operator-sdk/releases/download/$(OPERATOR_SDK_VERSION); \
+	echo "Downloading operator-sdk $(OPERATOR_SDK_VERSION)"; \
+	curl -fsSLo "$(OPERATOR_SDK)-$(OPERATOR_SDK_VERSION)" "$${url}/operator-sdk_$${os}_$${arch}"; \
+	curl -fsSLo /tmp/operator-sdk-checksums.txt "$${url}/checksums.txt"; \
+	grep "operator-sdk_$${os}_$${arch}$$" /tmp/operator-sdk-checksums.txt \
+		| sed "s|operator-sdk_$${os}_$${arch}|$(OPERATOR_SDK)-$(OPERATOR_SDK_VERSION)|" \
+		| sha256sum -c -; \
+	chmod +x "$(OPERATOR_SDK)-$(OPERATOR_SDK_VERSION)"; \
+	}
+	@ln -sf "$$(realpath "$(OPERATOR_SDK)-$(OPERATOR_SDK_VERSION)")" "$(OPERATOR_SDK)"
 
 define go-install-tool
 @[ -f "$(1)-$(3)" ] && [ "$$(readlink -- "$(1)" 2>/dev/null)" = "$(1)-$(3)" ] || { \
