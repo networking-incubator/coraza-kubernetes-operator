@@ -85,6 +85,7 @@ spec:
           - pods
           verbs:
           - list
+          - watch
         - apiGroups:
           - ''
           - events.k8s.io
@@ -297,6 +298,12 @@ spec:
     version: v1
   - group: ''
     kind: Pod
+    version: v1
+  - group: networking.istio.io
+    kind: ServiceEntry
+    version: v1
+  - group: networking.istio.io
+    kind: DestinationRule
     version: v1
   provider:
     name: networking-incubator
