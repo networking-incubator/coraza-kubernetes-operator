@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/go-logr/logr"
 	appsv1 "k8s.io/api/apps/v1"
@@ -106,7 +107,6 @@ func (p *IstioPrerequisites) apply(ctx context.Context, log logr.Logger) error {
 
 	return nil
 }
-
 
 func (p *IstioPrerequisites) newIstioObject(kind, name string, labels map[string]string, ownerRef metav1.OwnerReference, spec map[string]any) *unstructured.Unstructured {
 	obj := &unstructured.Unstructured{}

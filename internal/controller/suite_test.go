@@ -27,6 +27,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/rest"
@@ -70,6 +71,10 @@ func TestMain(m *testing.M) {
 	}
 	if err := corev1.AddToScheme(scheme); err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to add core scheme: %v\n", err)
+		os.Exit(1)
+	}
+	if err := appsv1.AddToScheme(scheme); err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to add apps scheme: %v\n", err)
 		os.Exit(1)
 	}
 
