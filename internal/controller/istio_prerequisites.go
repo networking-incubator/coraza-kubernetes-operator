@@ -85,7 +85,7 @@ func (p *IstioPrerequisites) apply(ctx context.Context, log logr.Logger) error {
 	serviceFQDN := fmt.Sprintf("%s.%s.svc.cluster.local", p.operatorName, p.namespace)
 	resourceName := p.operatorName + "-ruleset-cache"
 
-	labels := map[string]any{
+	labels := map[string]string{
 		"app.kubernetes.io/name":     p.operatorName,
 		"app.kubernetes.io/instance": p.operatorName,
 	}
@@ -109,85 +109,48 @@ func (p *IstioPrerequisites) apply(ctx context.Context, log logr.Logger) error {
 }
 
 
-func (p *IstioPrerequisites) buildServiceEntry(name, serviceFQDN string, labels map[string]any, ownerRef metav1.OwnerReference) *unstructured.Unstructured {
-	obj := &unstructured.Unstructured{
-		Object: map[string]any{
-			"apiVersion": "networking.istio.io/v1",
-			"kind":       "ServiceEntry",
-			"metadata": map[string]any{
-				"name":      name,
-				"namespace": p.namespace,
-				"labels":    labels,
-				"ownerReferences": []any{
-					map[string]any{
-						"apiVersion":         ownerRef.APIVersion,
-						"kind":               ownerRef.Kind,
-						"name":               ownerRef.Name,
-						"uid":                string(ownerRef.UID),
-						"blockOwnerDeletion": true,
-					},
-				},
-			},
-			"spec": map[string]any{
-				"hosts": []any{serviceFQDN},
-				"ports": []any{
-					map[string]any{
-						"number":   int64(80),
-						"name":     "http",
-						"protocol": "HTTP",
-					},
-				},
-				"location":   "MESH_INTERNAL",
-				"resolution": "DNS",
-				"endpoints": []any{
-					map[string]any{
-						"address": serviceFQDN,
-					},
-				},
-			},
-		},
-	}
+func (p *IstioPrerequisites) newIstioObject(kind, name string, labels map[string]string, ownerRef metav1.OwnerReference, spec map[string]any) *unstructured.Unstructured {
+	obj := &unstructured.Unstructured{}
 	obj.SetGroupVersionKind(schema.GroupVersionKind{
-		Group:   "networking.istio.io",
-		Version: "v1",
-		Kind:    "ServiceEntry",
+		Group: "networking.istio.io", Version: "v1", Kind: kind,
 	})
+	obj.SetName(name)
+	obj.SetNamespace(p.namespace)
+	obj.SetLabels(labels)
+	obj.SetOwnerReferences([]metav1.OwnerReference{ownerRef})
+	if err := unstructured.SetNestedField(obj.Object, spec, "spec"); err != nil {
+		panic(fmt.Sprintf("building %s spec: %v", kind, err))
+	}
 	return obj
 }
 
-func (p *IstioPrerequisites) buildDestinationRule(name, serviceFQDN string, labels map[string]any, ownerRef metav1.OwnerReference) *unstructured.Unstructured {
-	obj := &unstructured.Unstructured{
-		Object: map[string]any{
-			"apiVersion": "networking.istio.io/v1",
-			"kind":       "DestinationRule",
-			"metadata": map[string]any{
-				"name":      name,
-				"namespace": p.namespace,
-				"labels":    labels,
-				"ownerReferences": []any{
-					map[string]any{
-						"apiVersion":         ownerRef.APIVersion,
-						"kind":               ownerRef.Kind,
-						"name":               ownerRef.Name,
-						"uid":                string(ownerRef.UID),
-						"blockOwnerDeletion": true,
-					},
-				},
-			},
-			"spec": map[string]any{
-				"host": serviceFQDN,
-				"trafficPolicy": map[string]any{
-					"tls": map[string]any{
-						"mode": "DISABLE",
-					},
-				},
+func (p *IstioPrerequisites) buildServiceEntry(name, serviceFQDN string, labels map[string]string, ownerRef metav1.OwnerReference) *unstructured.Unstructured {
+	return p.newIstioObject("ServiceEntry", name, labels, ownerRef, map[string]any{
+		"hosts": []any{serviceFQDN},
+		"ports": []any{
+			map[string]any{
+				"number":   int64(80),
+				"name":     "http",
+				"protocol": "HTTP",
 			},
 		},
-	}
-	obj.SetGroupVersionKind(schema.GroupVersionKind{
-		Group:   "networking.istio.io",
-		Version: "v1",
-		Kind:    "DestinationRule",
+		"location":   "MESH_INTERNAL",
+		"resolution": "DNS",
+		"endpoints": []any{
+			map[string]any{
+				"address": serviceFQDN,
+			},
+		},
 	})
-	return obj
+}
+
+func (p *IstioPrerequisites) buildDestinationRule(name, serviceFQDN string, labels map[string]string, ownerRef metav1.OwnerReference) *unstructured.Unstructured {
+	return p.newIstioObject("DestinationRule", name, labels, ownerRef, map[string]any{
+		"host": serviceFQDN,
+		"trafficPolicy": map[string]any{
+			"tls": map[string]any{
+				"mode": "DISABLE",
+			},
+		},
+	})
 }
