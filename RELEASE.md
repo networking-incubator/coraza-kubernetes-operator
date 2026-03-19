@@ -82,26 +82,22 @@ Once you've verified the release, we need to tag the container image appropriate
 
 ### Step 4 - Container Image Tagging
 
-The release workflow pushes a container image tagged with a `-dev` suffix
-(e.g. `v0.1.1-dev`). This image is **not** intended for end users. The OLM
-bundle references the image by its immutable digest, so the tag does not
-affect OLM installs. Prior to publishing the release, you must re-tag the
-image to produce the final tags:
+The release workflow pushes the operator image tagged as the git tag
+(e.g. `v0.1.1`). The OLM bundle references the image by its immutable
+digest, so the tag does not affect OLM installs.
+
+For stable (non-pre-release) versions, tag the image as `latest` before
+publishing the release:
 
 ```console
-# Pull the image
 docker pull ghcr.io/networking-incubator/coraza-kubernetes-operator:v0.1.1
-
-# For stable (non-pre-release) versions, also tag as latest
 docker tag ghcr.io/networking-incubator/coraza-kubernetes-operator:v0.1.1 ghcr.io/networking-incubator/coraza-kubernetes-operator:latest
-
-# Push the final tags
 docker push ghcr.io/networking-incubator/coraza-kubernetes-operator:latest
 ```
 
-> **Warning**: Do **not** push the `latest` until you are confident the release
-> is correct. Pre-release versions (`v0.x.x`, `-alpha`, `-beta`, `-rc`) should
-> **not** be tagged as `latest`.
+> **Warning**: Do **not** push the `latest` tag until you are confident the
+> release is correct. Pre-release versions (`v0.x.x`, `-alpha`, `-beta`,
+> `-rc`) should **not** be tagged as `latest`.
 
 ### OLM (Operator Lifecycle Manager)
 
@@ -109,7 +105,7 @@ The release workflow builds and pushes three container images. Two of them
 are specific to OLM:
 
 ```
-  Operator image (:v0.2.0-dev)
+  Operator image (:v0.2.0)
        │
        │  generate_bundle.py (make bundle)
        │  Renders Helm chart, extracts Deployment/RBAC/CRDs,
