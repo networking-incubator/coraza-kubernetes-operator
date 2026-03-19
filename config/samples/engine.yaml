@@ -9,7 +9,7 @@ spec:
   driver:
     istio:
       wasm:
-        image: "oci://ghcr.io/networking-incubator/coraza-proxy-wasm:08fb3dd7229b6bf9211bf15e4d4f4f54b7dbda49"
+        image: "oci://ghcr.io/networking-incubator/coraza-proxy-wasm:1902646ac7391b65be092cdec9b47d29fa5724c7"
         mode: gateway
         workloadSelector:
           matchLabels:
