@@ -75,11 +75,10 @@ func (p *IstioPrerequisites) apply(ctx context.Context, log logr.Logger) error {
 		return fmt.Errorf("looking up owner Deployment %s/%s: %w", p.namespace, p.operatorName, err)
 	}
 	ownerRef := metav1.OwnerReference{
-		APIVersion:         "apps/v1",
-		Kind:               "Deployment",
-		Name:               deploy.Name,
-		UID:                deploy.UID,
-		BlockOwnerDeletion: new(true),
+		APIVersion: "apps/v1",
+		Kind:       "Deployment",
+		Name:       deploy.Name,
+		UID:        deploy.UID,
 	}
 
 	serviceFQDN := fmt.Sprintf("%s.%s.svc.cluster.local", p.operatorName, p.namespace)

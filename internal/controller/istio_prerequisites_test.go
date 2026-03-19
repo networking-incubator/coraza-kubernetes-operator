@@ -47,11 +47,10 @@ func newTestPrereqs(operatorName, namespace, istioRevision string) *IstioPrerequ
 
 func testOwnerRef() metav1.OwnerReference {
 	return metav1.OwnerReference{
-		APIVersion:         "apps/v1",
-		Kind:               "Deployment",
-		Name:               "my-op",
-		UID:                types.UID("aaaa-bbbb"),
-		BlockOwnerDeletion: new(true),
+		APIVersion: "apps/v1",
+		Kind:       "Deployment",
+		Name:       "my-op",
+		UID:        types.UID("aaaa-bbbb"),
 	}
 }
 
@@ -77,8 +76,7 @@ func TestBuildServiceEntry_Shape(t *testing.T) {
 	assert.Equal(t, "Deployment", refs[0].Kind)
 	assert.Equal(t, "my-op", refs[0].Name)
 	assert.Equal(t, types.UID("aaaa-bbbb"), refs[0].UID)
-	require.NotNil(t, refs[0].BlockOwnerDeletion)
-	assert.True(t, *refs[0].BlockOwnerDeletion)
+	assert.Nil(t, refs[0].BlockOwnerDeletion)
 
 	spec, ok := se.Object["spec"].(map[string]any)
 	require.True(t, ok, "spec should be map[string]any")
