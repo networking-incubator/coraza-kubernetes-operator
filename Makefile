@@ -222,7 +222,7 @@ coraza.coreruleset.download:
 
 .PHONY: coraza.generaterules
 coraza.generaterules: coraza.coreruleset.download $(LOCALRULES)
-	@python3 hack/generate_coreruleset_configmaps.py --rules-dir $(CORERULESET_DIR)/rules/ $(CORERULESET_EXTRA_FLAGS) > $(LOCALRULES)/rules.yaml
+	@python3 hack/generate_coreruleset_configmaps.py --rules-dir $(CORERULESET_DIR)/rules/ --version $(CORERULESET_VERSION:v%=%) $(CORERULESET_EXTRA_FLAGS) > $(LOCALRULES)/rules.yaml
 
 .PHONY: coraza.coreruleset
 coraza.coreruleset: coraza.generaterules

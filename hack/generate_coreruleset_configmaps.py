@@ -41,7 +41,33 @@ from typing import List, Tuple, Set
 # - Rules 200000-200006: Request body processors for XML/JSON (from coraza.conf-recommended)
 # - Rules 200002-200003: Request body error handling (from coraza.conf-recommended)
 # - Rules 900120, 900990: CRS initialization rules (from crs-setup.conf.example)
-BASE_RULES_CONFIGMAP = """apiVersion: v1
+def get_base_rules_configmap(crs_version: str) -> str:
+    """
+    Generate the base rules ConfigMap with the specified CRS version.
+
+    Args:
+        crs_version: CoreRuleSet version (e.g., "4.24.1" or "v4.24.1")
+
+    Returns:
+        The base rules ConfigMap as a string
+
+    Raises:
+        ValueError: If the version format is invalid
+    """
+    # Normalize: strip optional leading 'v'
+    normalized_version = crs_version.lstrip('v')
+
+    # Validate format: should be digits separated by dots (e.g., "4.24.1")
+    if not re.match(r'^\d+(\.\d+)*$', normalized_version):
+        raise ValueError(
+            f"Invalid CoreRuleSet version format: '{crs_version}'. "
+            f"Expected format: digits and dots (e.g., '4.24.1' or 'v4.24.1')"
+        )
+
+    # Convert version to setup version format (e.g., "4.24.1" -> "4241")
+    crs_setup_version = normalized_version.replace(".", "")
+
+    return f"""apiVersion: v1
 kind: ConfigMap
 metadata:
   name: base-rules
@@ -95,7 +121,7 @@ data:
      deny,\\
      status:400,\\
      msg:'Failed to parse request body.',\\
-     logdata:'%{reqbody_error_msg}',\\
+     logdata:'%{{reqbody_error_msg}}',\\
      severity:2"
     SecRule MULTIPART_STRICT_ERROR "!@eq 0" \\
      "id:200003,\\
@@ -112,7 +138,7 @@ data:
      t:none,\\
      nolog,\\
      tag:'OWASP_CRS',\\
-     ver:'OWASP_CRS/4.24.1',\\
+     ver:'OWASP_CRS/{normalized_version}',\\
      setvar:tx.early_blocking=1"
     SecAction \\
      "id:900990,\\
@@ -121,8 +147,8 @@ data:
      t:none,\\
      nolog,\\
      tag:'OWASP_CRS',\\
-     ver:'OWASP_CRS/4.24.1',\\
-     setvar:tx.crs_setup_version=4241"
+     ver:'OWASP_CRS/{normalized_version}',\\
+     setvar:tx.crs_setup_version={crs_setup_version}"
 """
 
 # X-CRS-Test rule (optional)
@@ -433,17 +459,29 @@ def main():
         epilog="""
 Examples:
   # Generate ConfigMaps from a rules directory
-  %(prog)s --rules-dir /path/to/coreruleset/rules/@owasp_crs
+  %(prog)s --rules-dir /path/to/coreruleset/rules/@owasp_crs --version 4.24.1
 
   # Ignore rules containing @pmFromFile directives
-  %(prog)s --rules-dir /path/to/rules --ignore-pmFromFile
+  %(prog)s --rules-dir /path/to/rules --version 4.24.1 --ignore-pmFromFile
 
   # Ignore specific rule IDs
-  %(prog)s --rules-dir /path/to/rules --ignore-rules 949110,949111,980130
+  %(prog)s --rules-dir /path/to/rules --version 4.24.1 --ignore-rules 949110,949111,980130
 
   # Include X-CRS-Test rule and ignore @pmFromFile
-  %(prog)s --rules-dir /path/to/rules --include-test-rule --ignore-pmFromFile
+  %(prog)s --rules-dir /path/to/rules --version 4.24.1 --include-test-rule --ignore-pmFromFile
 """
+    )
+    parser.add_argument(
+        '--rules-dir',
+        type=str,
+        required=True,
+        help='Directory containing the CoreRuleSet rules (e.g., /path/to/coreruleset/rules/@owasp_crs)'
+    )
+    parser.add_argument(
+        '--version',
+        type=str,
+        required=True,
+        help='CoreRuleSet version (e.g., "4.24.1") - REQUIRED'
     )
     parser.add_argument(
         '--ignore-rules',
@@ -460,12 +498,6 @@ Examples:
         '--include-test-rule',
         action='store_true',
         help='Include the X-CRS-Test rule in the base rules ConfigMap'
-    )
-    parser.add_argument(
-        '--rules-dir',
-        type=str,
-        required=True,
-        help='Directory containing the CoreRuleSet rules (e.g., /path/to/coreruleset/rules/@owasp_crs)'
     )
     args = parser.parse_args()
 
@@ -529,7 +561,7 @@ Examples:
     print(f"{'='*60}\n", file=sys.stderr)
 
     # Print base-rules ConfigMap first
-    base_rules_output = BASE_RULES_CONFIGMAP.rstrip()
+    base_rules_output = get_base_rules_configmap(args.version).rstrip()
     if args.include_test_rule:
         base_rules_output += "\n" + X_CRS_TEST_RULE
     print(base_rules_output)

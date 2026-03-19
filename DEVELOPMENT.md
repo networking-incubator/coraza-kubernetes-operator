@@ -44,22 +44,97 @@ make clean.cluster.kind
 
 # Testing
 
-Run unit tests:
+## Test Suites
+
+### Unit Tests
+
+Run all unit tests:
 
 ```bash
 make test
 ```
 
-Run unit tests (with coverage):
+Run unit tests with coverage:
 
 ```bash
 make test.coverage
 ```
 
-Run the integration tests:
+This generates a `coverage.out` file and displays per-package and total coverage statistics.
+
+### Integration Tests
+
+Run integration tests (requires a KIND cluster - see [Setup](#setup)):
 
 ```bash
 make test.integration
+```
+
+These tests validate the operator's behavior on a live cluster, including:
+- Engine and RuleSet reconciliation
+- Gateway attachment and configuration
+- Multiple gateways and engines scenarios
+- Live ConfigMap mutations
+
+Environment variables:
+- `KIND_CLUSTER_NAME` - Name of the KIND cluster to use (default: `coraza-kubernetes-operator-integration`)
+- `ISTIO_VERSION` - Istio version for testing (default: from Makefile)
+
+### Conformance Tests
+
+Run CoreRuleSet conformance tests using the [go-ftw](https://github.com/coreruleset/go-ftw) framework (often run a KIND cluster - see [Setup](#setup)):
+
+```bash
+make test.conformance
+```
+
+This will:
+1. Download CoreRuleSet (version specified by `CORERULESET_VERSION`)
+2. Generate ConfigMaps with test rules included
+3. Deploy a test Gateway with the full CoreRuleSet
+4. Run FTW (Framework for Testing WAFs) tests against it
+
+**Environment Variables:**
+
+- `CORERULESET_VERSION` - CoreRuleSet version to test (default: `v4.24.1`)
+- `CONFORMANCE_EXTRA_FLAGS` - Additional flags passed to the test (e.g., `OUTPUT_FORMAT=github`)
+- `INCLUDE_TESTS` - Regex pattern to filter which tests to run (e.g., `"920100.*"` to run only rule 920100 tests)
+- `IGNORE_TEST_MANIFEST_ERRORS` - Boolean to ignore FTW test parsing errors (default: `false`)
+- `OUTPUT_FORMAT` - Output format for test results: `quiet` (default), `github`, `json`
+- `OUTPUT_FILE` - File path to write test output (default: stdout)
+
+**Examples:**
+
+```bash
+# Run only tests matching a specific rule ID
+CONFORMANCE_EXTRA_FLAGS='INCLUDE_TESTS="920100.*"' make test.conformance
+
+# Run with GitHub Actions-formatted output
+CONFORMANCE_EXTRA_FLAGS='OUTPUT_FORMAT=github' make test.conformance
+
+# Run specific tests and save output to file
+CONFORMANCE_EXTRA_FLAGS='INCLUDE_TESTS="920.*" OUTPUT_FILE=results.txt' make test.conformance
+
+# Ignore test manifest parsing errors
+CONFORMANCE_EXTRA_FLAGS='IGNORE_TEST_MANIFEST_ERRORS=true' make test.conformance
+```
+
+### E2E Tests
+
+Run end-to-end tests (requires a KIND cluster - see [Setup](#setup)):
+
+```bash
+make test.e2e
+```
+
+These tests validate complete user workflows on a live cluster.
+
+### Tools Tests
+
+Run tests for auxiliary tools (e.g., github_project_manager):
+
+```bash
+make test.tools
 ```
 
 ## Integration Test Framework
@@ -100,6 +175,288 @@ Example scenarios for the v0.2.0 validation issues live in `test/integration/`:
 - `multiple_gateways_test.go` - Multiple Gateways (#13)
 - `multi_engine_gateway_test.go` - Multiple Engines + Gateways (#52)
 - `reconcile_test.go` - Reconciliation of live RuleSet/ConfigMap mutations
+
+# Working with CoreRuleSet
+
+The project includes tools for testing and development with the OWASP CoreRuleSet.
+
+> **Important**: This project does **not** provide, maintain or support CoreRuleSet rules.
+> We support deploying and enforcing CoreRuleSet (or any SecLang-compatible rules),
+> but users must supply their own rulesets. The tools below are for **testing and
+> development purposes only**.
+
+## Downloading CoreRuleSet
+
+Download a specific version of CoreRuleSet for testing:
+
+```bash
+make coraza.coreruleset.download
+```
+
+This downloads and extracts the CoreRuleSet to `tmp/coreruleset/`.
+
+Environment variables:
+- `CORERULESET_VERSION` - Version to download (default: `v4.24.1`)
+
+## Generating ConfigMaps
+
+Generate Kubernetes ConfigMaps from CoreRuleSet rules for testing:
+
+```bash
+make coraza.generaterules
+```
+
+This uses `hack/generate_coreruleset_configmaps.py` to:
+1. Download CoreRuleSet (if not already present)
+2. Process each `.conf` file in the rules directory
+3. Generate ConfigMaps for each rule file
+4. Generate a Secret for `.data` files
+5. Create a RuleSet resource referencing all ConfigMaps
+6. Output everything to `tmp/rules/rules.yaml`
+
+**Environment Variables:**
+
+- `CORERULESET_EXTRA_FLAGS` - Additional flags for the generation script
+
+**Generation Script Flags:**
+
+The script automatically passes the CoreRuleSet version (from `CORERULESET_VERSION`) and supports
+additional flags (passed via `CORERULESET_EXTRA_FLAGS`):
+
+- `--version` - CoreRuleSet version (required) - accepts both `4.24.1` and `v4.24.1` formats
+- `--ignore-rules` - Comma-separated list of rule IDs to exclude (e.g., `"949110,949111,980130"`)
+- `--ignore-pmFromFile` - Ignore rules containing `@pmFromFile` directives (not supported by Coraza)
+- `--include-test-rule` - Include the X-CRS-Test rule in the base rules ConfigMap
+
+The version is automatically normalized (leading 'v' is stripped) and validated before use.
+
+**Examples:**
+
+```bash
+# Generate rules excluding specific rule IDs
+make CORERULESET_EXTRA_FLAGS="--ignore-rules 949110,980130" coraza.generaterules
+
+# Generate rules ignoring @pmFromFile directives
+make CORERULESET_EXTRA_FLAGS="--ignore-pmFromFile" coraza.generaterules
+
+# Generate rules with test rule included (used by conformance tests)
+make CORERULESET_EXTRA_FLAGS="--include-test-rule" coraza.generaterules
+
+# Combine multiple flags
+make CORERULESET_EXTRA_FLAGS="--include-test-rule --ignore-pmFromFile" coraza.generaterules
+```
+
+## Deploying CoreRuleSet for Testing
+
+Deploy the generated CoreRuleSet to your test cluster:
+
+```bash
+make coraza.coreruleset
+```
+
+This will:
+1. Generate the rules (via `make coraza.generaterules`)
+2. Delete existing rules in the target namespace
+3. Apply the new rules
+
+Environment variables:
+- `NAMESPACE` - Target namespace for deployment (default: `default`)
+
+**Example:**
+
+```bash
+# Deploy to a specific namespace
+make NAMESPACE=my-namespace coraza.coreruleset
+```
+
+# Building Custom WASM Plugins
+
+The operator uses the [coraza-proxy-wasm](https://github.com/networking-incubator/coraza-proxy-wasm)
+plugin, which runs inside Envoy/Istio.
+
+This section describes how to build **the WASM plugin itself** in the separate
+[`coraza-proxy-wasm`](https://github.com/networking-incubator/coraza-proxy-wasm) repository.
+It does **not** change the Go version required to build this operator. For the operator,
+always use the Go version declared in this repository's `go.mod`.
+
+## Prerequisites
+
+> **Critical**: The toolchain versions in this section apply to the
+> **coraza-proxy-wasm** repository. Using versions other than those required by that
+> repository may result in build failures or runtime incompatibilities for the plugin.
+
+- **TinyGo**: `0.34.0` (plugin build requirement; see the coraza-proxy-wasm docs for updates)
+- **Go toolchain**: as required by the `coraza-proxy-wasm` repo (currently Go `1.23.8`)
+
+## Building from Source
+
+To build a custom WASM plugin:
+
+1. Clone the coraza-proxy-wasm repository:
+
+   ```bash
+   git clone https://github.com/networking-incubator/coraza-proxy-wasm.git
+   cd coraza-proxy-wasm
+   ```
+
+2. Install TinyGo 0.34.0 (exact version required):
+
+   ```bash
+   # Follow installation instructions at https://tinygo.org/getting-started/install/
+   # Ensure you have TinyGo 0.34.0 - no other version will work
+   tinygo version  # Must show: tinygo version 0.34.0
+   ```
+
+3. Build the WASM module using the Go version required by the `coraza-proxy-wasm`
+   repository (see its `go.mod`; at the time of writing this is Go `1.23.8`):
+
+   ```bash
+   GOTOOLCHAIN=go1.23.8 go run mage.go build
+   ```
+
+   This generates the WASM binary in the build directory.
+
+4. Build the Docker image with your custom tag:
+
+   ```bash
+   docker build -t ghcr.io/YOUR_ORG/coraza-proxy-wasm:custom-tag .
+   ```
+
+5. Authenticate with GitHub Container Registry (GHCR):
+
+   ```bash
+   # Create a GitHub Personal Access Token (PAT) with 'write:packages' scope at:
+   # https://github.com/settings/tokens
+
+   # Login to GHCR
+   echo $GITHUB_TOKEN | docker login ghcr.io -u YOUR_GITHUB_USERNAME --password-stdin
+   ```
+
+6. Push the image to GHCR:
+
+   ```bash
+   docker push ghcr.io/YOUR_ORG/coraza-proxy-wasm:custom-tag
+   ```
+
+7. Update your Engine resource to use the custom image:
+
+   Edit `config/samples/engine.yaml` (or your Engine manifest):
+
+   ```yaml
+   apiVersion: waf.k8s.coraza.io/v1alpha1
+   kind: Engine
+   metadata:
+     name: coraza
+   spec:
+     ruleSet:
+       name: default-ruleset
+     failurePolicy: fail
+     driver:
+       istio:
+         wasm:
+           image: "oci://ghcr.io/YOUR_ORG/coraza-proxy-wasm:custom-tag"
+           mode: gateway
+           workloadSelector:
+             matchLabels:
+               gateway.networking.k8s.io/gateway-name: coraza-gateway
+           ruleSetCacheServer:
+             pollIntervalSeconds: 5
+   ```
+
+8. Apply the updated Engine to your cluster:
+
+   ```bash
+   kubectl apply -f config/samples/engine.yaml
+   ```
+
+## Testing Custom WASM Plugins
+
+You can override the WASM image used by tests:
+
+```bash
+# Set the image for integration/conformance tests
+export CORAZA_WASM_IMAGE="oci://ghcr.io/YOUR_ORG/coraza-proxy-wasm:custom-tag"
+
+# Run tests with your custom image
+make test.integration
+# or
+make test.conformance
+```
+
+# Additional Development Workflows
+
+## Linting
+
+Run the Go linter:
+
+```bash
+make lint
+```
+
+Auto-fix linting issues:
+
+```bash
+make lint.fix
+```
+
+Verify linter configuration:
+
+```bash
+make lint.config
+```
+
+## Code Generation
+
+Generate code from CRDs and controllers:
+
+```bash
+make generate
+```
+
+Generate Kubernetes manifests (CRDs, RBAC, etc.):
+
+```bash
+make manifests
+```
+
+## Helm Chart
+
+Lint the Helm chart:
+
+```bash
+make helm.lint
+```
+
+Render Helm templates locally:
+
+```bash
+make helm.template
+```
+
+Sync generated CRDs to the Helm chart:
+
+```bash
+make helm.sync-crds
+```
+
+Sync all generated resources (CRDs + RBAC):
+
+```bash
+make helm.sync
+```
+
+## Environment Variables Reference
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `VERSION` | Version tag for builds | `dev` |
+| `CONTROLLER_MANAGER_CONTAINER_IMAGE` | Full operator image reference | `ghcr.io/networking-incubator/coraza-kubernetes-operator:dev` |
+| `KIND_CLUSTER_NAME` | KIND cluster name for tests | `coraza-kubernetes-operator-integration` |
+| `ISTIO_VERSION` | Istio version for deployment | `1.28.2` |
+| `METALLB_VERSION` | MetalLB version for KIND | `0.15.3` |
+| `CORERULESET_VERSION` | CoreRuleSet version | `v4.24.1` |
+| `CORAZA_WASM_IMAGE` | WASM plugin image for tests | (See `test/framework/resources.go`) |
+| `NAMESPACE` | Target namespace for deployments | `default` |
 
 # Releasing
 
