@@ -221,7 +221,7 @@ def main():
     parser = argparse.ArgumentParser(description="Generate OLM bundle from Helm chart")
     parser.add_argument("--chart-dir", required=True, help="Path to the Helm chart directory")
     parser.add_argument("--bundle-dir", required=True, help="Path to the output bundle directory")
-    parser.add_argument("--version", required=True, help="Operator version (semver, no 'v' prefix)")
+    parser.add_argument("--version", required=True, help="Operator version (semver, optional 'v' prefix is stripped)")
     parser.add_argument("--image", required=True, help="Operator container image ref (repo:tag or repo@sha256:digest)")
     parser.add_argument("--channels", default="alpha", help="Comma-separated OLM channel list")
     parser.add_argument("--default-channel", default="alpha", help="Default OLM channel")
