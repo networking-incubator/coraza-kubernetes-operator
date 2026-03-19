@@ -254,6 +254,7 @@ OPM_VERSION ?= v1.64.0
 BUNDLE_DIR ?= bundle
 CATALOG_DIR ?= catalog
 CATALOG_FILE ?= $(CATALOG_DIR)/coraza-kubernetes-operator/catalog.yaml
+OLM_CHANNEL ?= alpha
 
 .PHONY: bundle
 bundle: helm.sync ## Generate OLM bundle from Helm chart
@@ -262,8 +263,8 @@ bundle: helm.sync ## Generate OLM bundle from Helm chart
 		--bundle-dir $(BUNDLE_DIR) \
 		--version $(VERSION) \
 		--image $(CONTROLLER_MANAGER_CONTAINER_IMAGE) \
-		--channels alpha \
-		--default-channel alpha
+		--channels $(OLM_CHANNEL) \
+		--default-channel $(OLM_CHANNEL)
 
 .PHONY: bundle.build
 bundle.build: ## Build the OLM bundle image
@@ -275,7 +276,7 @@ bundle.push: ## Push the OLM bundle image
 
 .PHONY: catalog.update
 catalog.update: ## Add the current VERSION to the OLM catalog channel
-	python3 hack/update_catalog.py $(CATALOG_FILE) $(VERSION)
+	python3 hack/update_catalog.py $(CATALOG_FILE) $(VERSION) coraza-kubernetes-operator $(OLM_CHANNEL)
 
 .PHONY: catalog.build
 catalog.build: ## Build the OLM catalog image (renders bundles via opm)

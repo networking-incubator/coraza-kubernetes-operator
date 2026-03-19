@@ -5,7 +5,7 @@ Add a new version to the OLM file-based catalog channel entries.
 Sets `replaces` to the previous latest entry for OLM upgrade path.
 Idempotent: skips if the version already exists.
 
-Usage: update_catalog.py <catalog-file> <version> [package-name]
+Usage: update_catalog.py <catalog-file> <version> [package-name] [channel]
 """
 
 import sys
@@ -43,13 +43,14 @@ def main():
     catalog_file = sys.argv[1]
     version = sys.argv[2].lstrip("v")
     package_name = sys.argv[3] if len(sys.argv) > 3 else "coraza-kubernetes-operator"
+    channel = sys.argv[4] if len(sys.argv) > 4 else "alpha"
 
     entry_name = f"{package_name}.v{version}"
 
     docs = load_catalog(catalog_file)
-    channel_doc = find_channel(docs, "alpha", package_name)
+    channel_doc = find_channel(docs, channel, package_name)
     if not channel_doc:
-        print("ERROR: channel 'alpha' not found", file=sys.stderr)
+        print(f"ERROR: channel '{channel}' not found", file=sys.stderr)
         sys.exit(1)
 
     entries = channel_doc.setdefault("entries", [])
