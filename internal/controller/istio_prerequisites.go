@@ -18,7 +18,6 @@ package controller
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/go-logr/logr"
 	appsv1 "k8s.io/api/apps/v1"
@@ -118,9 +117,10 @@ func (p *IstioPrerequisites) newIstioObject(kind, name string, labels map[string
 	obj.SetNamespace(p.namespace)
 	obj.SetLabels(labels)
 	obj.SetOwnerReferences([]metav1.OwnerReference{ownerRef})
-	if err := unstructured.SetNestedField(obj.Object, spec, "spec"); err != nil {
-		panic(fmt.Sprintf("building %s spec: %v", kind, err))
+	if obj.Object == nil {
+		obj.Object = map[string]any{}
 	}
+	obj.Object["spec"] = spec
 	return obj
 }
 
