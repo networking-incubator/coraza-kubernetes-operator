@@ -92,6 +92,12 @@ spec:
     - group: ""
       kind: Pod
       version: v1
+    - group: networking.istio.io
+      kind: ServiceEntry
+      version: v1
+    - group: networking.istio.io
+      kind: DestinationRule
+      version: v1
   provider:
     name: networking-incubator
     url: https://github.com/networking-incubator
