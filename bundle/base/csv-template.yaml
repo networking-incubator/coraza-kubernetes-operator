@@ -42,7 +42,6 @@ spec:
 
     ### Features
     - Declarative WAF configuration via Kubernetes custom resources
-    - Automatic Istio WasmPlugin management
     - Rule set caching for performance
     - Support for OWASP CoreRuleSet
 
