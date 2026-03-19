@@ -283,9 +283,16 @@ catalog.build: ## Build the OLM catalog image (renders bundles via opm)
 	@if [ -z "$${BUNDLE_IMGS}" ] && [ -d "$(BUNDLE_DIR)/manifests" ]; then \
 		cp -r $(BUNDLE_DIR) $(CATALOG_DIR)/bundles/local; \
 	fi
+	@if [ -n "$${BUNDLE_IMGS}" ]; then \
+		bundle_imgs="$${BUNDLE_IMGS}"; \
+	elif [ -d "$(CATALOG_DIR)/bundles/local" ]; then \
+		bundle_imgs="/tmp/bundles/local"; \
+	else \
+		bundle_imgs=$$(python3 hack/list_bundle_images.py $(CATALOG_FILE) $(BUNDLE_IMG_BASE)); \
+	fi && \
 	$(CONTAINER_TOOL) build \
 		--build-arg OPM_VERSION=$(OPM_VERSION) \
-		--build-arg BUNDLE_IMGS="$${BUNDLE_IMGS:-$$(if [ -d "$(CATALOG_DIR)/bundles/local" ]; then echo /tmp/bundles/local; else python3 -c "import yaml; print(' '.join('$(BUNDLE_IMG_BASE):v'+e['name'].split('.v',1)[1] for d in yaml.safe_load_all(open('$(CATALOG_FILE)')) if d and d.get('schema')=='olm.channel' for e in d.get('entries',[])))"; fi) }" \
+		--build-arg BUNDLE_IMGS="$$bundle_imgs" \
 		-f $(CATALOG_DIR)/Dockerfile -t $(CATALOG_IMG) $(CATALOG_DIR)
 	@rm -rf $(CATALOG_DIR)/bundles
 
