@@ -6,7 +6,6 @@ metadata:
     app.kubernetes.io/name: coraza-kubernetes-operator
     app.kubernetes.io/instance: coraza-kubernetes-operator
     control-plane: coraza-controller-manager
-    app.kubernetes.io/version: 0.2.0
 spec:
   type: ClusterIP
   ports:

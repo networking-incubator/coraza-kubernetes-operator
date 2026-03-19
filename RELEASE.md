@@ -153,10 +153,24 @@ are specific to OLM:
 
 **What needs manual attention:**
 
-- `catalog.yaml` must be committed after `catalog.update` adds the new version.
-  The release workflow modifies it in the working tree but does not commit back.
-  Either run `make catalog.update VERSION=vX.Y.Z` before tagging, or set up
-  automation to commit the updated catalog after release.
+- **`catalog.yaml` must be committed before tagging the release.** The release
+  workflow runs `catalog.update` in its working tree but does **not** commit the
+  result back to the repository. If you skip this step, the next release will
+  start from a stale checkout and the OLM upgrade chain will break — each
+  release's catalog will have no `replaces` link to the previous version,
+  making every version an independent install instead of an upgrade.
+
+  Before tagging, run:
+
+  ```console
+  make catalog.update VERSION=vX.Y.Z
+  git add catalog/coraza-kubernetes-operator/catalog.yaml
+  git commit -m "catalog: add vX.Y.Z to OLM channel"
+  ```
+
+  Automating this commit-back step is tracked in
+  https://github.com/networking-incubator/coraza-kubernetes-operator/issues/184.
+
 - If the CSV template needs changes (description, icon, install modes, etc.),
   edit `bundle/base/csv-template.yaml` before the release.
 

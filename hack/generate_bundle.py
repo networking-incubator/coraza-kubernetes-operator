@@ -24,7 +24,8 @@ EXCLUDED_KINDS = {"Namespace", "PodDisruptionBudget", "ServiceMonitor",
                   "ServiceAccount", "ClusterRole", "ClusterRoleBinding"}
 
 
-def helm_template(chart_dir: str, release_name: str, namespace: str) -> list:
+def helm_template(chart_dir: str, release_name: str, namespace: str,
+                  version: str) -> list:
     """Render the Helm chart and return parsed YAML documents."""
     cmd = [
         "helm", "template",
@@ -32,6 +33,7 @@ def helm_template(chart_dir: str, release_name: str, namespace: str) -> list:
         chart_dir,
         "--namespace", namespace,
         "--kube-version", "1.33.0",
+        "--version", version,
     ]
     result = subprocess.run(cmd, capture_output=True, text=True, check=True)
     docs = list(yaml.safe_load_all(result.stdout))
@@ -241,7 +243,7 @@ def main():
         sys.exit(1)
 
     print("Rendering Helm chart...", file=sys.stderr)
-    docs = helm_template(chart_dir, args.release_name, args.namespace)
+    docs = helm_template(chart_dir, args.release_name, args.namespace, version)
     print(f"  got {len(docs)} documents", file=sys.stderr)
 
     deployment = find_by_kind(docs, "Deployment")
