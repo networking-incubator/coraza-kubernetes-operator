@@ -27,11 +27,11 @@ const (
 
 // RuleSourceReference is a reference to a ConfigMap that contains WAF rules.
 type RuleSourceReference struct {
-	// Name is the name of the ConfigMap in the same namespace as the RuleSet.
+	// name is the name of the ConfigMap in the same namespace as the RuleSet.
 	//
 	// +required
 	// +kubebuilder:validation:MinLength=1
-	Name string `json:"name"`
+	Name string `json:"name,omitempty"`
 }
 
 // -----------------------------------------------------------------------------
@@ -55,20 +55,20 @@ func init() {
 type RuleSet struct {
 	metav1.TypeMeta `json:",inline"`
 
-	// ObjectMeta is a standard object metadata.
+	// metadata is a standard object metadata.
 	//
 	// +optional
 	metav1.ObjectMeta `json:"metadata,omitzero"`
 
-	// Spec defines the desired state of RuleSet.
+	// spec defines the desired state of RuleSet.
 	//
 	// +required
-	Spec RuleSetSpec `json:"spec"`
+	Spec RuleSetSpec `json:"spec,omitzero"`
 
-	// Status defines the observed state of RuleSet.
+	// status defines the observed state of RuleSet.
 	//
 	// +optional
-	Status RuleSetStatus `json:"status,omitzero"`
+	Status *RuleSetStatus `json:"status,omitempty"`
 }
 
 // RuleSetList contains a list of RuleSet resources.
@@ -94,7 +94,7 @@ type RuleSetList struct {
 
 // RuleSetSpec defines the desired state of RuleSet.
 type RuleSetSpec struct {
-	// Rules is an ordered list of references to ConfigMaps that contain the
+	// rules is an ordered list of references to ConfigMaps that contain the
 	// firewall rules to be compiled into a complete set.
 	//
 	// Each entry refers to a ConfigMap by name in the same namespace as
@@ -103,9 +103,10 @@ type RuleSetSpec struct {
 	// +required
 	// +kubebuilder:validation:MinItems=1
 	// +kubebuilder:validation:MaxItems=2048
-	Rules []RuleSourceReference `json:"rules"`
+	// +listType=atomic
+	Rules []RuleSourceReference `json:"rules,omitempty"`
 
-	// RuleData contains the name of a secret with the required data for rules.
+	// ruleData contains the name of a secret with the required data for rules.
 	// Usually rules that contain the directive '@pmFromFile'.
 	// This secret must be created containing the type coraza/data otherwise it will
 	// not be watched.
@@ -114,7 +115,7 @@ type RuleSetSpec struct {
 	//
 	// +kubebuilder:validation:MinLength=1
 	// +optional
-	RuleData string `json:"ruleData,omitempty,omitzero"`
+	RuleData *string `json:"ruleData,omitempty"`
 }
 
 // -----------------------------------------------------------------------------
@@ -123,7 +124,7 @@ type RuleSetSpec struct {
 
 // RuleSetStatus defines the observed state of RuleSet.
 type RuleSetStatus struct {
-	// Conditions represent the current state of the RuleSet resource.
+	// conditions represent the current state of the RuleSet resource.
 	// Each condition has a unique type and reflects the status of a specific aspect of the resource.
 	//
 	// Standard condition types include:
@@ -138,7 +139,7 @@ type RuleSetStatus struct {
 	// +patchStrategy=merge
 	// +patchMergeKey=type
 	// +optional
-	Conditions []metav1.Condition `json:"conditions,omitempty" patchStrategy:"merge" patchMergeKey:"type"`
+	Conditions []metav1.Condition `json:"conditions,omitempty" patchStrategy:"merge" patchMergeKey:"type" protobuf:"bytes,1,rep,name=conditions"`
 }
 
 // -----------------------------------------------------------------------------
@@ -147,7 +148,7 @@ type RuleSetStatus struct {
 
 // RuleSetCacheServerConfig defines the configuration for the RuleSet cache server.
 type RuleSetCacheServerConfig struct {
-	// PollIntervalSeconds specifies how often the WAF should check for
+	// pollIntervalSeconds specifies how often the WAF should check for
 	// configuration updates. The value is specified in seconds.
 	//
 	// When omitted, this means the user has no opinion and the platform
@@ -156,7 +157,7 @@ type RuleSetCacheServerConfig struct {
 	//
 	// +kubebuilder:validation:Minimum=1
 	// +kubebuilder:validation:Maximum=3600
-	// +kubebuilder:default=15
-	// +required
-	PollIntervalSeconds int32 `json:"pollIntervalSeconds"`
+	// +optional
+	// +default=15
+	PollIntervalSeconds *int32 `json:"pollIntervalSeconds,omitempty"`
 }

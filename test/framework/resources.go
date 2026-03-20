@@ -30,6 +30,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/utils/ptr"
 
 	wafv1alpha1 "github.com/networking-incubator/coraza-kubernetes-operator/api/v1alpha1"
 )
@@ -262,15 +263,15 @@ func BuildEngine(namespace, name string, opts EngineOpts) *unstructured.Unstruct
 			RuleSet: wafv1alpha1.RuleSetReference{
 				Name: opts.RuleSetName,
 			},
-			FailurePolicy: opts.FailurePolicy,
-			Driver: wafv1alpha1.DriverConfig{
+			FailurePolicy: &opts.FailurePolicy,
+			Driver: &wafv1alpha1.DriverConfig{
 				Istio: &wafv1alpha1.IstioDriverConfig{
 					Wasm: &wafv1alpha1.IstioWasmConfig{
 						Image:            opts.WasmImage,
-						Mode:             wafv1alpha1.IstioIntegrationModeGateway,
+						Mode:             ptr.To(wafv1alpha1.IstioIntegrationModeGateway),
 						WorkloadSelector: labelSelector,
 						RuleSetCacheServer: &wafv1alpha1.RuleSetCacheServerConfig{
-							PollIntervalSeconds: opts.PollInterval,
+							PollIntervalSeconds: &opts.PollInterval,
 						},
 					},
 				},

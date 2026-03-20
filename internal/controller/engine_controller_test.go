@@ -24,6 +24,7 @@ import (
 	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 
 	wafv1alpha1 "github.com/networking-incubator/coraza-kubernetes-operator/api/v1alpha1"
@@ -308,13 +309,13 @@ func TestEngineReconciler_ValidationRejection(t *testing.T) {
 				}
 				return engine
 			},
-			expectedError: "spec.ruleSet.name in body should be at least 1 chars long",
+			expectedError: "spec.ruleSet: Required value",
 		},
 		{
 			name: "no driver specified",
 			engineFunc: func() *wafv1alpha1.Engine {
 				engine := utils.NewTestEngine(utils.EngineOptions{})
-				engine.Spec.Driver = wafv1alpha1.DriverConfig{}
+				engine.Spec.Driver = &wafv1alpha1.DriverConfig{}
 				return engine
 			},
 			expectedError: "exactly one driver must be specified",
@@ -344,7 +345,7 @@ func TestEngineReconciler_ValidationRejection(t *testing.T) {
 				engine.Spec.Driver.Istio.Wasm.Image = ""
 				return engine
 			},
-			expectedError: "spec.driver.istio.wasm.image in body should be at least 1 chars long",
+			expectedError: "spec.driver.istio.wasm.image: Required value",
 		},
 		{
 			name: "image too long",
@@ -359,7 +360,7 @@ func TestEngineReconciler_ValidationRejection(t *testing.T) {
 			name: "gateway mode without workloadSelector",
 			engineFunc: func() *wafv1alpha1.Engine {
 				engine := utils.NewTestEngine(utils.EngineOptions{})
-				engine.Spec.Driver.Istio.Wasm.Mode = wafv1alpha1.IstioIntegrationModeGateway
+				engine.Spec.Driver.Istio.Wasm.Mode = ptr.To(wafv1alpha1.IstioIntegrationModeGateway)
 				engine.Spec.Driver.Istio.Wasm.WorkloadSelector = nil
 				return engine
 			},

@@ -145,6 +145,9 @@ func (r *EngineReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	}
 
 	logDebug(log, req, "Engine", "Applying conditions")
+	if engine.Status == nil {
+		engine.Status = &wafv1alpha1.EngineStatus{}
+	}
 	if apimeta.FindStatusCondition(engine.Status.Conditions, "Ready") == nil {
 		patch := client.MergeFrom(engine.DeepCopy())
 		setStatusProgressing(log, req, "Engine", &engine.Status.Conditions, engine.Generation, "Reconciling", "Starting reconciliation")
@@ -164,7 +167,7 @@ func (r *EngineReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 
 func (r *EngineReconciler) selectDriver(ctx context.Context, log logr.Logger, req ctrl.Request, engine wafv1alpha1.Engine) (ctrl.Result, error) {
 	switch {
-	case engine.Spec.Driver.Istio != nil:
+	case engine.Spec.Driver != nil && engine.Spec.Driver.Istio != nil:
 		switch {
 		case engine.Spec.Driver.Istio.Wasm != nil:
 			logDebug(log, req, "Engine", "Using Istio driver with WASM mode")

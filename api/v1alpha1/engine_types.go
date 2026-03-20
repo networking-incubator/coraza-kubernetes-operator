@@ -22,21 +22,21 @@ import (
 
 // RuleSetReference is a reference to a RuleSet resource.
 type RuleSetReference struct {
-	// Name is the name of the RuleSet in the same namespace as the Engine.
+	// name is the name of the RuleSet in the same namespace as the Engine.
 	//
 	// +required
 	// +kubebuilder:validation:MinLength=1
-	Name string `json:"name"`
+	Name string `json:"name,omitempty"`
 }
 
 // GatewayReference is a reference to a Gateway resource in the same namespace
 // as the Engine.
 type GatewayReference struct {
-	// Name is the name of the Gateway in the same namespace as the Engine.
+	// name is the name of the Gateway in the same namespace as the Engine.
 	//
 	// +required
 	// +kubebuilder:validation:MinLength=1
-	Name string `json:"name"`
+	Name string `json:"name,omitempty"`
 }
 
 // -----------------------------------------------------------------------------
@@ -62,20 +62,20 @@ func init() {
 type Engine struct {
 	metav1.TypeMeta `json:",inline"`
 
-	// ObjectMeta is a standard object metadata.
+	// metadata is a standard object metadata.
 	//
 	// +optional
 	metav1.ObjectMeta `json:"metadata,omitzero"`
 
-	// Spec defines the desired state of Engine.
+	// spec defines the desired state of Engine.
 	//
 	// +required
-	Spec EngineSpec `json:"spec"`
+	Spec EngineSpec `json:"spec,omitzero"`
 
-	// Status defines the observed state of Engine.
+	// status defines the observed state of Engine.
 	//
 	// +optional
-	Status EngineStatus `json:"status,omitzero"`
+	Status *EngineStatus `json:"status,omitempty"`
 }
 
 // EngineList contains a list of Engine resources.
@@ -100,22 +100,24 @@ type EngineList struct {
 // -----------------------------------------------------------------------------
 
 // EngineSpec defines the desired state of an Engine.
+//
+// +kubebuilder:validation:XValidation:rule="has(self.driver)",message="driver is required"
 type EngineSpec struct {
-	// RuleSet specifies the RuleSet resource that will be used to load rules
+	// ruleSet specifies the RuleSet resource that will be used to load rules
 	// into the Engine. The referenced RuleSet must be in the same namespace
 	// as the Engine.
 	//
 	// +required
-	RuleSet RuleSetReference `json:"ruleSet"`
+	RuleSet RuleSetReference `json:"ruleSet,omitzero"`
 
-	// Driver specifies the driver configuration for the engine. This
+	// driver specifies the driver configuration for the engine. This
 	// determines how the WAF engine will be deployed and integrated with some
 	// implementation. Currently only supports Istio ingress Gateways.
 	//
-	// +required
-	Driver DriverConfig `json:"driver"`
+	// +optional
+	Driver *DriverConfig `json:"driver,omitempty"`
 
-	// FailurePolicy determines the behavior when the WAF is not ready or
+	// failurePolicy determines the behavior when the WAF is not ready or
 	// encounters errors. Valid values are:
 	//
 	// - "Fail": Block traffic when the WAF is not ready or encounters errors
@@ -126,9 +128,9 @@ type EngineSpec struct {
 	//
 	// The current default is fail.
 	//
-	// +required
-	// +kubebuilder:default=fail
-	FailurePolicy FailurePolicy `json:"failurePolicy"`
+	// +optional
+	// +default="fail"
+	FailurePolicy *FailurePolicy `json:"failurePolicy,omitempty"`
 }
 
 // -----------------------------------------------------------------------------
@@ -137,7 +139,7 @@ type EngineSpec struct {
 
 // EngineStatus defines the observed state of Engine.
 type EngineStatus struct {
-	// Conditions represent the current state of the Engine resource.
+	// conditions represent the current state of the Engine resource.
 	// Each condition has a unique type and reflects the status of a specific
 	// aspect of the resource.
 	//
@@ -153,9 +155,9 @@ type EngineStatus struct {
 	// +patchStrategy=merge
 	// +patchMergeKey=type
 	// +optional
-	Conditions []metav1.Condition `json:"conditions,omitempty" patchStrategy:"merge" patchMergeKey:"type"`
+	Conditions []metav1.Condition `json:"conditions,omitempty" patchStrategy:"merge" patchMergeKey:"type" protobuf:"bytes,1,rep,name=conditions"`
 
-	// Gateways is the list of Gateways in the same namespace that match
+	// gateways is the list of Gateways in the same namespace that match
 	// the Engine's workload selector.
 	//
 	// +listType=map

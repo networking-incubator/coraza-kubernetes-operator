@@ -115,6 +115,9 @@ func (r *RuleSetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, err
 	}
 
+	if ruleset.Status == nil {
+		ruleset.Status = &wafv1alpha1.RuleSetStatus{}
+	}
 	if apimeta.FindStatusCondition(ruleset.Status.Conditions, "Ready") == nil {
 		patch := client.MergeFrom(ruleset.DeepCopy())
 		setStatusProgressing(log, req, "RuleSet", &ruleset.Status.Conditions, ruleset.Generation, "Reconciling", "Starting reconciliation")
@@ -126,7 +129,10 @@ func (r *RuleSetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 
 	// Load RuleData Secret first if configured, so we can check if missing data files
 	// actually exist in it during per-ConfigMap validation
-	ruleData := ruleset.Spec.RuleData
+	var ruleData string
+	if ruleset.Spec.RuleData != nil {
+		ruleData = *ruleset.Spec.RuleData
+	}
 	var secretData map[string][]byte
 	if ruleData != "" {
 		var found bool
