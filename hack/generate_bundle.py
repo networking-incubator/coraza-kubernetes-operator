@@ -25,15 +25,16 @@ EXCLUDED_KINDS = {"Namespace", "PodDisruptionBudget", "ServiceMonitor",
 
 
 def helm_template(chart_dir: str, release_name: str, namespace: str,
-                  version: str) -> list:
+                  version: str, kube_version: str) -> list:
     """Render the Helm chart and return parsed YAML documents."""
     cmd = [
         "helm", "template",
         release_name,
         chart_dir,
         "--namespace", namespace,
-        "--kube-version", "1.33.0",
+        "--kube-version", kube_version,
         "--version", version,
+        "--set", "openshift.enabled=true",
     ]
     result = subprocess.run(cmd, capture_output=True, text=True, check=True)
     docs = list(yaml.safe_load_all(result.stdout))
@@ -242,8 +243,13 @@ def main():
         print(f"ERROR: CSV template not found at {template_path}", file=sys.stderr)
         sys.exit(1)
 
+    with open(template_path) as f:
+        csv_template = yaml.safe_load(f)
+    kube_version = csv_template.get("spec", {}).get("minKubeVersion", "1.33.0")
+
     print("Rendering Helm chart...", file=sys.stderr)
-    docs = helm_template(chart_dir, args.release_name, args.namespace, version)
+    docs = helm_template(chart_dir, args.release_name, args.namespace, version,
+                         kube_version)
     print(f"  got {len(docs)} documents", file=sys.stderr)
 
     deployment = find_by_kind(docs, "Deployment")
