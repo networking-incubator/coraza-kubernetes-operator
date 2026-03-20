@@ -354,8 +354,22 @@ func (s *Scenario) CreateGatewayWithClass(namespace, name, gatewayClassName stri
 	s.T.Helper()
 	ctx := s.T.Context()
 
+	// Create ServiceAccount before Gateway to prevent auth race condition.
+	// Istio gateway pods use a ServiceAccount named "{gateway-name}-{class}".
+	saName := fmt.Sprintf("%s-%s", name, gatewayClassName)
+	sa := &corev1.ServiceAccount{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      saName,
+			Namespace: namespace,
+		},
+	}
+	_, err := s.F.KubeClient.CoreV1().ServiceAccounts(namespace).Create(ctx, sa, metav1.CreateOptions{})
+	if err != nil {
+		s.T.Logf("ServiceAccount %s/%s creation: %v (may already exist)", namespace, saName, err)
+	}
+
 	obj := BuildGateway(namespace, name, gatewayClassName)
-	_, err := s.F.DynamicClient.Resource(GatewayGVR).Namespace(namespace).Create(
+	_, err = s.F.DynamicClient.Resource(GatewayGVR).Namespace(namespace).Create(
 		ctx, obj, metav1.CreateOptions{},
 	)
 	require.NoError(s.T, err, "create Gateway %s/%s", namespace, name)
@@ -474,6 +488,9 @@ func (s *Scenario) CreateEchoBackend(namespace, name string) {
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
 					Labels: map[string]string{"app": name},
+					Annotations: map[string]string{
+						"sidecar.istio.io/inject": "false",
+					},
 				},
 				Spec: corev1.PodSpec{
 					Containers: []corev1.Container{{

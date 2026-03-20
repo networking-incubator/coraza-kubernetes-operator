@@ -21,6 +21,7 @@ import (
 	"crypto/rand"
 	"fmt"
 	"io"
+	mathrand "math/rand"
 	"os"
 	"path/filepath"
 	"strings"
@@ -112,6 +113,8 @@ func (s *Scenario) GenerateNamespace(prefix string) string {
 }
 
 // CreateNamespace creates a namespace and registers it for cleanup.
+// A small random delay (0-2s) is added to stagger parallel test starts,
+// reducing contention on Istio CA certificate signing.
 func (s *Scenario) CreateNamespace(name string) {
 	s.T.Helper()
 	ctx := s.T.Context()
@@ -124,6 +127,11 @@ func (s *Scenario) CreateNamespace(name string) {
 
 	s.namespaces = append(s.namespaces, name)
 	s.T.Logf("Created namespace: %s", name)
+
+	// Stagger parallel tests to reduce Istio CA contention.
+	staggerDelay := time.Duration(mathrand.Intn(2000)) * time.Millisecond
+	time.Sleep(staggerDelay)
+
 	s.OnCleanup(func() {
 		// Background: test context may already be cancelled; cleanup must still run.
 		if err := s.F.KubeClient.CoreV1().Namespaces().Delete(

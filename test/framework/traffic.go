@@ -21,10 +21,12 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/tools/portforward"
 	"k8s.io/client-go/transport/spdy"
@@ -59,6 +61,9 @@ func (s *Scenario) ProxyToGateway(namespace, gatewayName string) *GatewayProxy {
 		httpc:     &http.Client{Timeout: 10 * time.Second},
 		cancel:    cancel,
 	}
+
+	// Wait for the gateway pod to be Ready before starting port-forward.
+	s.waitForGatewayPodReady(namespace, gatewayName)
 
 	go proxy.maintain(ctx)
 
@@ -156,6 +161,175 @@ type HTTPResult struct {
 	Headers    http.Header
 	Body       []byte
 	Err        error
+}
+
+// Post makes a POST request with the given body through the proxy.
+func (g *GatewayProxy) Post(path, contentType, body string) *HTTPResult {
+	resp, err := g.httpc.Post(g.URL(path), contentType, strings.NewReader(body))
+	if err != nil {
+		return &HTTPResult{Err: err}
+	}
+	defer func() { _ = resp.Body.Close() }()
+	respBody, _ := io.ReadAll(resp.Body)
+	return &HTTPResult{
+		StatusCode: resp.StatusCode,
+		Headers:    resp.Header,
+		Body:       respBody,
+	}
+}
+
+// DoRequest makes a custom HTTP request through the proxy.
+func (g *GatewayProxy) DoRequest(req *http.Request) *HTTPResult {
+	resp, err := g.httpc.Do(req)
+	if err != nil {
+		return &HTTPResult{Err: err}
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, _ := io.ReadAll(resp.Body)
+	return &HTTPResult{
+		StatusCode: resp.StatusCode,
+		Headers:    resp.Header,
+		Body:       body,
+	}
+}
+
+// GetWithHeaders makes a GET request with custom headers through the proxy.
+func (g *GatewayProxy) GetWithHeaders(path string, headers map[string]string) *HTTPResult {
+	req, err := http.NewRequest(http.MethodGet, g.URL(path), nil)
+	if err != nil {
+		return &HTTPResult{Err: err}
+	}
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	return g.DoRequest(req)
+}
+
+// PostWithHeaders makes a POST request with custom headers through the proxy.
+func (g *GatewayProxy) PostWithHeaders(path, contentType, body string, headers map[string]string) *HTTPResult {
+	req, err := http.NewRequest(http.MethodPost, g.URL(path), strings.NewReader(body))
+	if err != nil {
+		return &HTTPResult{Err: err}
+	}
+	req.Header.Set("Content-Type", contentType)
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	return g.DoRequest(req)
+}
+
+// ExpectPostBlocked polls until a POST request returns HTTP 403.
+func (g *GatewayProxy) ExpectPostBlocked(path, contentType, body string) {
+	g.s.T.Helper()
+	g.ExpectPostStatus(path, contentType, body, http.StatusForbidden)
+}
+
+// ExpectPostAllowed polls until a POST request returns HTTP 200.
+func (g *GatewayProxy) ExpectPostAllowed(path, contentType, body string) {
+	g.s.T.Helper()
+	g.ExpectPostStatus(path, contentType, body, http.StatusOK)
+}
+
+// ExpectPostStatus polls until a POST request returns the expected status.
+func (g *GatewayProxy) ExpectPostStatus(path, contentType, body string, code int) {
+	g.s.T.Helper()
+	require.EventuallyWithT(g.s.T, func(collect *assert.CollectT) {
+		resp, err := g.httpc.Post(g.URL(path), contentType, strings.NewReader(body))
+		if !assert.NoError(collect, err) {
+			return
+		}
+		defer func() {
+			_, _ = io.ReadAll(resp.Body)
+			_ = resp.Body.Close()
+		}()
+		assert.Equal(collect, code, resp.StatusCode,
+			"expected POST %s to return %d, got: %d", path, code, resp.StatusCode)
+	}, DefaultTimeout, DefaultInterval)
+}
+
+// ExpectHeaderBlocked polls until a GET with custom headers returns HTTP 403.
+func (g *GatewayProxy) ExpectHeaderBlocked(path string, headers map[string]string) {
+	g.s.T.Helper()
+	g.ExpectHeaderStatus(path, headers, http.StatusForbidden)
+}
+
+// ExpectHeaderAllowed polls until a GET with custom headers returns HTTP 200.
+func (g *GatewayProxy) ExpectHeaderAllowed(path string, headers map[string]string) {
+	g.s.T.Helper()
+	g.ExpectHeaderStatus(path, headers, http.StatusOK)
+}
+
+// ExpectHeaderStatus polls until a GET with custom headers returns the expected status.
+func (g *GatewayProxy) ExpectHeaderStatus(path string, headers map[string]string, code int) {
+	g.s.T.Helper()
+	require.EventuallyWithT(g.s.T, func(collect *assert.CollectT) {
+		req, err := http.NewRequest(http.MethodGet, g.URL(path), nil)
+		if !assert.NoError(collect, err) {
+			return
+		}
+		for k, v := range headers {
+			req.Header.Set(k, v)
+		}
+		resp, err := g.httpc.Do(req)
+		if !assert.NoError(collect, err) {
+			return
+		}
+		defer func() {
+			_, _ = io.ReadAll(resp.Body)
+			_ = resp.Body.Close()
+		}()
+		assert.Equal(collect, code, resp.StatusCode,
+			"expected GET %s with headers to return %d, got: %d", path, code, resp.StatusCode)
+	}, DefaultTimeout, DefaultInterval)
+}
+
+// -----------------------------------------------------------------------------
+// Pod Readiness
+// -----------------------------------------------------------------------------
+
+// GatewayReadyTimeout is a longer timeout for gateway pod readiness.
+// Gateway pods may restart due to Istio CA certificate signing delays
+// when running parallel tests, so we allow extra time for recovery.
+const GatewayReadyTimeout = 1500 * time.Second
+
+// waitForGatewayPodReady waits until at least one pod for the gateway is Ready.
+// This prevents port-forward attempts before Istio sidecar is fully initialized.
+// Uses a longer timeout than default to handle CA certificate signing delays.
+func (s *Scenario) waitForGatewayPodReady(namespace, gatewayName string) {
+	s.T.Helper()
+	labelSelector := fmt.Sprintf("gateway.networking.k8s.io/gateway-name=%s", gatewayName)
+
+	require.Eventually(s.T, func() bool {
+		pods, err := s.F.KubeClient.CoreV1().Pods(namespace).List(
+			s.T.Context(),
+			metav1.ListOptions{LabelSelector: labelSelector},
+		)
+		if err != nil {
+			return false
+		}
+		for _, pod := range pods.Items {
+			if isPodReady(&pod) {
+				return true
+			}
+		}
+		return false
+	}, GatewayReadyTimeout, DefaultInterval,
+		"gateway pod %s/%s not ready", namespace, gatewayName,
+	)
+	s.T.Logf("Gateway pod %s/%s is ready", namespace, gatewayName)
+}
+
+// isPodReady returns true if the pod is in Running phase and has Ready condition.
+func isPodReady(pod *corev1.Pod) bool {
+	if pod.Status.Phase != corev1.PodRunning {
+		return false
+	}
+	for _, cond := range pod.Status.Conditions {
+		if cond.Type == corev1.PodReady && cond.Status == corev1.ConditionTrue {
+			return true
+		}
+	}
+	return false
 }
 
 // -----------------------------------------------------------------------------
