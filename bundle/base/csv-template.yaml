@@ -24,17 +24,6 @@ spec:
         kind: RuleSet
         name: rulesets.waf.k8s.coraza.io
         version: v1alpha1
-    required:
-      - description: Gateway represents an instance of a service-traffic handling infrastructure.
-        displayName: Gateway
-        kind: Gateway
-        name: gateways.gateway.networking.k8s.io
-        version: v1
-      - description: WasmPlugin provides a mechanism to extend the functionality provided by the Istio proxy.
-        displayName: WasmPlugin
-        kind: WasmPlugin
-        name: wasmplugins.extensions.istio.io
-        version: v1alpha1
   description: |
     The Coraza Kubernetes Operator provides Web Application Firewall (WAF)
     support for Kubernetes Gateways. It manages Coraza WAF
