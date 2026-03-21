@@ -7,6 +7,20 @@ Deploys the [Coraza Kubernetes Operator](https://github.com/networking-incubator
 
 ## Installation
 
+### Helm repository (GitHub Pages)
+
+After a version tag is pushed, CI publishes the packaged chart to the GitHub release and updates the Helm index on the `gh-pages` branch. With [GitHub Pages](https://docs.github.com/en/pages) enabled for this repository (source: branch `gh-pages`, root), install from the hosted repo:
+
+```bash
+helm repo add coraza-kubernetes-operator https://networking-incubator.github.io/coraza-kubernetes-operator/
+helm repo update
+helm upgrade --install coraza-kubernetes-operator coraza-kubernetes-operator/coraza-kubernetes-operator \
+  --namespace coraza-system \
+  --create-namespace
+```
+
+Forks and other remotes use their own Pages URL: `https://<owner>.github.io/<repository>/`.
+
 ### Default (Kubernetes)
 
 ```bash

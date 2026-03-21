@@ -1,0 +1,5 @@
+# https://github.com/helm/chart-releaser — used by .github/workflows/release.yml (chart-releaser-action).
+# Owner and git-repo are supplied by the action from GITHUB_REPOSITORY.
+# With GitHub Pages enabled on branch gh-pages, users add:
+#   helm repo add <local-name> https://<owner>.github.io/<repo>/
+pages-branch: gh-pages
