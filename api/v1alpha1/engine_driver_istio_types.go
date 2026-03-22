@@ -58,7 +58,7 @@ type IstioWasmConfig struct {
 	// workloadSelector specifies the selection criteria for attaching the WAF to
 	// Istio resources.
 	//
-	// +optional
+	// +required
 	WorkloadSelector *metav1.LabelSelector `json:"workloadSelector,omitempty"`
 
 	// image is the OCI image reference for the Coraza WASM plugin.
