@@ -33,7 +33,7 @@ import (
 type IstioDriverConfig struct {
 	// wasm configures the Engine to be deployed as a WebAssembly plugin.
 	//
-	// +optional
+	// +required
 	Wasm *IstioWasmConfig `json:"wasm,omitempty"`
 }
 
