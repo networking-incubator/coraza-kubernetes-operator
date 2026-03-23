@@ -1,14 +1,57 @@
 #!/usr/bin/env python3
+import argparse
+import json
 import os
 import subprocess
 import sys
 import time
-import argparse
-import shutil
 from pathlib import Path
 
 helm_chart_dir: str = "charts/coraza-kubernetes-operator"
 helm_release_name: str = "coraza-kubernetes-operator"
+
+# Cached container runtime, detected once
+_container_runtime: str = ""
+
+
+def detect_container_runtime() -> str:
+    """Detect if Docker is available, otherwise fall back to Podman."""
+    global _container_runtime
+    if _container_runtime:
+        return _container_runtime
+
+    print("Detecting container runtime (docker or podman)...")
+
+    # Try docker first
+    result = subprocess.run(
+        "docker version --format json",
+        shell=True, check=False, capture_output=True, text=True
+    )
+    if result.returncode == 0:
+        try:
+            version_info = json.loads(result.stdout)
+            platform = version_info.get("Client", {}).get("Platform", {}).get("Name", "")
+            if "Docker Engine" in platform:
+                print("Detected: Docker")
+                _container_runtime = "docker"
+                return _container_runtime
+        except (json.JSONDecodeError, KeyError, AttributeError):
+            pass
+
+    # Try podman
+    result = subprocess.run(
+        "podman version",
+        shell=True, check=False, capture_output=True, text=True
+    )
+    if result.returncode == 0:
+        print("Detected: Podman")
+        _container_runtime = "podman"
+        return _container_runtime
+
+    print("ERROR: Neither docker nor podman is available", file=sys.stderr)
+    print("Please install either docker or podman to continue", file=sys.stderr)
+    sys.exit(1)
+
 
 def run(cmd, input_str=None, capture_output=True, check=True):
     """Unified execution helper with logging"""
@@ -147,24 +190,36 @@ spec:
 
 def deploy_coraza_operator(args):
     print(f"--- Deploying Coraza Operator ---")
-    
+
     project_root = Path(__file__).parent.parent.absolute()
     os.chdir(project_root)
-    run("make build.image")
+
+    # Detect runtime before building so CONTAINER_TOOL matches
+    runtime = detect_container_runtime()
+
+    run(f"make build.image CONTAINER_TOOL={runtime}")
+
+    # Get source image from environment variables (same as kind_cluster.py)
+    source_image_repo = os.environ.get(
+        "CONTROLLER_MANAGER_CONTAINER_IMAGE_BASE",
+        "ghcr.io/networking-incubator/coraza-kubernetes-operator",
+    )
+    source_image_tag = os.environ.get("CONTROLLER_MANAGER_CONTAINER_IMAGE_TAG", "dev")
+    source_image = f"{source_image_repo}:{source_image_tag}"
 
     # --- REGISTRY ---
     res = run("oc get route default-route -n openshift-image-registry --template='{{ .spec.host }}'")
     registry_host_external = res.stdout.strip()
-    push_image = f"{registry_host_external}/{args.coraza_ns}/coraza-operator:dev"
+    push_image = f"{registry_host_external}/{args.coraza_ns}/coraza-operator:{source_image_tag}"
     pull_image_repo = f"image-registry.openshift-image-registry.svc:5000/{args.coraza_ns}/coraza-operator"
-    pull_image_tag = "dev"
+    pull_image_tag = source_image_tag
 
     print(f"Logging in to OpenShift registry at {registry_host_external}...")
-    run(f"docker login -u kubeadmin -p $(oc whoami -t) {registry_host_external}")
-    
+    run(f"{runtime} login -u kubeadmin -p $(oc whoami -t) {registry_host_external}")
+
     print(f"Tagging and Pushing image to external route: {push_image}...")
-    run(f"docker tag ghcr.io/networking-incubator/coraza-kubernetes-operator:dev {push_image}")
-    run(f"docker push {push_image}")
+    run(f"{runtime} tag {source_image} {push_image}")
+    run(f"{runtime} push {push_image}")
 
     print(f"Deploying operator via Helm (pulling from internal registry: {pull_image_repo}:{pull_image_tag})...")
     run(
