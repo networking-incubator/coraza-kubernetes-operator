@@ -110,6 +110,8 @@ spec:
                             description: |-
                               workloadSelector specifies the selection criteria for attaching the WAF to
                               Istio resources.
+
+                              Required when mode is "gateway".
                             properties:
                               matchExpressions:
                                 description: matchExpressions is a list of label selector
@@ -156,7 +158,6 @@ spec:
                             x-kubernetes-map-type: atomic
                         required:
                         - image
-                        - workloadSelector
                         type: object
                         x-kubernetes-validations:
                         - message: workloadSelector is required when mode is gateway

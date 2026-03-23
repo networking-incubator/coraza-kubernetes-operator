@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -368,11 +369,11 @@ func TestEngineReconciler_ValidationRejection(t *testing.T) {
 		},
 	}
 
-	for _, tt := range tests {
+	for i, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Logf("Attempting to create Engine with invalid configuration: %s", tt.name)
 			engine := tt.engineFunc()
-			engine.Name = "validation-test-" + t.Name()
+			engine.Name = fmt.Sprintf("validation-test-%d", i)
 			engine.Namespace = testNamespace
 
 			err := k8sClient.Create(ctx, engine)
