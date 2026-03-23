@@ -162,8 +162,6 @@ spec:
                         - message: workloadSelector is required when mode is gateway
                           rule: 'self.mode == ''gateway'' ? has(self.workloadSelector)
                             : true'
-                    required:
-                    - wasm
                     type: object
                     x-kubernetes-validations:
                     - message: exactly one integration mechanism (Wasm, etc) must
