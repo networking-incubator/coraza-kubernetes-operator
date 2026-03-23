@@ -156,6 +156,7 @@ spec:
                             x-kubernetes-map-type: atomic
                         required:
                         - image
+                        - workloadSelector
                         type: object
                         x-kubernetes-validations:
                         - message: workloadSelector is required when mode is gateway
