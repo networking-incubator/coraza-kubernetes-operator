@@ -78,7 +78,7 @@ func (r *RuleSetReconciler) findRuleSetsForSecret(ctx context.Context, secret cl
 
 	var requests []reconcile.Request
 	for _, ruleSet := range ruleSetList.Items {
-		if ruleSet.Spec.RuleData != "" && ruleSet.Spec.RuleData == secret.GetName() {
+		if ruleSet.Spec.RuleData != nil && *ruleSet.Spec.RuleData == secret.GetName() {
 			req := ctrl.Request{
 				NamespacedName: types.NamespacedName{
 					Name:      ruleSet.Name,

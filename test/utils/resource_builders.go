@@ -51,16 +51,21 @@ func NewTestRuleSet(opts RuleSetOptions) *wafv1alpha1.RuleSet {
 		}
 	}
 
-	return &wafv1alpha1.RuleSet{
+	ruleset := &wafv1alpha1.RuleSet{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      opts.Name,
 			Namespace: opts.Namespace,
 		},
 		Spec: wafv1alpha1.RuleSetSpec{
-			Rules:    opts.Rules,
-			RuleData: opts.RuleData,
+			Rules: opts.Rules,
 		},
 	}
+
+	if opts.RuleData != "" {
+		ruleset.Spec.RuleData = &opts.RuleData
+	}
+
+	return ruleset
 }
 
 // NewTestConfigMap creates a test ConfigMap with WAF rules
@@ -140,21 +145,21 @@ func NewTestEngine(opts EngineOptions) *wafv1alpha1.Engine {
 			RuleSet: wafv1alpha1.RuleSetReference{
 				Name: opts.RuleSetName,
 			},
-			Driver: wafv1alpha1.DriverConfig{
+			Driver: &wafv1alpha1.DriverConfig{
 				Istio: &wafv1alpha1.IstioDriverConfig{
 					Wasm: &wafv1alpha1.IstioWasmConfig{
 						Image: opts.WasmImage,
 						WorkloadSelector: &metav1.LabelSelector{
 							MatchLabels: opts.WorkloadLabels,
 						},
-						Mode: opts.IstioIntegrationMode,
+						Mode: &opts.IstioIntegrationMode,
 						RuleSetCacheServer: &wafv1alpha1.RuleSetCacheServerConfig{
-							PollIntervalSeconds: opts.PollIntervalSeconds,
+							PollIntervalSeconds: &opts.PollIntervalSeconds,
 						},
 					},
 				},
 			},
-			FailurePolicy: opts.FailurePolicy,
+			FailurePolicy: &opts.FailurePolicy,
 		},
 	}
 }

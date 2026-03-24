@@ -1,0 +1,33 @@
+version: "2"
+run:
+  allow-parallel-runners: true
+linters:
+  default: none
+  enable:
+    - kubeapilinter
+  settings:
+    custom:
+      kubeapilinter:
+        type: module
+        description: Kube API Linter lints Kube like APIs based on API conventions and best practices.
+        settings:
+          linters: {}
+          lintersConfig: {}
+  exclusions:
+    generated: lax
+    rules:
+      - linters:
+          - kubeapilinter
+        path: "^pkg/"
+      - linters:
+          - kubeapilinter
+        path: "^test/"
+      - linters:
+          - kubeapilinter
+        path: "^internal/"
+      - linters:
+          - kubeapilinter
+        path: "^cmd/"
+      - linters:
+          - kubeapilinter
+        path: "^tools/"

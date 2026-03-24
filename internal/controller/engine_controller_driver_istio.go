@@ -106,14 +106,19 @@ func (r *EngineReconciler) provisionIstioEngineWithWasm(ctx context.Context, log
 func (r *EngineReconciler) buildWasmPlugin(engine *wafv1alpha1.Engine) *unstructured.Unstructured {
 	rulesetKey := fmt.Sprintf("%s/%s", engine.Namespace, engine.Spec.RuleSet.Name)
 
+	failurePolicy := wafv1alpha1.FailurePolicyFail
+	if engine.Spec.FailurePolicy != nil {
+		failurePolicy = *engine.Spec.FailurePolicy
+	}
+
 	pluginConfig := map[string]any{
 		"cache_server_instance": rulesetKey,
 		"cache_server_cluster":  r.ruleSetCacheServerCluster,
-		"failure_policy":        string(engine.Spec.FailurePolicy),
+		"failure_policy":        string(failurePolicy),
 	}
 
-	if engine.Spec.Driver.Istio.Wasm.RuleSetCacheServer != nil {
-		pluginConfig["rule_reload_interval_seconds"] = engine.Spec.Driver.Istio.Wasm.RuleSetCacheServer.PollIntervalSeconds
+	if engine.Spec.Driver.Istio.Wasm.RuleSetCacheServer != nil && engine.Spec.Driver.Istio.Wasm.RuleSetCacheServer.PollIntervalSeconds != nil {
+		pluginConfig["rule_reload_interval_seconds"] = *engine.Spec.Driver.Istio.Wasm.RuleSetCacheServer.PollIntervalSeconds
 	}
 
 	matchLabels := engine.Spec.Driver.Istio.Wasm.WorkloadSelector.MatchLabels

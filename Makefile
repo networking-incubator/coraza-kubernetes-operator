@@ -144,6 +144,10 @@ lint.fix: golangci-lint
 lint.config: golangci-lint
 	"$(GOLANGCI_LINT)" config verify
 
+.PHONY: lint.api
+lint.api: kube-api-linter
+	"$(KUBE_API_LINTER)" run --config .kubeapilinter.yml ./...
+
 # ------------------------------------------------------------------------------
 # Test Cluster
 # ------------------------------------------------------------------------------
@@ -368,10 +372,12 @@ KIND ?= kind
 CONTROLLER_GEN ?= $(LOCALBIN)/controller-gen
 GOLANGCI_LINT = $(LOCALBIN)/golangci-lint
 OPERATOR_SDK ?= $(LOCALBIN)/operator-sdk
+KUBE_API_LINTER = $(LOCALBIN)/golangci-lint-kube-api-linter
 
 CONTROLLER_TOOLS_VERSION ?= v0.19.0
 GOLANGCI_LINT_VERSION ?= v2.5.0
 OPERATOR_SDK_VERSION ?= v1.42.0
+KUBE_API_LINTER_VERSION ?= v0.0.0-20260206102632-39e3d06a2850
 
 .PHONY: controller-gen
 controller-gen: $(CONTROLLER_GEN)
@@ -399,6 +405,11 @@ $(OPERATOR_SDK): $(LOCALBIN)
 	chmod +x "$(OPERATOR_SDK)-$(OPERATOR_SDK_VERSION)"; \
 	}
 	@ln -sf "$$(realpath "$(OPERATOR_SDK)-$(OPERATOR_SDK_VERSION)")" "$(OPERATOR_SDK)"
+
+.PHONY: kube-api-linter
+kube-api-linter: $(KUBE_API_LINTER)
+$(KUBE_API_LINTER): $(LOCALBIN)
+	$(call go-install-tool,$(KUBE_API_LINTER),sigs.k8s.io/kube-api-linter/cmd/golangci-lint-kube-api-linter,$(KUBE_API_LINTER_VERSION))
 
 define go-install-tool
 @[ -f "$(1)-$(3)" ] && [ "$$(readlink -- "$(1)" 2>/dev/null)" = "$(1)-$(3)" ] || { \

@@ -277,7 +277,7 @@ func TestRuleSetReconciler_ValidationRejection(t *testing.T) {
 			name:          "no rules specified",
 			ruleSetName:   "no-rules-ruleset",
 			rules:         []wafv1alpha1.RuleSourceReference{},
-			expectedError: "spec.rules in body should have at least 1 items",
+			expectedError: "spec.rules: Required value",
 		},
 		{
 			name:        "too many rules",
@@ -297,7 +297,7 @@ func TestRuleSetReconciler_ValidationRejection(t *testing.T) {
 			rules: []wafv1alpha1.RuleSourceReference{
 				{Name: ""},
 			},
-			expectedError: "spec.rules[0].name in body should be at least 1 chars long",
+			expectedError: "spec.rules[0].name: Required value",
 		},
 	}
 
