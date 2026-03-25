@@ -28,6 +28,8 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/event"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 )
 
 // -----------------------------------------------------------------------------
@@ -104,6 +106,26 @@ func setStatusReady(log logr.Logger, req ctrl.Request, kind string, conditions *
 	setConditionTrue(conditions, generation, "Ready", reason, message)
 	apimeta.RemoveStatusCondition(conditions, "Degraded")
 	apimeta.RemoveStatusCondition(conditions, "Progressing")
+}
+
+// -----------------------------------------------------------------------------
+// Predicate Utilities
+// -----------------------------------------------------------------------------
+
+// annotationChangedPredicate returns a predicate that triggers on Update events
+// when the value of the specified annotation key differs between old and new objects.
+func annotationChangedPredicate(key string) predicate.Predicate {
+	return predicate.Funcs{
+		CreateFunc:  func(e event.CreateEvent) bool { return false },
+		DeleteFunc:  func(e event.DeleteEvent) bool { return false },
+		GenericFunc: func(e event.GenericEvent) bool { return false },
+		UpdateFunc: func(e event.UpdateEvent) bool {
+			if e.ObjectOld == nil || e.ObjectNew == nil {
+				return false
+			}
+			return e.ObjectOld.GetAnnotations()[key] != e.ObjectNew.GetAnnotations()[key]
+		},
+	}
 }
 
 // -----------------------------------------------------------------------------
