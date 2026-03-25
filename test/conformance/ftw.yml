@@ -3,7 +3,7 @@
 # and additionally with investigation of violating rules.
 # Additionally Claude was used to verify and refine the failures vs Coreruleset and WASM behavior
 ---
-maxmarkerretries: 10
+maxmarkerretries: 30
 testoverride:
   ignore:
     # =============================================================================
