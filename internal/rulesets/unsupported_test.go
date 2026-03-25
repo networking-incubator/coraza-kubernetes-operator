@@ -228,6 +228,22 @@ func TestCheckUnsupportedRules_DuplicateIDsDeduped(t *testing.T) {
 	assert.Equal(t, 950150, found[0].ID)
 }
 
+func TestCheckUnsupportedRules_CommentedOutRulesIgnored(t *testing.T) {
+	rules := `# SecRule RESPONSE_BODY "@rx error" "id:950150,phase:4,deny"
+SecRule REQUEST_URI "@contains /admin" "id:1,phase:1,deny"`
+	found := CheckUnsupportedRules(rules)
+	assert.Nil(t, found, "commented-out unsupported rule should be ignored")
+}
+
+func TestCheckUnsupportedRules_MixedCommentAndActive(t *testing.T) {
+	rules := `# This rule is disabled:
+# SecRule RESPONSE_BODY "@rx error" "id:950150,phase:4,deny"
+SecRule REQUEST_URI "@rx test" "id:911100,phase:1,pass"`
+	found := CheckUnsupportedRules(rules)
+	require.Len(t, found, 1)
+	assert.Equal(t, 911100, found[0].ID, "only the active unsupported rule should be detected")
+}
+
 func TestCheckUnsupportedRules_QuotedIDs(t *testing.T) {
 	rules := `SecRule REQUEST_URI "@rx test" "id:'950150',phase:1,pass"`
 	found := CheckUnsupportedRules(rules)

@@ -40,9 +40,11 @@ var unsupportedRules = buildRegistry()
 // Unsupported Rules Analysis
 // -----------------------------------------------------------------------------
 
-// CheckUnsupportedRules scans rule text for IDs known to be unsupported.
+// CheckUnsupportedRules scans active (non-comment) rule directives for IDs
+// known to be unsupported. Lines starting with # are ignored.
 func CheckUnsupportedRules(rules string) []UnsupportedRule {
-	matches := ruleIDPattern.FindAllStringSubmatch(rules, -1)
+	active := stripCommentLines(rules)
+	matches := ruleIDPattern.FindAllStringSubmatch(active, -1)
 	if len(matches) == 0 {
 		return nil
 	}
@@ -290,4 +292,19 @@ func ruleIDsByTier(tier Tier) []int {
 	sort.Ints(ids)
 
 	return ids
+}
+
+// stripCommentLines returns rules with comment-only lines removed.
+// SecLang comments are lines whose first non-whitespace character is #.
+func stripCommentLines(rules string) string {
+	var b strings.Builder
+	for _, line := range strings.Split(rules, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if len(trimmed) == 0 || trimmed[0] == '#' {
+			continue
+		}
+		b.WriteString(line)
+		b.WriteByte('\n')
+	}
+	return b.String()
 }

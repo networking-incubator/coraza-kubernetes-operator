@@ -287,9 +287,10 @@ func (r *RuleSetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	logInfo(log, req, "RuleSet", "Stored rules in cache", "cacheKey", cacheKey)
 
 	patch := client.MergeFrom(ruleset.DeepCopy())
-	msg := buildCacheReadyMessage(ruleset.Namespace, ruleset.Name, unsupportedMsg)
-	r.Recorder.Eventf(&ruleset, nil, "Normal", "RulesCached", "Reconcile", msg)
-	setStatusReady(log, req, "RuleSet", &ruleset.Status.Conditions, ruleset.Generation, "RulesCached", msg)
+	eventMsg := fmt.Sprintf("Successfully cached rules for %s/%s", ruleset.Namespace, ruleset.Name)
+	statusMsg := buildCacheReadyMessage(ruleset.Namespace, ruleset.Name, unsupportedMsg)
+	r.Recorder.Eventf(&ruleset, nil, "Normal", "RulesCached", "Reconcile", eventMsg)
+	setStatusReady(log, req, "RuleSet", &ruleset.Status.Conditions, ruleset.Generation, "RulesCached", statusMsg)
 	if err := r.Status().Patch(ctx, &ruleset, patch); err != nil {
 		logError(log, req, "RuleSet", err, "Failed to patch status")
 		return ctrl.Result{}, err
