@@ -587,8 +587,15 @@ func (s *Scenario) UpdateRuleSet(namespace, name string, configMapNames []string
 	s.T.Logf("Updated RuleSet %s/%s with %v", namespace, name, configMapNames)
 }
 
+// AnnotateRuleSet adds or overwrites a single annotation on an existing RuleSet.
+func (s *Scenario) AnnotateRuleSet(namespace, name, key, value string) {
+	s.T.Helper()
+	arg := fmt.Sprintf("%s=%s", key, value)
+	out, err := s.F.Kubectl(namespace, "annotate", "ruleset", name, arg, "--overwrite").CombinedOutput()
+	require.NoError(s.T, err, "annotate RuleSet %s/%s (%s): %s", namespace, name, arg, string(out))
+}
+
 // UpdateConfigMap replaces the rules data of an existing ConfigMap.
-// Fails the test on error.
 func (s *Scenario) UpdateConfigMap(namespace, name, rules string) {
 	s.T.Helper()
 	ctx := s.T.Context()
