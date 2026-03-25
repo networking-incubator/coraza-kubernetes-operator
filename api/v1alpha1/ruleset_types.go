@@ -21,8 +21,12 @@ import (
 )
 
 const (
-	// RuleDataSecretType contains the type expected for a secret that contains Rules Data
+	// RuleDataSecretType is the expected type for a Secret that contains rule data files.
 	RuleDataSecretType = "coraza/data"
+
+	// AnnotationSkipUnsupportedRulesCheck is an annotation to disable the unsupported
+	// rules degredation on a RuleSet (it will still log).
+	AnnotationSkipUnsupportedRulesCheck = "waf.k8s.coraza.io/skip-unsupported-rules-check"
 )
 
 // RuleSourceReference is a reference to a ConfigMap that contains WAF rules.
