@@ -275,7 +275,7 @@ def deploy_coraza_operator(context: str) -> None:
         "CONTROLLER_MANAGER_CONTAINER_IMAGE_BASE",
         "ghcr.io/networking-incubator/coraza-kubernetes-operator",
     )
-    image_tag = os.environ.get("CONTROLLER_MANAGER_CONTAINER_IMAGE_TAG", "dev")
+    image_tag = os.environ.get("CONTROLLER_MANAGER_CONTAINER_IMAGE_TAG", "v0.0.0-dev")
 
     run(
         f"helm upgrade --install {helm_release_name} {helm_chart_dir} "

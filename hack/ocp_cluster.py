@@ -204,7 +204,7 @@ def deploy_coraza_operator(args):
         "CONTROLLER_MANAGER_CONTAINER_IMAGE_BASE",
         "ghcr.io/networking-incubator/coraza-kubernetes-operator",
     )
-    source_image_tag = os.environ.get("CONTROLLER_MANAGER_CONTAINER_IMAGE_TAG", "dev")
+    source_image_tag = os.environ.get("CONTROLLER_MANAGER_CONTAINER_IMAGE_TAG", "v0.0.0-dev")
     source_image = f"{source_image_repo}:{source_image_tag}"
 
     # --- REGISTRY ---
