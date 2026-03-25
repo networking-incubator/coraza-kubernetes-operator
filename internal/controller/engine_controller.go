@@ -25,6 +25,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -50,6 +51,8 @@ import (
 // +kubebuilder:rbac:groups=waf.k8s.coraza.io,resources=engines,verbs=get;list;watch;patch;update
 // +kubebuilder:rbac:groups=waf.k8s.coraza.io,resources=engines/finalizers,verbs=update
 // +kubebuilder:rbac:groups=waf.k8s.coraza.io,resources=engines/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=waf.k8s.coraza.io,resources=rulesets,verbs=get;list;watch
+// +kubebuilder:rbac:groups=waf.k8s.coraza.io,resources=rulesets/status,verbs=get
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gateways,verbs=list;watch
 
 // -----------------------------------------------------------------------------
@@ -85,6 +88,7 @@ func (r *EngineReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		For(&wafv1alpha1.Engine{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		Owns(wasmPlugin).
 		Watches(gateway, handler.EnqueueRequestsFromMapFunc(r.findEnginesForGateway)).
+		Watches(&wafv1alpha1.RuleSet{}, handler.EnqueueRequestsFromMapFunc(r.findEnginesForRuleSet)).
 		Watches(&corev1.Pod{}, handler.EnqueueRequestsFromMapFunc(r.findEnginesForGateway), builder.WithPredicates(
 			predicate.NewPredicateFuncs(func(object client.Object) bool {
 				_, hasGWAPI := object.GetLabels()[gatewayNameLabel]
@@ -99,6 +103,32 @@ func (r *EngineReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		}).
 		Named("engine").
 		Complete(r)
+}
+
+// findEnginesForRuleSet maps a RuleSet to the Engines in the same namespace that reference it.
+func (r *EngineReconciler) findEnginesForRuleSet(ctx context.Context, ruleSet client.Object) []reconcile.Request {
+	log := logf.FromContext(ctx)
+
+	var engineList wafv1alpha1.EngineList
+	if err := r.List(ctx, &engineList, client.InNamespace(ruleSet.GetNamespace())); err != nil {
+		log.Error(err, "Engine: Failed to list Engines", "namespace", ruleSet.GetNamespace())
+		return nil
+	}
+
+	var requests []reconcile.Request
+	for _, engine := range engineList.Items {
+		if engine.Spec.RuleSet.Name == ruleSet.GetName() {
+			req := reconcile.Request{
+				NamespacedName: types.NamespacedName{
+					Name:      engine.Name,
+					Namespace: engine.Namespace,
+				},
+			}
+			requests = append(requests, req)
+		}
+	}
+
+	return requests
 }
 
 // findEnginesForGateway maps a Gateway to the Engines in the same namespace.
@@ -157,6 +187,13 @@ func (r *EngineReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		}
 	}
 
+	logDebug(log, req, "Engine", "Checking referenced RuleSet status")
+	if degraded, err := r.isRuleSetDegraded(ctx, log, req, &engine); err != nil {
+		return ctrl.Result{}, err
+	} else if degraded {
+		return ctrl.Result{}, nil
+	}
+
 	logInfo(log, req, "Engine", "Selecting driver and provisioning")
 	return r.selectDriver(ctx, log, req, engine)
 }
@@ -178,6 +215,53 @@ func (r *EngineReconciler) selectDriver(ctx context.Context, log logr.Logger, re
 	default:
 		return ctrl.Result{}, r.handleInvalidDriverConfiguration(ctx, log, req, &engine)
 	}
+}
+
+// -----------------------------------------------------------------------------
+// Engine Controller - RuleSet Status Check
+// -----------------------------------------------------------------------------
+
+// isRuleSetDegraded fetches the Engine's referenced RuleSet and returns true if
+// it is currently Degraded. When degraded, it marks the Engine Degraded and
+// returns (true, nil). A retriable system error returns (false, err).
+func (r *EngineReconciler) isRuleSetDegraded(ctx context.Context, log logr.Logger, req ctrl.Request, engine *wafv1alpha1.Engine) (bool, error) {
+	var ruleSet wafv1alpha1.RuleSet
+	if err := r.Get(ctx, types.NamespacedName{Name: engine.Spec.RuleSet.Name, Namespace: engine.Namespace}, &ruleSet); err != nil {
+		if apierrors.IsNotFound(err) {
+			msg := fmt.Sprintf("RuleSet %s not found", engine.Spec.RuleSet.Name)
+			logInfo(log, req, "Engine", "RuleSet not found; marking Engine degraded", "ruleSet", engine.Spec.RuleSet.Name)
+			r.Recorder.Eventf(engine, nil, "Warning", "RuleSetNotFound", "Reconcile", msg)
+			patch := client.MergeFrom(engine.DeepCopy())
+			setStatusConditionDegraded(log, req, "Engine", &engine.Status.Conditions, engine.Generation, "RuleSetNotFound", msg)
+			if updateErr := r.Status().Patch(ctx, engine, patch); updateErr != nil {
+				logError(log, req, "Engine", updateErr, "Failed to patch status after RuleSet not found")
+				return true, updateErr
+			}
+			return true, nil
+		}
+		logError(log, req, "Engine", err, "Failed to get RuleSet")
+		return false, fmt.Errorf("failed to get RuleSet %s: %w", engine.Spec.RuleSet.Name, err)
+	}
+	if ruleSet.Status == nil {
+		return false, nil
+	}
+
+	degradedCond := apimeta.FindStatusCondition(ruleSet.Status.Conditions, "Degraded")
+	if degradedCond == nil || degradedCond.Status != metav1.ConditionTrue {
+		return false, nil
+	}
+
+	msg := fmt.Sprintf("RuleSet %s is degraded: %s", engine.Spec.RuleSet.Name, degradedCond.Message)
+	logInfo(log, req, "Engine", "RuleSet is degraded; marking Engine degraded", "ruleSet", engine.Spec.RuleSet.Name)
+	r.Recorder.Eventf(engine, nil, "Warning", "RuleSetDegraded", "Reconcile", msg)
+	patch := client.MergeFrom(engine.DeepCopy())
+	setStatusConditionDegraded(log, req, "Engine", &engine.Status.Conditions, engine.Generation, "RuleSetDegraded", msg)
+	if updateErr := r.Status().Patch(ctx, engine, patch); updateErr != nil {
+		logError(log, req, "Engine", updateErr, "Failed to patch status")
+		return true, updateErr
+	}
+
+	return true, nil
 }
 
 // -----------------------------------------------------------------------------

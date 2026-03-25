@@ -23,10 +23,12 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	wafv1alpha1 "github.com/networking-incubator/coraza-kubernetes-operator/api/v1alpha1"
 	"github.com/networking-incubator/coraza-kubernetes-operator/test/utils"
@@ -97,12 +99,24 @@ func TestEngineReconciler_ReconcileIstioDriver(t *testing.T) {
 	ctx := context.Background()
 	ns := utils.NewTestEngine(utils.EngineOptions{}).Namespace
 
+	ruleset := utils.NewTestRuleSet(utils.RuleSetOptions{
+		Name:      "test-ruleset",
+		Namespace: ns,
+	})
+	err := k8sClient.Create(ctx, ruleset)
+	require.NoError(t, err)
+	defer func() {
+		if err := k8sClient.Delete(ctx, ruleset); err != nil {
+			t.Logf("Failed to delete ruleset: %v", err)
+		}
+	}()
+
 	t.Log("Creating test engine with Istio driver")
 	engine := utils.NewTestEngine(utils.EngineOptions{
 		Name:      "test-engine",
 		Namespace: ns,
 	})
-	err := k8sClient.Create(ctx, engine)
+	err = k8sClient.Create(ctx, engine)
 	require.NoError(t, err)
 	defer func() {
 		if err := k8sClient.Delete(ctx, engine); err != nil {
@@ -191,6 +205,18 @@ func TestEngineReconciler_StatusUpdateHandling(t *testing.T) {
 
 func TestEngineReconciler_FailurePolicyInWasmPluginConfig(t *testing.T) {
 	ctx := context.Background()
+
+	ruleset := utils.NewTestRuleSet(utils.RuleSetOptions{
+		Name:      "test-ruleset",
+		Namespace: testNamespace,
+	})
+	err := k8sClient.Create(ctx, ruleset)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		if err := k8sClient.Delete(ctx, ruleset); err != nil {
+			t.Logf("Failed to delete ruleset: %v", err)
+		}
+	})
 
 	tests := []struct {
 		name                  string
@@ -381,4 +407,92 @@ func TestEngineReconciler_ValidationRejection(t *testing.T) {
 			assert.Contains(t, err.Error(), tt.expectedError)
 		})
 	}
+}
+
+func TestEngineReconciler_DegradedWhenRuleSetDegraded(t *testing.T) {
+	ctx := context.Background()
+
+	t.Log("Creating RuleSet with a Degraded status condition")
+	ruleSet := utils.NewTestRuleSet(utils.RuleSetOptions{
+		Name:      "degraded-ruleset",
+		Namespace: testNamespace,
+	})
+	require.NoError(t, k8sClient.Create(ctx, ruleSet))
+	t.Cleanup(func() {
+		if err := k8sClient.Delete(ctx, ruleSet); err != nil {
+			t.Logf("Failed to delete RuleSet: %v", err)
+		}
+	})
+
+	t.Log("Setting RuleSet status to Degraded")
+	patch := client.MergeFrom(ruleSet.DeepCopy())
+	if ruleSet.Status == nil {
+		ruleSet.Status = &wafv1alpha1.RuleSetStatus{}
+	}
+	apimeta.SetStatusCondition(&ruleSet.Status.Conditions, metav1.Condition{
+		Type:               "Degraded",
+		Status:             metav1.ConditionTrue,
+		Reason:             "UnsupportedRules",
+		Message:            "rule 950150: response body inspection is unsupported",
+		LastTransitionTime: metav1.Now(),
+	})
+	apimeta.SetStatusCondition(&ruleSet.Status.Conditions, metav1.Condition{
+		Type:               "Ready",
+		Status:             metav1.ConditionFalse,
+		Reason:             "UnsupportedRules",
+		Message:            "rule 950150: response body inspection is unsupported",
+		LastTransitionTime: metav1.Now(),
+	})
+	require.NoError(t, k8sClient.Status().Patch(ctx, ruleSet, patch))
+
+	t.Log("Creating Engine referencing the degraded RuleSet")
+	engine := utils.NewTestEngine(utils.EngineOptions{
+		Name:        "engine-with-degraded-ruleset",
+		Namespace:   testNamespace,
+		RuleSetName: ruleSet.Name,
+	})
+	require.NoError(t, k8sClient.Create(ctx, engine))
+	t.Cleanup(func() {
+		if err := k8sClient.Delete(ctx, engine); err != nil {
+			t.Logf("Failed to delete Engine: %v", err)
+		}
+	})
+
+	t.Log("Reconciling Engine")
+	recorder := utils.NewFakeRecorder()
+	reconciler := &EngineReconciler{
+		Client:                    k8sClient,
+		Scheme:                    scheme,
+		Recorder:                  recorder,
+		ruleSetCacheServerCluster: "test-cluster",
+	}
+	result, err := reconciler.Reconcile(ctx, ctrl.Request{
+		NamespacedName: types.NamespacedName{
+			Name:      engine.Name,
+			Namespace: engine.Namespace,
+		},
+	})
+	require.NoError(t, err)
+	assert.False(t, result.Requeue)
+
+	t.Log("Verifying Engine is marked Degraded with reason RuleSetDegraded")
+	var updated wafv1alpha1.Engine
+	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{
+		Name:      engine.Name,
+		Namespace: engine.Namespace,
+	}, &updated))
+
+	require.NotNil(t, updated.Status)
+	degradedCond := apimeta.FindStatusCondition(updated.Status.Conditions, "Degraded")
+	require.NotNil(t, degradedCond, "Engine should have Degraded condition")
+	assert.Equal(t, metav1.ConditionTrue, degradedCond.Status)
+	assert.Equal(t, "RuleSetDegraded", degradedCond.Reason)
+	assert.Contains(t, degradedCond.Message, ruleSet.Name)
+
+	readyCond := apimeta.FindStatusCondition(updated.Status.Conditions, "Ready")
+	require.NotNil(t, readyCond)
+	assert.Equal(t, metav1.ConditionFalse, readyCond.Status)
+
+	assert.True(t, recorder.HasEvent("Warning", "RuleSetDegraded"),
+		"expected Warning/RuleSetDegraded event; got: %v", recorder.Events)
 }
