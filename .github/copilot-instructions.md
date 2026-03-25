@@ -95,6 +95,15 @@ This operator manages Web Application Firewall rules. Security is paramount:
 - Variable naming: Follow Go conventions. Use `ctx` for context.Context, `req` for reconcile.Request, short names for small scopes, descriptive names for larger scopes.
 - Avoid naked returns in functions longer than 5-10 lines.
 
+### Functional Programming Style
+
+Favor a functional programming inspired approach where practical:
+
+- **Pure functions over methods with side effects:** Extract logic into functions that take inputs and return outputs. Keep side effects (API calls, status patches, event recording) at the call site, not buried inside helpers.
+- **Small, composable functions:** Break reconciliation logic into focused functions that each do one thing (e.g., `validateAggregatedRules`, `rejectUnsupportedRules`, `buildCacheReadyMessage`, `buildWasmPlugin`).
+- **Early returns for error/edge cases:** Handle failures at the top, keep the happy path unindented.
+- **Immutable-by-default thinking:** Avoid package-level mutable state when feasible.
+
 ## Review Checklist
 
 When reviewing PRs, systematically check:

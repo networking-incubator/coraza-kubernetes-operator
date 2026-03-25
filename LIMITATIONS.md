@@ -6,6 +6,23 @@ This document describes behavioral differences and limitations when running Cora
 	
 [Engine Modes Epic]:https://github.com/networking-incubator/coraza-kubernetes-operator/issues/171
 
+## Operator Behavior
+
+The RuleSet controller **automatically detects and rejects** any RuleSet containing rules listed in this document. When unsupported rules are found:
+
+- The RuleSet is marked **Degraded** with reason `UnsupportedRules` and a message listing each unsupported rule ID, its category, and a brief description.
+- The new, rejected revision is **not cached**. If a previous valid revision was already cached, that last-known-good entry continues to be served until the unsupported rules are removed and a new valid revision is reconciled.
+- The RuleSet will not be requeued automatically — the user must remove or replace the unsupported rules and update the ConfigMap(s) to produce a new, valid cached revision.
+- This behavior can be overridden with the annotation `waf.k8s.coraza.io/skip-unsupported-rules-check: "true"`. The issue will still be logged and reported, but wont block.
+Unsupported rules are classified into two tiers:
+
+| Tier | Meaning |
+|------|---------|
+| **Incompatible** | Rules that genuinely do not function in WASM mode. They fail silently and provide no protection. |
+| **Redundant** | Rules that work, but where Envoy handles certain attack cases before they reach the WAF. Some conformance test cases behave differently. |
+
+Both tiers are rejected by default. For the complete list of affected rule IDs, see the categories below.
+
 ## Overview
 
 Out of approximately 3,300 CoreRuleSet conformance tests, 190 tests (6%) are currently ignored, resulting in a 94% pass rate. These ignored tests fall into four categories:

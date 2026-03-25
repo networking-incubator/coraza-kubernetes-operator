@@ -93,7 +93,7 @@ and the source-of-truth / generation pipeline reference.
 
 Contributions are welcome!
 
-See [CONTRIBUTING.md](CONTRIBUTING.md).
+Please see the [CONTRIBUTING.md](CONTRIBUTING.md) guide before you get started.
 
 ## License
 
