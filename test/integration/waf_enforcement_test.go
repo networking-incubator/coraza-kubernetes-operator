@@ -83,34 +83,35 @@ func TestBlockByStatusCode(t *testing.T) {
 	}
 }
 
-// TestAllowPolicyOnFailure tests that failurePolicy: allow lets traffic through
-// when the WAF encounters issues (e.g., missing RuleSet).
-func TestAllowPolicyOnFailure(t *testing.T) {
+// TestDegradedEngineDoesNotBlockTraffic verifies that an Engine referencing a
+// non-existent RuleSet becomes Degraded (no WasmPlugin is created) and traffic
+// continues to flow through the Gateway without being blocked when failure
+// mode is set to "allow".
+func TestDegradedEngineDoesNotBlockTraffic(t *testing.T) {
 	t.Parallel()
 	s := fw.NewScenario(t)
 
-	ns := s.GenerateNamespace("allow-policy")
+	ns := s.GenerateNamespace("degraded-engine")
 
 	s.Step("create gateway")
 	s.CreateGateway(ns, "gw")
 	s.ExpectGatewayProgrammed(ns, "gw")
 
-	s.Step("create engine with allow policy referencing non-existent ruleset")
+	s.Step("create engine referencing non-existent ruleset")
 	s.CreateEngine(ns, "engine", framework.EngineOpts{
 		RuleSetName:   "nonexistent-ruleset",
 		GatewayName:   "gw",
 		FailurePolicy: wafv1alpha1.FailurePolicyAllow,
 	})
 
-	s.Step("verify engine reconciled and WasmPlugin exists")
-	s.ExpectEngineReady(ns, "engine")
-	s.ExpectWasmPluginExists(ns, "coraza-engine-engine")
+	s.Step("verify engine is degraded due to missing ruleset")
+	s.ExpectEngineDegraded(ns, "engine")
 
 	s.Step("deploy backend and route")
 	s.CreateEchoBackend(ns, "echo")
 	s.CreateHTTPRoute(ns, "route", "gw", "echo")
 
-	s.Step("verify traffic is allowed despite missing ruleset")
+	s.Step("verify traffic flows through gateway without WAF")
 	gw := s.ProxyToGateway(ns, "gw")
 	gw.ExpectAllowed("/")
 	gw.ExpectAllowed("/?potentially=malicious")
