@@ -150,10 +150,12 @@ func TestCoreRuleSetConformance(t *testing.T) {
 	// Stream logs to file with immediate writes (no buffering)
 	outputErrors := make([]error, 0)
 	logDone := make(chan struct{})
+	logsReady := make(chan struct{}) // Signal when first logs are written
 	go func() {
 		defer close(logDone)
 		buf := make([]byte, 1024)
 		totalBytes := 0
+		firstWrite := true
 		for {
 			n, err := logStream.Read(buf)
 			if n > 0 {
@@ -165,6 +167,12 @@ func TestCoreRuleSetConformance(t *testing.T) {
 				err = logFile.Sync() // Force immediate write to disk
 				if err != nil {
 					outputErrors = append(outputErrors, err)
+				}
+				// Signal that logs are ready after first successful write+sync
+				if firstWrite {
+					close(logsReady)
+					firstWrite = false
+					t.Logf("log streaming started (wrote %d bytes)", n)
 				}
 			}
 			if err != nil {
@@ -205,6 +213,16 @@ func TestCoreRuleSetConformance(t *testing.T) {
 	cfg.LogFile = logFile.Name()
 	cfg.TestOverride.Overrides.DestAddr = new(gwUrl.Hostname())
 	cfg.TestOverride.Overrides.Port = &port
+
+	// Wait for log streaming to start before running FTW tests
+	// This prevents the "can't find log marker" race condition
+	s.Step("wait for log streaming to start")
+	select {
+	case <-logsReady:
+		t.Log("log streaming confirmed ready")
+	case <-time.After(30 * time.Second):
+		t.Fatal("timeout waiting for log streaming to start - no logs received after 30s")
+	}
 
 	// -------------------------------------------------------------------------
 	// Step 6: Run FTW tests
