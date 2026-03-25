@@ -688,3 +688,332 @@ func TestRuleSetReconciler_ValidateRules(t *testing.T) {
 		assert.Contains(t, ready.Message, "open rule1.data: data does not exist")
 	})
 }
+
+func TestRuleSetReconciler_UnsupportedRules(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("ruleset with unsupported rule should be rejected", func(t *testing.T) {
+		ruleSetCache := cache.NewRuleSetCache()
+
+		t.Log("Creating ConfigMap with an unsupported response body inspection rule")
+		cm := utils.NewTestConfigMap("unsupported-rules", testNamespace,
+			`SecRule RESPONSE_BODY "@rx error" "id:950150,phase:4,deny,status:403,msg:'Data leakage'"`)
+		require.NoError(t, k8sClient.Create(ctx, cm))
+		t.Cleanup(func() {
+			if err := k8sClient.Delete(ctx, cm); err != nil {
+				t.Logf("Failed to delete ConfigMap: %v", err)
+			}
+		})
+
+		ruleSet := utils.NewTestRuleSet(utils.RuleSetOptions{
+			Name:      "unsupported-ruleset",
+			Namespace: testNamespace,
+			Rules: []wafv1alpha1.RuleSourceReference{
+				{Name: "unsupported-rules"},
+			},
+		})
+		require.NoError(t, k8sClient.Create(ctx, ruleSet))
+		t.Cleanup(func() {
+			if err := k8sClient.Delete(ctx, ruleSet); err != nil {
+				t.Logf("Failed to delete RuleSet: %v", err)
+			}
+		})
+
+		recorder := utils.NewFakeRecorder()
+		reconciler := &RuleSetReconciler{
+			Client:   k8sClient,
+			Scheme:   scheme,
+			Recorder: recorder,
+			Cache:    ruleSetCache,
+		}
+
+		result, err := reconciler.Reconcile(ctx, ctrl.Request{
+			NamespacedName: types.NamespacedName{
+				Name:      ruleSet.Name,
+				Namespace: ruleSet.Namespace,
+			},
+		})
+
+		require.NoError(t, err, "should not return error (non-retriable)")
+		assert.Equal(t, reconcile.Result{}, result)
+
+		t.Log("Verifying cache was NOT populated")
+		cacheKey := testNamespace + "/unsupported-ruleset"
+		_, ok := ruleSetCache.Get(cacheKey)
+		assert.False(t, ok, "cache should be empty for rejected ruleset")
+
+		t.Log("Verifying status conditions")
+		require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{
+			Name:      ruleSet.Name,
+			Namespace: ruleSet.Namespace,
+		}, ruleSet))
+		ready := apimeta.FindStatusCondition(ruleSet.Status.Conditions, "Ready")
+		require.NotNil(t, ready)
+		assert.Equal(t, metav1.ConditionFalse, ready.Status)
+		assert.Equal(t, "UnsupportedRules", ready.Reason)
+		assert.Contains(t, ready.Message, "950150")
+		assert.Contains(t, ready.Message, "response body inspection")
+
+		degraded := apimeta.FindStatusCondition(ruleSet.Status.Conditions, "Degraded")
+		require.NotNil(t, degraded)
+		assert.Equal(t, metav1.ConditionTrue, degraded.Status)
+		assert.Equal(t, "UnsupportedRules", degraded.Reason)
+
+		t.Log("Verifying event was recorded")
+		assert.True(t, recorder.HasEvent("Warning", "UnsupportedRules"),
+			"expected Warning/UnsupportedRules event; got: %v", recorder.Events)
+	})
+
+	t.Run("ruleset with only supported rules should succeed", func(t *testing.T) {
+		ruleSetCache := cache.NewRuleSetCache()
+
+		t.Log("Creating ConfigMap with only supported rules")
+		cm := utils.NewTestConfigMap("supported-rules", testNamespace,
+			`SecRule REQUEST_URI "@contains /admin" "id:1,phase:1,deny,status:403"`)
+		require.NoError(t, k8sClient.Create(ctx, cm))
+		t.Cleanup(func() {
+			if err := k8sClient.Delete(ctx, cm); err != nil {
+				t.Logf("Failed to delete ConfigMap: %v", err)
+			}
+		})
+
+		ruleSet := utils.NewTestRuleSet(utils.RuleSetOptions{
+			Name:      "supported-ruleset",
+			Namespace: testNamespace,
+			Rules: []wafv1alpha1.RuleSourceReference{
+				{Name: "supported-rules"},
+			},
+		})
+		require.NoError(t, k8sClient.Create(ctx, ruleSet))
+		t.Cleanup(func() {
+			if err := k8sClient.Delete(ctx, ruleSet); err != nil {
+				t.Logf("Failed to delete RuleSet: %v", err)
+			}
+		})
+
+		recorder := utils.NewFakeRecorder()
+		reconciler := &RuleSetReconciler{
+			Client:   k8sClient,
+			Scheme:   scheme,
+			Recorder: recorder,
+			Cache:    ruleSetCache,
+		}
+
+		result, err := reconciler.Reconcile(ctx, ctrl.Request{
+			NamespacedName: types.NamespacedName{
+				Name:      ruleSet.Name,
+				Namespace: ruleSet.Namespace,
+			},
+		})
+
+		require.NoError(t, err)
+		assert.Equal(t, reconcile.Result{}, result)
+
+		t.Log("Verifying cache WAS populated")
+		cacheKey := testNamespace + "/supported-ruleset"
+		entry, ok := ruleSetCache.Get(cacheKey)
+		assert.True(t, ok, "cache should contain entry for valid ruleset")
+		assert.Contains(t, entry.Rules, "id:1")
+
+		t.Log("Verifying Ready status")
+		require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{
+			Name:      ruleSet.Name,
+			Namespace: ruleSet.Namespace,
+		}, ruleSet))
+		ready := apimeta.FindStatusCondition(ruleSet.Status.Conditions, "Ready")
+		require.NotNil(t, ready)
+		assert.Equal(t, metav1.ConditionTrue, ready.Status)
+		assert.Equal(t, "RulesCached", ready.Reason)
+
+		assert.True(t, recorder.HasEvent("Normal", "RulesCached"),
+			"expected Normal/RulesCached event; got: %v", recorder.Events)
+	})
+
+	t.Run("ruleset mixing supported and unsupported rules should be rejected", func(t *testing.T) {
+		ruleSetCache := cache.NewRuleSetCache()
+
+		cmSupported := utils.NewTestConfigMap("mix-supported", testNamespace,
+			`SecRule REQUEST_URI "@contains /test" "id:1,phase:1,pass,nolog"`)
+		require.NoError(t, k8sClient.Create(ctx, cmSupported))
+		t.Cleanup(func() {
+			if err := k8sClient.Delete(ctx, cmSupported); err != nil {
+				t.Logf("Failed to delete ConfigMap: %v", err)
+			}
+		})
+
+		cmUnsupported := utils.NewTestConfigMap("mix-unsupported", testNamespace,
+			`SecRule RESPONSE_BODY "@rx leak" "id:956100,phase:4,deny,status:403"`)
+		require.NoError(t, k8sClient.Create(ctx, cmUnsupported))
+		t.Cleanup(func() {
+			if err := k8sClient.Delete(ctx, cmUnsupported); err != nil {
+				t.Logf("Failed to delete ConfigMap: %v", err)
+			}
+		})
+
+		ruleSet := utils.NewTestRuleSet(utils.RuleSetOptions{
+			Name:      "mixed-ruleset",
+			Namespace: testNamespace,
+			Rules: []wafv1alpha1.RuleSourceReference{
+				{Name: "mix-supported"},
+				{Name: "mix-unsupported"},
+			},
+		})
+		require.NoError(t, k8sClient.Create(ctx, ruleSet))
+		t.Cleanup(func() {
+			if err := k8sClient.Delete(ctx, ruleSet); err != nil {
+				t.Logf("Failed to delete RuleSet: %v", err)
+			}
+		})
+
+		recorder := utils.NewFakeRecorder()
+		reconciler := &RuleSetReconciler{
+			Client:   k8sClient,
+			Scheme:   scheme,
+			Recorder: recorder,
+			Cache:    ruleSetCache,
+		}
+
+		result, err := reconciler.Reconcile(ctx, ctrl.Request{
+			NamespacedName: types.NamespacedName{
+				Name:      ruleSet.Name,
+				Namespace: ruleSet.Namespace,
+			},
+		})
+
+		require.NoError(t, err)
+		assert.Equal(t, reconcile.Result{}, result)
+
+		cacheKey := testNamespace + "/mixed-ruleset"
+		_, ok := ruleSetCache.Get(cacheKey)
+		assert.False(t, ok, "cache should be empty for rejected ruleset")
+
+		assert.True(t, recorder.HasEvent("Warning", "UnsupportedRules"),
+			"expected Warning/UnsupportedRules event; got: %v", recorder.Events)
+	})
+
+	t.Run("previously valid cache entry is preserved when ruleset update introduces unsupported rules", func(t *testing.T) {
+		ruleSetCache := cache.NewRuleSetCache()
+		cacheKey := testNamespace + "/update-to-unsupported"
+
+		t.Log("Pre-populating cache to simulate a previously valid reconciliation")
+		const previousRules = `SecCollectionTimeout 1`
+		ruleSetCache.Put(cacheKey, previousRules, nil)
+		prior, ok := ruleSetCache.Get(cacheKey)
+		require.True(t, ok, "pre-condition: cache entry should exist")
+		priorUUID := prior.UUID
+
+		t.Log("Creating ConfigMap with unsupported rules (simulating a bad update)")
+		cm := utils.NewTestConfigMap("update-to-unsupported-rules", testNamespace,
+			`SecRule RESPONSE_BODY "@rx error" "id:950150,phase:4,deny,status:403,msg:'Bad update'"`)
+		require.NoError(t, k8sClient.Create(ctx, cm))
+		t.Cleanup(func() {
+			if err := k8sClient.Delete(ctx, cm); err != nil {
+				t.Logf("Failed to delete ConfigMap: %v", err)
+			}
+		})
+
+		ruleSet := utils.NewTestRuleSet(utils.RuleSetOptions{
+			Name:      "update-to-unsupported",
+			Namespace: testNamespace,
+			Rules:     []wafv1alpha1.RuleSourceReference{{Name: "update-to-unsupported-rules"}},
+		})
+		require.NoError(t, k8sClient.Create(ctx, ruleSet))
+
+		t.Cleanup(func() {
+			if err := k8sClient.Delete(ctx, ruleSet); err != nil {
+				t.Logf("Failed to delete RuleSet: %v", err)
+			}
+		})
+
+		recorder := utils.NewFakeRecorder()
+		reconciler := &RuleSetReconciler{
+			Client:   k8sClient,
+			Scheme:   scheme,
+			Recorder: recorder,
+			Cache:    ruleSetCache,
+		}
+		result, err := reconciler.Reconcile(ctx, ctrl.Request{
+			NamespacedName: types.NamespacedName{Name: ruleSet.Name, Namespace: ruleSet.Namespace},
+		})
+		require.NoError(t, err)
+		assert.Equal(t, reconcile.Result{}, result)
+
+		t.Log("Verifying the previously valid entry is still served (last-known-good)")
+		entry, ok := ruleSetCache.Get(cacheKey)
+		require.True(t, ok, "prior cache entry must be preserved when update is rejected")
+		assert.Equal(t, priorUUID, entry.UUID, "cache entry must not have changed")
+		assert.Equal(t, previousRules, entry.Rules, "previously cached rules must still be served")
+	})
+
+	t.Run("ruleset with skip annotation should be cached with unsupported rules listed in status", func(t *testing.T) {
+		ruleSetCache := cache.NewRuleSetCache()
+
+		t.Log("Creating ConfigMap with an unsupported response body inspection rule")
+		const unsupportedRule = `SecRule RESPONSE_BODY "@rx error" "id:950150,phase:4,deny,status:403,msg:'Data leakage'"`
+		cm := utils.NewTestConfigMap("skip-annotation-rules", testNamespace, unsupportedRule)
+		require.NoError(t, k8sClient.Create(ctx, cm))
+		t.Cleanup(func() {
+			if err := k8sClient.Delete(ctx, cm); err != nil {
+				t.Logf("Failed to delete ConfigMap: %v", err)
+			}
+		})
+
+		ruleSet := utils.NewTestRuleSet(utils.RuleSetOptions{
+			Name:      "skip-annotation-ruleset",
+			Namespace: testNamespace,
+			Rules:     []wafv1alpha1.RuleSourceReference{{Name: "skip-annotation-rules"}},
+		})
+		ruleSet.Annotations = map[string]string{
+			wafv1alpha1.AnnotationSkipUnsupportedRulesCheck: "true",
+		}
+		require.NoError(t, k8sClient.Create(ctx, ruleSet))
+		t.Cleanup(func() {
+			if err := k8sClient.Delete(ctx, ruleSet); err != nil {
+				t.Logf("Failed to delete RuleSet: %v", err)
+			}
+		})
+
+		recorder := utils.NewFakeRecorder()
+		reconciler := &RuleSetReconciler{
+			Client:   k8sClient,
+			Scheme:   scheme,
+			Recorder: recorder,
+			Cache:    ruleSetCache,
+		}
+
+		result, err := reconciler.Reconcile(ctx, ctrl.Request{
+			NamespacedName: types.NamespacedName{
+				Name:      ruleSet.Name,
+				Namespace: ruleSet.Namespace,
+			},
+		})
+
+		require.NoError(t, err)
+		assert.Equal(t, reconcile.Result{}, result)
+
+		t.Log("Verifying cache WAS populated despite unsupported rules")
+		cacheKey := testNamespace + "/skip-annotation-ruleset"
+		entry, ok := ruleSetCache.Get(cacheKey)
+		assert.True(t, ok, "cache should contain entry when annotation overrides unsupported rules check")
+		assert.Contains(t, entry.Rules, "id:950150")
+
+		t.Log("Verifying Ready=True with unsupported rules listed in the message")
+		require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{
+			Name:      ruleSet.Name,
+			Namespace: ruleSet.Namespace,
+		}, ruleSet))
+		ready := apimeta.FindStatusCondition(ruleSet.Status.Conditions, "Ready")
+		require.NotNil(t, ready)
+		assert.Equal(t, metav1.ConditionTrue, ready.Status)
+		assert.Equal(t, "RulesCached", ready.Reason)
+		assert.Contains(t, ready.Message, "950150", "ready message should list the detected unsupported rule ID")
+
+		t.Log("Verifying Degraded condition is absent")
+		degraded := apimeta.FindStatusCondition(ruleSet.Status.Conditions, "Degraded")
+		assert.Nil(t, degraded, "Degraded condition must not be set when annotation overrides")
+
+		t.Log("Verifying Warning/UnsupportedRules event was still emitted")
+		assert.True(t, recorder.HasEvent("Warning", "UnsupportedRules"),
+			"expected Warning/UnsupportedRules event even with annotation override; got: %v", recorder.Events)
+	})
+}

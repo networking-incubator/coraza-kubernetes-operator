@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/corazawaf/coraza/v3"
+	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
@@ -42,6 +43,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	wafv1alpha1 "github.com/networking-incubator/coraza-kubernetes-operator/api/v1alpha1"
+	"github.com/networking-incubator/coraza-kubernetes-operator/internal/rulesets"
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/rulesets/cache"
 	"github.com/networking-incubator/coraza-kubernetes-operator/pkg/utils"
 )
@@ -74,7 +76,10 @@ type RuleSetReconciler struct {
 // SetupWithManager sets up the controller with the Manager.
 func (r *RuleSetReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&wafv1alpha1.RuleSet{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
+		For(&wafv1alpha1.RuleSet{}, builder.WithPredicates(predicate.Or(
+			predicate.GenerationChangedPredicate{},
+			annotationChangedPredicate(wafv1alpha1.AnnotationSkipUnsupportedRulesCheck),
+		))).
 		Watches(
 			&corev1.ConfigMap{},
 			handler.EnqueueRequestsFromMapFunc(r.findRuleSetsForConfigMap),
@@ -256,20 +261,19 @@ func (r *RuleSetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	if fsRules != nil {
 		conf = conf.WithRootFS(fsRules)
 	}
-	if _, err := coraza.NewWAF(conf); err != nil {
-		msg := fmt.Sprintf("Ruleset is invalid\n%v", sanitizeErrorMessage(err))
-		r.Recorder.Eventf(&ruleset, nil, "Warning", "InvalidRuleSet", "Reconcile", msg)
-		for _, cmapErr := range aggregatedErrors {
-			r.Recorder.Eventf(&ruleset, nil, "Warning", "InvalidConfigMap", "Reconcile", cmapErr.Error())
-			msg = fmt.Sprintf("%s\n%v", msg, cmapErr)
-		}
-		patch := client.MergeFrom(ruleset.DeepCopy())
-		setStatusConditionDegraded(log, req, "RuleSet", &ruleset.Status.Conditions, ruleset.Generation, "InvalidRuleSet", msg)
-		if updateErr := r.Status().Patch(ctx, &ruleset, patch); updateErr != nil {
-			logError(log, req, "RuleSet", updateErr, "Failed to patch status")
-		}
+	if err := r.validateAggregatedRules(ctx, log, req, &ruleset, conf, aggregatedErrors); err != nil {
+		return ctrl.Result{}, err
+	}
 
-		return ctrl.Result{}, sanitizeErrorMessage(err)
+	// Check for rules known to be unsupported in the current WASM engine mode.
+	// This runs after Coraza syntax validation succeeds so that syntax errors
+	// are reported first; incompatible rules are a separate concern.
+	foundUnsupportedRules, unsupportedMsg, err := r.rejectUnsupportedRules(ctx, log, req, &ruleset, aggregatedRules.String())
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if foundUnsupportedRules {
+		return ctrl.Result{}, nil // Do not proceed with caching if unsupported rules are present
 	}
 
 	logDebug(log, req, "RuleSet", "Storing aggregated rules in cache")
@@ -283,7 +287,7 @@ func (r *RuleSetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	logInfo(log, req, "RuleSet", "Stored rules in cache", "cacheKey", cacheKey)
 
 	patch := client.MergeFrom(ruleset.DeepCopy())
-	msg := fmt.Sprintf("Successfully cached rules for %s/%s", ruleset.Namespace, ruleset.Name)
+	msg := buildCacheReadyMessage(ruleset.Namespace, ruleset.Name, unsupportedMsg)
 	r.Recorder.Eventf(&ruleset, nil, "Normal", "RulesCached", "Reconcile", msg)
 	setStatusReady(log, req, "RuleSet", &ruleset.Status.Conditions, ruleset.Generation, "RulesCached", msg)
 	if err := r.Status().Patch(ctx, &ruleset, patch); err != nil {
@@ -294,7 +298,96 @@ func (r *RuleSetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	return ctrl.Result{}, nil
 }
 
-// getDataSecret receives a name and a namespace, fetches a secret with these data and returns the data content
+// -----------------------------------------------------------------------------
+// RuleSet Validation
+// -----------------------------------------------------------------------------
+
+// validateAggregatedRules validates the aggregated rule set via Coraza.
+// Sets Degraded status and emits Warning events on failure.
+func (r *RuleSetReconciler) validateAggregatedRules(
+	ctx context.Context,
+	log logr.Logger,
+	req ctrl.Request,
+	ruleset *wafv1alpha1.RuleSet,
+	conf coraza.WAFConfig,
+	aggregatedErrors []error,
+) error {
+	if _, err := coraza.NewWAF(conf); err != nil {
+		msg := fmt.Sprintf("Ruleset is invalid\n%v", sanitizeErrorMessage(err))
+		r.Recorder.Eventf(ruleset, nil, "Warning", "InvalidRuleSet", "Reconcile", msg)
+
+		for _, cmapErr := range aggregatedErrors {
+			r.Recorder.Eventf(ruleset, nil, "Warning", "InvalidConfigMap", "Reconcile", cmapErr.Error())
+			msg = fmt.Sprintf("%s\n%v", msg, cmapErr)
+		}
+
+		patch := client.MergeFrom(ruleset.DeepCopy())
+		setStatusConditionDegraded(log, req, "RuleSet", &ruleset.Status.Conditions, ruleset.Generation, "InvalidRuleSet", msg)
+		if updateErr := r.Status().Patch(ctx, ruleset, patch); updateErr != nil {
+			logError(log, req, "RuleSet", updateErr, "Failed to patch status")
+			return updateErr
+		}
+
+		return sanitizeErrorMessage(err)
+	}
+	return nil
+}
+
+// rejectUnsupportedRules checks rules for IDs unsupported in WASM mode.
+// Always emits a Warning event when unsupported rules are detected.
+//
+// When the AnnotationSkipUnsupportedRulesCheck annotation is "true", degradation
+// is suppressed: returns (false, message, nil) so the caller can surface the
+// detected rules in the Ready status without blocking reconciliation.
+//
+// Without the annotation, sets Degraded status and returns (true, "", nil).
+func (r *RuleSetReconciler) rejectUnsupportedRules(
+	ctx context.Context,
+	log logr.Logger,
+	req ctrl.Request,
+	ruleset *wafv1alpha1.RuleSet,
+	rules string,
+) (bool, string, error) {
+	unsupported := rulesets.CheckUnsupportedRules(rules)
+	if len(unsupported) == 0 {
+		return false, "", nil
+	}
+
+	msg := rulesets.FormatUnsupportedMessage(unsupported)
+	logInfo(log, req, "RuleSet", "RuleSet contains unsupported rules", "count", len(unsupported))
+	r.Recorder.Eventf(ruleset, nil, "Warning", "UnsupportedRules", "Reconcile", msg)
+
+	if ruleset.Annotations[wafv1alpha1.AnnotationSkipUnsupportedRulesCheck] == "true" {
+		logDebug(log, req, "RuleSet", "Unsupported rules check overridden by annotation; not degrading")
+		return false, msg, nil
+	}
+
+	patch := client.MergeFrom(ruleset.DeepCopy())
+	setStatusConditionDegraded(log, req, "RuleSet", &ruleset.Status.Conditions, ruleset.Generation, "UnsupportedRules", msg)
+	if updateErr := r.Status().Patch(ctx, ruleset, patch); updateErr != nil {
+		logError(log, req, "RuleSet", updateErr, "Failed to patch status")
+		return true, "", updateErr
+	}
+
+	return true, "", nil
+}
+
+// -----------------------------------------------------------------------------
+// Private Utilities
+// -----------------------------------------------------------------------------
+
+// buildCacheReadyMessage constructs the Ready condition message after successful
+// caching. When unsupportedMsg is non-empty (annotation override active), the
+// detected unsupported rules are appended so they remain visible in the status.
+func buildCacheReadyMessage(namespace, name, unsupportedMsg string) string {
+	msg := fmt.Sprintf("Successfully cached rules for %s/%s", namespace, name)
+	if unsupportedMsg != "" {
+		msg += "\n[annotation override] " + unsupportedMsg
+	}
+	return msg
+}
+
+// getDataSecret fetches the named Secret and returns its data.
 func (r *RuleSetReconciler) getDataSecret(ctx context.Context, name, namespace string) (map[string][]byte, bool, error) {
 	var ruleData corev1.Secret
 	if err := r.Get(ctx, types.NamespacedName{
@@ -313,8 +406,8 @@ func (r *RuleSetReconciler) getDataSecret(ctx context.Context, name, namespace s
 	return ruleData.Data, true, nil
 }
 
-// getDataFilesystem converts the provided secret data map into an in-memory filesystem
-// to be used by Coraza when parsing data. If secretdata is nil, it returns nil.
+// getDataFilesystem converts secret data into an in-memory filesystem for Coraza.
+// Returns nil if secretdata is nil.
 func getDataFilesystem(secretdata map[string][]byte) fs.FS {
 	if secretdata == nil {
 		return nil
@@ -340,12 +433,8 @@ func sanitizeErrorMessage(err error) error {
 
 }
 
-// shouldSkipMissingFileError determines if a validation error should be skipped
-// because it's only due to a missing data file that exists in the provided secretData.
-// Returns true only if:
-// 1. The error matches the missing file pattern
-// 2. secretData is not nil
-// 3. The missing file is actually present in secretData
+// shouldSkipMissingFileError reports whether a missing-file validation error should
+// be skipped because the file is present in secretData.
 func shouldSkipMissingFileError(err error, secretData map[string][]byte) bool {
 	if secretData == nil {
 		return false
