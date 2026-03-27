@@ -4,11 +4,13 @@ Generate an OLM operator bundle from the Helm chart.
 
 Runs helm template, extracts the Deployment spec, ClusterRole rules,
 and ServiceAccount name, then injects them into the CSV template.
+Populates metadata.annotations.alm-examples from owned CRs in config/samples.
 Additional manifests (Service, CRDs) are copied into bundle/manifests/.
 """
 
 import argparse
 import copy
+import json
 import os
 import shutil
 import sys
@@ -16,7 +18,18 @@ from pathlib import Path
 
 import yaml
 
-from lib import SemverYAML, die, run, write_yaml
+from lib import SemverYAML, die, load_yaml_docs, run, write_yaml
+
+
+class LiteralBlockStr(str):
+    """Multiline string that PyYAML emits as a literal block (|) for readability."""
+
+
+def _represent_literal_block_str(dumper, data):
+    return dumper.represent_scalar("tag:yaml.org,2002:str", str(data), style="|")
+
+
+yaml.add_representer(LiteralBlockStr, _represent_literal_block_str)
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -31,6 +44,12 @@ EXCLUDED_KINDS = {"Namespace", "PodDisruptionBudget", "ServiceMonitor",
 
 # Default when --min-kube-version is omitted. Keep in sync with KUBE_VERSION in the Makefile.
 DEFAULT_MIN_KUBE_VERSION = "1.32.0"
+
+# CRD apiVersion prefix for OLM alm-examples (owned APIs only).
+OWNED_API_PREFIX = "waf.k8s.coraza.io/"
+
+# Display order for alm-examples (RuleSet before Engine: engine references the ruleset).
+_ALM_EXAMPLE_KIND_ORDER = {"RuleSet": 0, "Engine": 1}
 
 # ---------------------------------------------------------------------------
 # Helm Rendering
@@ -85,6 +104,30 @@ def strip_helm_labels(doc: dict) -> dict:
     return doc
 
 
+def load_owned_cr_examples(samples_dir: Path) -> list:
+    """
+    Load Engine / RuleSet documents from config/samples for CSV alm-examples.
+    Only includes APIs owned by this operator (waf.k8s.coraza.io).
+    """
+    if not samples_dir.is_dir():
+        die(f"Samples directory not found: {samples_dir}")
+
+    out = []
+    for path in sorted(samples_dir.glob("*.yaml")):
+        for doc in load_yaml_docs(str(path)):
+            av = doc.get("apiVersion")
+            if isinstance(av, str) and av.startswith(OWNED_API_PREFIX):
+                out.append(copy.deepcopy(doc))
+
+    def sort_key(d):
+        kind = d.get("kind", "")
+        name = (d.get("metadata") or {}).get("name") or ""
+        return (_ALM_EXAMPLE_KIND_ORDER.get(kind, 99), name)
+
+    out.sort(key=sort_key)
+    return out
+
+
 # ---------------------------------------------------------------------------
 # CSV Builder
 # ---------------------------------------------------------------------------
@@ -99,7 +142,8 @@ def override_container_image(deployment: dict, image: str):
 def build_csv(template_path: str, deployment: dict, cluster_role: dict,
               sa_name: str, version: str, image: str,
               replaces: str, channels: str, default_channel: str,
-              package_name: str, min_kube_version: str) -> dict:
+              package_name: str, min_kube_version: str,
+              alm_examples: list) -> dict:
     """Build the CSV by injecting Helm-rendered resources into the template."""
     with open(template_path) as f:
         csv = yaml.safe_load(f)
@@ -108,6 +152,8 @@ def build_csv(template_path: str, deployment: dict, cluster_role: dict,
 
     csv["metadata"]["name"] = f"{package_name}.v{version}"
     csv["metadata"]["annotations"]["containerImage"] = image
+    alm_json = json.dumps(alm_examples, indent=2, ensure_ascii=False) + "\n"
+    csv["metadata"]["annotations"]["alm-examples"] = LiteralBlockStr(alm_json)
     csv["spec"]["version"] = SemverYAML(version)
 
     if replaces:
@@ -258,6 +304,13 @@ def main():
         metavar="SEMVER",
         help=f"Kubernetes version for Helm --kube-version and CSV minKubeVersion (default: {DEFAULT_MIN_KUBE_VERSION})",
     )
+    default_samples = Path(__file__).resolve().parent.parent / "config/samples"
+    parser.add_argument(
+        "--samples-dir",
+        type=Path,
+        default=default_samples,
+        help=f"Directory with sample YAML for CSV alm-examples (default: {default_samples})",
+    )
     args = parser.parse_args()
 
     version = args.version.lstrip("v")
@@ -292,6 +345,9 @@ def main():
 
     extra_manifests = [strip_helm_labels(d) for d in docs if d.get("kind") in BUNDLE_RESOURCE_KINDS]
 
+    alm_examples = load_owned_cr_examples(args.samples_dir)
+    print(f"  alm-examples: {len(alm_examples)} owned CR(s) from {args.samples_dir}", file=sys.stderr)
+
     # Build and write bundle
     print("Building CSV...", file=sys.stderr)
     csv = build_csv(
@@ -306,6 +362,7 @@ def main():
         default_channel=args.default_channel,
         package_name=args.package_name,
         min_kube_version=min_kube_version,
+        alm_examples=alm_examples,
     )
     csv = strip_helm_labels(csv)
 
