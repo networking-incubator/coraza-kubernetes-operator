@@ -142,43 +142,6 @@ spec:
     )
 
 
-def create_istio_resources(args, version):
-    """Create the Istio CR for the control plane and wait for readiness."""
-    print(f"--- Creating Istio Control Plane ({version}) ---")
-    run(
-        f"oc create namespace {args.coraza_ns} "
-        f"--dry-run=client -o yaml | oc apply -f -"
-    )
-
-    istio_cr = f"""
-apiVersion: sailoperator.io/v1
-kind: Istio
-metadata: {{namespace: {args.coraza_ns}, name: coraza}}
-spec:
-  namespace: {args.coraza_ns}
-  version: {version}
-  values:
-    pilot:
-      env:
-        PILOT_GATEWAY_API_CONTROLLER_NAME: "istio.io/gateway-controller"
-        PILOT_ENABLE_GATEWAY_API: "true"
-        PILOT_ENABLE_GATEWAY_API_STATUS: "true"
-        PILOT_ENABLE_ALPHA_GATEWAY_API: "false"
-        PILOT_ENABLE_GATEWAY_API_DEPLOYMENT_CONTROLLER: "true"
-        PILOT_ENABLE_GATEWAY_API_GATEWAYCLASS_CONTROLLER: "false"
-        PILOT_GATEWAY_API_DEFAULT_GATEWAYCLASS_NAME: "istio"
-        PILOT_MULTI_NETWORK_DISCOVER_GATEWAY_API: "false"
-        ENABLE_GATEWAY_API_MANUAL_DEPLOYMENT: "false"
-        PILOT_ENABLE_GATEWAY_API_CA_CERT_ONLY: "true"
-        PILOT_ENABLE_GATEWAY_API_COPY_LABELS_ANNOTATIONS: "false"
-"""
-    run("oc apply -f -", input_str=istio_cr)
-    run(
-        f"oc wait --for=condition=Ready istio/coraza "
-        f"-n {args.coraza_ns} --timeout={args.timeout}s"
-    )
-
-
 # ---------------------------------------------------------------------------
 # Operator Deployment
 # ---------------------------------------------------------------------------
@@ -255,37 +218,6 @@ def deploy_coraza_operator(args):
         f"oc wait --for=condition=Available "
         f"deployment/{HELM_RELEASE_NAME} "
         f"-n {args.coraza_ns} --timeout={args.timeout}s"
-    )
-
-
-# ---------------------------------------------------------------------------
-# Gateway
-# ---------------------------------------------------------------------------
-
-
-def create_gateway(args, use_lb):
-    """Create the sample Gateway in the test namespace."""
-    print(f"--- Creating Gateway in {args.test_ns} ---")
-    run(
-        f"oc create namespace {args.test_ns} "
-        f"--dry-run=client -o yaml | oc apply -f -"
-    )
-
-    project_root = Path(__file__).parent.parent.absolute()
-    gw_path = project_root / "config" / "samples" / "gateway.yaml"
-
-    if use_lb:
-        run(f"oc apply -f {gw_path} -n {args.test_ns}")
-    else:
-        run(
-            f"oc annotate -f {gw_path} "
-            f"networking.istio.io/service-type=ClusterIP "
-            f"--local -o yaml | oc apply -f - -n {args.test_ns}"
-        )
-
-    run(
-        f"oc wait --for=condition=Programmed gateway/coraza-gateway "
-        f"-n {args.test_ns} --timeout={args.timeout}s"
     )
 
 
@@ -397,13 +329,17 @@ def main():
     args.working_dir = Path(args.working_dir)
 
     if args.action == "setup":
+        # Set GATEWAY_CLASS for OpenShift environment so integration tests
+        # use the correct GatewayClass (openshift-default instead of istio)
+        os.environ["GATEWAY_CLASS"] = "openshift-default"
+
         istio_version, ossm_version = get_versions(args)
         setup_internal_registry(args)
         deploy_gateway_class(args, istio_version, ossm_version)
-        create_istio_resources(args, istio_version)
         deploy_coraza_operator(args)
-        create_gateway(args, use_lb=args.deploy_metallb)
         print("\nCoraza Operator and Istio are ready on OCP!")
+        print("\nTo run integration tests, use:")
+        print("  GATEWAY_CLASS=openshift-default go test -tags=integration ./test/integration/...")
 
     elif args.action == "cleanup":
         cleanup(args)

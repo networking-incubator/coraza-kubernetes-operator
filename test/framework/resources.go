@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"sync"
 
 	"github.com/stretchr/testify/require"
 	appsv1 "k8s.io/api/apps/v1"
@@ -39,6 +40,11 @@ import (
 // CRD builders (Engine, RuleSet) use typed API objects from api/v1alpha1
 // and convert to unstructured for the dynamic client. External resources
 // (Gateway, HTTPRoute) are built as unstructured directly.
+
+// gatewayMu serializes Gateway creation to reduce Istio CA certificate
+// signing contention when many parallel tests create Gateways simultaneously.
+// This prevents conflicts on istio-ca-root-cert ConfigMap updates.
+var gatewayMu sync.Mutex
 
 // -----------------------------------------------------------------------------
 // GVRs
@@ -350,15 +356,29 @@ func (s *Scenario) CreateConfigMap(namespace, name, rules string) {
 	})
 }
 
-// CreateGateway creates a Gateway resource using the default "istio" class and registers cleanup.
+// CreateGateway creates a Gateway resource and registers cleanup.
+// The GatewayClass is determined by the GATEWAY_CLASS environment variable,
+// defaulting to "istio" for Kind/standard Istio clusters.
+// Set GATEWAY_CLASS=openshift-default for OpenShift environments.
 func (s *Scenario) CreateGateway(namespace, name string) {
 	s.T.Helper()
-	s.CreateGatewayWithClass(namespace, name, "istio")
+	gatewayClass := os.Getenv("GATEWAY_CLASS")
+	if gatewayClass == "" {
+		gatewayClass = "istio"
+	}
+	s.CreateGatewayWithClass(namespace, name, gatewayClass)
 }
 
 // CreateGatewayWithClass creates a Gateway resource using the provided GatewayClass and registers cleanup.
 func (s *Scenario) CreateGatewayWithClass(namespace, name, gatewayClassName string) {
 	s.T.Helper()
+
+	// Serialize Gateway creation to avoid overwhelming Istio CA controller.
+	// When many Gateways are created simultaneously, the CA controller races
+	// to update istio-ca-root-cert ConfigMaps, causing conflicts and delays.
+	gatewayMu.Lock()
+	defer gatewayMu.Unlock()
+
 	ctx := s.T.Context()
 
 	// Create ServiceAccount before Gateway to prevent auth race condition.
