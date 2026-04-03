@@ -23,6 +23,15 @@ metrics:
   serviceMonitor:
     enabled: false
 
+tls:
+  # Validity period for the CA certificate (Go duration format).
+  # Must be at least 168h (1 week).
+  caValidity: "43800h"  # 5 years
+
+  # Validity period for the cache server certificate (Go duration format).
+  # Must be at least 24h (1 day).
+  serverCertValidity: "720h"  # 30 days
+
 istio:
   # When empty, the operator does not set an Istio revision label on managed resources.
   revision: ""

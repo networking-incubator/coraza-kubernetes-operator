@@ -75,9 +75,9 @@ func TestBuildServiceEntry_Shape(t *testing.T) {
 	ports, _ := spec["ports"].([]any)
 	require.Len(t, ports, 1)
 	port, _ := ports[0].(map[string]any)
-	assert.Equal(t, int64(80), port["number"])
-	assert.Equal(t, "http-ruleset-cache-server", port["name"])
-	assert.Equal(t, "HTTP", port["protocol"])
+	assert.Equal(t, int64(443), port["number"])
+	assert.Equal(t, "https-ruleset-cache-server", port["name"])
+	assert.Equal(t, "HTTPS", port["protocol"])
 }
 
 func TestBuildDestinationRule_Shape(t *testing.T) {
@@ -110,7 +110,8 @@ func TestBuildDestinationRule_Shape(t *testing.T) {
 	require.NotNil(t, tp, "trafficPolicy should be present")
 	tls, _ := tp["tls"].(map[string]any)
 	require.NotNil(t, tls, "tls should be present")
-	assert.Equal(t, "DISABLE", tls["mode"])
+	assert.Equal(t, "SIMPLE", tls["mode"])
+	assert.Equal(t, "cko-ca-credential", tls["credentialName"])
 }
 
 func TestNewIstioObject_IstioRevisionLabel(t *testing.T) {

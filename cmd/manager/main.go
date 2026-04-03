@@ -40,6 +40,7 @@ import (
 
 	wafv1alpha1 "github.com/networking-incubator/coraza-kubernetes-operator/api/v1alpha1"
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/controller"
+	"github.com/networking-incubator/coraza-kubernetes-operator/internal/pki"
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/rulesets/cache"
 	// +kubebuilder:scaffold:imports
 )
@@ -86,8 +87,10 @@ func main() {
 		os.Exit(1)
 	}
 
-	rulesetCache := setupCacheServer(mgr, cfg)
-	setupIstioPrerequisites(mgr, cfg, os.Getenv("POD_NAMESPACE"))
+	podNamespace := os.Getenv("POD_NAMESPACE")
+	tlsConfig := setupTLSInfrastructure(mgr, cfg, podNamespace)
+	rulesetCache := setupCacheServer(mgr, cfg, tlsConfig)
+	setupIstioPrerequisites(mgr, cfg, podNamespace)
 
 	if err := controller.SetupControllers(mgr, rulesetCache, cfg.envoyClusterName, cfg.istioRevision); err != nil {
 		setupLog.Error(err, "unable to setup controllers")
@@ -128,6 +131,10 @@ type config struct {
 	envoyClusterName  string
 	istioRevision     string
 	operatorName      string
+	caValidity         time.Duration
+	serverCertValidity time.Duration
+	cacheCertPath      string
+	cacheKeyPath       string
 }
 
 func parseFlags() config {
@@ -153,6 +160,10 @@ func parseFlags() config {
 	flag.StringVar(&cfg.envoyClusterName, "envoy-cluster-name", "", "The Envoy cluster name pointing to the RuleSet cache server (required)")
 	flag.StringVar(&cfg.istioRevision, "istio-revision", "", "The Istio revision label value for managed Istio resources")
 	flag.StringVar(&cfg.operatorName, "operator-name", "", "The operator release name used to derive managed resource names (when unset, Istio prerequisites are skipped)")
+	flag.DurationVar(&cfg.caValidity, "ca-validity", pki.DefaultCAValidity, fmt.Sprintf("Validity period for the CA certificate (default %v, minimum %v)", pki.DefaultCAValidity, pki.MinCAValidity))
+	flag.DurationVar(&cfg.serverCertValidity, "server-cert-validity", pki.DefaultServerCertValidity, fmt.Sprintf("Validity period for server certificates (default %v, minimum %v)", pki.DefaultServerCertValidity, pki.MinServerCertValidity))
+	flag.StringVar(&cfg.cacheCertPath, "cache-cert-path", "", "Path to a user-provided TLS certificate for the cache server (disables automatic certificate management)")
+	flag.StringVar(&cfg.cacheKeyPath, "cache-key-path", "", "Path to a user-provided TLS private key for the cache server (disables automatic certificate management)")
 
 	opts := zap.Options{Development: true}
 	opts.BindFlags(flag.CommandLine)
@@ -223,7 +234,56 @@ func setupWebhookServer(cfg config, tlsOpts []func(*tls.Config)) webhook.Server 
 	return webhook.NewServer(opts)
 }
 
-func setupCacheServer(mgr ctrl.Manager, cfg config) *cache.RuleSetCache {
+func setupTLSInfrastructure(mgr ctrl.Manager, cfg config, podNamespace string) *tls.Config {
+	// User-provided certificate mode
+	if cfg.cacheCertPath != "" && cfg.cacheKeyPath != "" {
+		setupLog.Info("WARNING: Using user-provided certificate for cache server TLS. "+
+			"Automatic certificate management (CA controller and cert renewal) is DISABLED. "+
+			"You are responsible for certificate rotation.",
+			"certPath", cfg.cacheCertPath, "keyPath", cfg.cacheKeyPath,
+		)
+		cert, err := tls.LoadX509KeyPair(cfg.cacheCertPath, cfg.cacheKeyPath)
+		if err != nil {
+			setupLog.Error(err, "failed to load user-provided cache server certificate")
+			os.Exit(1)
+		}
+		return &tls.Config{
+			Certificates: []tls.Certificate{cert},
+			MinVersion:   tls.VersionTLS13,
+		}
+	}
+
+	// Automatic CA mode — requires POD_NAMESPACE and operator-name
+	if podNamespace == "" {
+		setupLog.Error(errors.New("missing required config"), "POD_NAMESPACE must be set for automatic TLS certificate management. "+
+			"Alternatively, provide --cache-cert-path and --cache-key-path for manual certificate management.")
+		os.Exit(1)
+	}
+	if cfg.operatorName == "" {
+		setupLog.Error(errors.New("missing required flag"), "--operator-name is required for automatic TLS certificate management. "+
+			"Alternatively, provide --cache-cert-path and --cache-key-path for manual certificate management.")
+		os.Exit(1)
+	}
+
+	caCtrl := controller.NewCAController(mgr.GetClient(), podNamespace, cfg.caValidity, ctrl.Log)
+	if err := mgr.Add(caCtrl); err != nil {
+		setupLog.Error(err, "unable to add CA controller to manager")
+		os.Exit(1)
+	}
+
+	serviceFQDN := fmt.Sprintf("%s.%s.svc.cluster.local", cfg.operatorName, podNamespace)
+	dnsNames := []string{serviceFQDN, cfg.operatorName, "localhost"}
+
+	certMgr := controller.NewCertManager(caCtrl, cfg.serverCertValidity, dnsNames, ctrl.Log)
+	if err := mgr.Add(certMgr); err != nil {
+		setupLog.Error(err, "unable to add certificate manager to manager")
+		os.Exit(1)
+	}
+
+	return certMgr.TLSConfig()
+}
+
+func setupCacheServer(mgr ctrl.Manager, cfg config, tlsConfig *tls.Config) *cache.RuleSetCache {
 	rulesetCache := cache.NewRuleSetCache()
 	gcConfig := &cache.GarbageCollectionConfig{
 		GCInterval: cfg.cacheGCInterval,
@@ -231,6 +291,7 @@ func setupCacheServer(mgr ctrl.Manager, cfg config) *cache.RuleSetCache {
 		MaxSize:    cfg.cacheMaxSize,
 	}
 	cacheServer := cache.NewServer(rulesetCache, fmt.Sprintf(":%d", cfg.cacheServerPort), ctrl.Log, gcConfig)
+	cacheServer.SetTLSConfig(tlsConfig)
 	if err := mgr.Add(cacheServer); err != nil {
 		setupLog.Error(err, "unable to add cache server to manager")
 		os.Exit(1)
@@ -269,6 +330,21 @@ func setupHealthChecks(mgr ctrl.Manager) {
 func validateFlags(cfg config) {
 	if cfg.envoyClusterName == "" {
 		setupLog.Error(errors.New("missing required flag"), "envoy-cluster-name is required")
+		os.Exit(1)
+	}
+
+	if cfg.caValidity < pki.MinCAValidity {
+		setupLog.Error(errors.New("invalid flag value"), fmt.Sprintf("ca-validity must be at least %v, got %v", pki.MinCAValidity, cfg.caValidity))
+		os.Exit(1)
+	}
+
+	if cfg.serverCertValidity < pki.MinServerCertValidity {
+		setupLog.Error(errors.New("invalid flag value"), fmt.Sprintf("server-cert-validity must be at least %v, got %v", pki.MinServerCertValidity, cfg.serverCertValidity))
+		os.Exit(1)
+	}
+
+	if (cfg.cacheCertPath == "") != (cfg.cacheKeyPath == "") {
+		setupLog.Error(errors.New("invalid flag combination"), "--cache-cert-path and --cache-key-path must both be set or both be empty")
 		os.Exit(1)
 	}
 }

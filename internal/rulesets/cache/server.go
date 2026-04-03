@@ -18,6 +18,7 @@ package cache
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -70,10 +71,11 @@ type LatestResponse struct {
 
 // ruleSetCacheServer provides HTTP endpoints for accessing cached rulesets
 type ruleSetCacheServer struct {
-	cache  *RuleSetCache
-	srv    *http.Server
-	logger logr.Logger
-	gc     GarbageCollectionConfig
+	cache     *RuleSetCache
+	srv       *http.Server
+	logger    logr.Logger
+	gc        GarbageCollectionConfig
+	tlsConfig *tls.Config
 }
 
 // NewServer creates a new RuleSetCacheServer instance.
@@ -102,14 +104,21 @@ func NewServer(cache *RuleSetCache, addr string, logger logr.Logger, gc *Garbage
 	return s
 }
 
+// SetTLSConfig configures the server to use TLS with the given configuration.
+// Must be called before Start.
+func (s *ruleSetCacheServer) SetTLSConfig(tlsConfig *tls.Config) {
+	s.tlsConfig = tlsConfig
+	s.srv.TLSConfig = tlsConfig
+}
+
 // Start the cache server.
 func (s *ruleSetCacheServer) Start(ctx context.Context) error {
 	go s.rungc(ctx)
 
 	errChan := make(chan error, 1)
 	go func() {
-		s.logger.Info("Starting ruleset cache server", "addr", s.srv.Addr)
-		if err := s.srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		s.logger.Info("Starting ruleset cache server with TLS", "addr", s.srv.Addr)
+		if err := s.srv.ListenAndServeTLS("", ""); err != nil && err != http.ErrServerClosed {
 			errChan <- err
 		}
 	}()

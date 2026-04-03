@@ -49,8 +49,10 @@ spec:
             - --metrics-bind-address=:8082
             - --metrics-secure=false
             {{- end }}
-            - --envoy-cluster-name={{ printf "outbound|80||%s" (include "coraza-operator.serviceFQDN" .) }}
+            - --envoy-cluster-name={{ printf "outbound|443||%s" (include "coraza-operator.serviceFQDN" .) }}
             - --cache-gc-interval=3s
+            - --ca-validity={{ .Values.tls.caValidity }}
+            - --server-cert-validity={{ .Values.tls.serverCertValidity }}
             {{- if .Values.istio.revision }}
             - --istio-revision={{ .Values.istio.revision }}
             {{- end }}

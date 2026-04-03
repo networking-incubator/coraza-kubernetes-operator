@@ -30,6 +30,12 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
+// CASecretNameForCredential is the name of the cert-only secret used for
+// Istio DestinationRule credentialName. This secret contains only the CA
+// certificate (no private key) to avoid exposing the CA key to the Istio
+// control plane.
+const CASecretNameForCredential = "cko-ca-credential"
+
 // -----------------------------------------------------------------------------
 // Istio Prerequisites
 // -----------------------------------------------------------------------------
@@ -129,9 +135,9 @@ func (p *IstioPrerequisites) buildServiceEntry(name, serviceFQDN string, labels 
 		"hosts": []any{serviceFQDN},
 		"ports": []any{
 			map[string]any{
-				"number":   int64(80),
-				"name":     "http-ruleset-cache-server",
-				"protocol": "HTTP",
+				"number":   int64(443),
+				"name":     "https-ruleset-cache-server",
+				"protocol": "HTTPS",
 			},
 		},
 		"location":   "MESH_INTERNAL",
@@ -149,8 +155,10 @@ func (p *IstioPrerequisites) buildDestinationRule(name, serviceFQDN string, labe
 		"host": serviceFQDN,
 		"trafficPolicy": map[string]any{
 			"tls": map[string]any{
-				"mode": "DISABLE",
+				"mode":           "SIMPLE",
+				"credentialName": CASecretNameForCredential,
 			},
 		},
 	})
 }
+

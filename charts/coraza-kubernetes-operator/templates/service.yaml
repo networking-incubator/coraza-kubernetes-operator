@@ -8,8 +8,8 @@ metadata:
 spec:
   type: ClusterIP
   ports:
-    - name: http-ruleset-cache-server
-      port: 80
+    - name: https-ruleset-cache-server
+      port: 443
       protocol: TCP
       targetPort: 18080
     {{- if .Values.metrics.enabled }}

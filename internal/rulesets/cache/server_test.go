@@ -18,6 +18,7 @@ package cache
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"maps"
 	"net/http"
@@ -28,8 +29,24 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/networking-incubator/coraza-kubernetes-operator/internal/pki"
 	"github.com/networking-incubator/coraza-kubernetes-operator/test/utils"
 )
+
+// testTLSConfig returns a TLS config for testing with a self-signed cert.
+func testTLSConfig(t *testing.T) *tls.Config {
+	t.Helper()
+	ca, err := pki.GenerateCA(pki.DefaultCAValidity)
+	require.NoError(t, err)
+	cert, err := ca.IssueCertificate([]string{"localhost"}, pki.DefaultServerCertValidity)
+	require.NoError(t, err)
+	tlsCert, err := tls.X509KeyPair(cert.CertPEM, cert.KeyPEM)
+	require.NoError(t, err)
+	return &tls.Config{
+		Certificates: []tls.Certificate{tlsCert},
+		MinVersion:   tls.VersionTLS13,
+	}
+}
 
 const testServerAddr = ":38080"
 
@@ -53,6 +70,7 @@ func TestServer_StartAndStop(t *testing.T) {
 	cache := NewRuleSetCache()
 	logger := utils.NewTestLogger(t)
 	server := NewServer(cache, testServerAddr, logger, nil)
+	server.SetTLSConfig(testTLSConfig(t))
 
 	t.Log("Starting server in background goroutine")
 	ctx, cancel := context.WithCancel(context.Background())
