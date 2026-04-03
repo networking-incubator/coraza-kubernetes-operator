@@ -106,7 +106,7 @@ func NewServer(cache *RuleSetCache, addr string, logger logr.Logger, gc *Garbage
 
 	s.srv = &http.Server{
 		Addr:              addr,
-		Handler:           mux,
+		Handler:           instrumentHandler(mux),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       ReadTimeout,
 		WriteTimeout:      WriteTimeout,
