@@ -147,7 +147,7 @@ const xCRSTestBlock = `    SecResponseBodyMimeType text/plain text/html text/xml
 
 func indentRulesMultiline(processed string) string {
 	var b strings.Builder
-	for _, line := range strings.Split(processed, "\n") {
+	for line := range strings.SplitSeq(processed, "\n") {
 		if strings.TrimSpace(line) == "" {
 			b.WriteString("    \n")
 		} else {

@@ -72,6 +72,15 @@ type IstioWasmConfig struct {
 	// +optional
 	Image *string `json:"image,omitempty"`
 
+	// imagePullSecret is the name of a Kubernetes Secret in the same namespace
+	// as the Engine that contains Docker registry credentials for pulling the
+	// WASM OCI image. This is passed directly to the Istio WasmPlugin resource.
+	//
+	// +optional
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	ImagePullSecret *string `json:"imagePullSecret,omitempty"`
+
 	// ruleSetCacheServer contains configuration for the ruleset cache server.
 	//
 	// When omitted, no cache server will be used and no rulesets will be

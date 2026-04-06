@@ -18,6 +18,7 @@ package rulesets
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -298,12 +299,12 @@ func secRuleWithID(id int) string {
 
 // secRulesWithIDs returns one rule per ID, joined by newlines.
 func secRulesWithIDs(ids ...int) string {
-	rules := ""
+	var rules strings.Builder
 	for i, id := range ids {
 		if i > 0 {
-			rules += "\n"
+			rules.WriteString("\n")
 		}
-		rules += secRuleWithID(id)
+		rules.WriteString(secRuleWithID(id))
 	}
-	return rules
+	return rules.String()
 }

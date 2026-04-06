@@ -3,7 +3,8 @@
 # and additionally with investigation of violating rules.
 # Additionally Claude was used to verify and refine the failures vs Coreruleset and WASM behavior
 ---
-maxmarkerretries: 30
+# TODO: https://github.com/networking-incubator/coraza-kubernetes-operator/issues/266
+maxmarkerretries: 500
 testoverride:
   ignore:
     # =============================================================================

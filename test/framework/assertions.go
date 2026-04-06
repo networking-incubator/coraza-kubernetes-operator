@@ -110,7 +110,7 @@ func (s *Scenario) ExpectEngineGateways(namespace, name string, expectedNames []
 		gateways, _, _ := unstructured.NestedSlice(obj.Object, "status", "gateways")
 		var gotNames []string
 		for _, g := range gateways {
-			gw, ok := g.(map[string]interface{})
+			gw, ok := g.(map[string]any)
 			if !ok {
 				continue
 			}
@@ -179,7 +179,7 @@ func hasCondition(obj *unstructured.Unstructured, condType, status string) bool 
 		return false
 	}
 	for _, c := range conditions {
-		cond, ok := c.(map[string]interface{})
+		cond, ok := c.(map[string]any)
 		if !ok {
 			continue
 		}
@@ -197,7 +197,7 @@ func formatConditions(obj *unstructured.Unstructured) string {
 	}
 	parts := make([]string, 0, len(conditions))
 	for _, c := range conditions {
-		cond, ok := c.(map[string]interface{})
+		cond, ok := c.(map[string]any)
 		if !ok {
 			continue
 		}

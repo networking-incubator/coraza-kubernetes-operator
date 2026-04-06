@@ -225,8 +225,8 @@ func (in *IstioWasmConfig) DeepCopyInto(out *IstioWasmConfig) {
 		*out = new(v1.LabelSelector)
 		(*in).DeepCopyInto(*out)
 	}
-	if in.Image != nil {
-		in, out := &in.Image, &out.Image
+	if in.ImagePullSecret != nil {
+		in, out := &in.ImagePullSecret, &out.ImagePullSecret
 		*out = new(string)
 		**out = **in
 	}

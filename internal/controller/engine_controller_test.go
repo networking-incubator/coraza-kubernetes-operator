@@ -25,6 +25,8 @@ import (
 	"github.com/stretchr/testify/require"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -346,6 +348,162 @@ func getNestedString(obj map[string]any, key string) (string, bool, error) {
 		return "", false, assert.AnError
 	}
 	return strVal, true, nil
+}
+
+func TestEngineReconciler_ImagePullSecretInWasmPlugin(t *testing.T) {
+	reconciler := &EngineReconciler{
+		Client:                    k8sClient,
+		Scheme:                    scheme,
+		Recorder:                  utils.NewTestRecorder(),
+		ruleSetCacheServerCluster: "test-cluster",
+	}
+
+	t.Run("imagePullSecret is set when specified", func(t *testing.T) {
+		engine := utils.NewTestEngine(utils.EngineOptions{
+			Name:            "engine-with-pull-secret",
+			Namespace:       testNamespace,
+			ImagePullSecret: "my-registry-secret",
+		})
+
+		wasmPlugin := reconciler.buildWasmPlugin(engine)
+
+		spec, found, err := getNestedMap(wasmPlugin.Object, "spec")
+		require.NoError(t, err)
+		require.True(t, found)
+
+		secret, found, err := getNestedString(spec, "imagePullSecret")
+		require.NoError(t, err)
+		require.True(t, found, "imagePullSecret should be present in WasmPlugin spec")
+		assert.Equal(t, "my-registry-secret", secret)
+	})
+
+	t.Run("imagePullSecret is omitted when empty", func(t *testing.T) {
+		engine := utils.NewTestEngine(utils.EngineOptions{
+			Name:      "engine-without-pull-secret",
+			Namespace: testNamespace,
+		})
+
+		wasmPlugin := reconciler.buildWasmPlugin(engine)
+
+		spec, found, err := getNestedMap(wasmPlugin.Object, "spec")
+		require.NoError(t, err)
+		require.True(t, found)
+
+		_, found = spec["imagePullSecret"]
+		assert.False(t, found, "imagePullSecret should not be present in WasmPlugin spec when empty")
+	})
+}
+
+func TestEngineReconciler_ImagePullSecretEnvtest(t *testing.T) {
+	ctx := context.Background()
+
+	t.Log("Creating RuleSet for imagePullSecret envtest")
+	ruleset := utils.NewTestRuleSet(utils.RuleSetOptions{
+		Name:      "pull-secret-ruleset",
+		Namespace: testNamespace,
+	})
+	require.NoError(t, k8sClient.Create(ctx, ruleset))
+	t.Cleanup(func() {
+		if err := k8sClient.Delete(ctx, ruleset); err != nil {
+			t.Logf("Failed to delete ruleset: %v", err)
+		}
+	})
+
+	reconciler := &EngineReconciler{
+		Client:                    k8sClient,
+		Scheme:                    scheme,
+		Recorder:                  utils.NewTestRecorder(),
+		ruleSetCacheServerCluster: "test-cluster",
+	}
+
+	t.Run("imagePullSecret persisted in WasmPlugin via server-side apply", func(t *testing.T) {
+		engine := utils.NewTestEngine(utils.EngineOptions{
+			Name:            "engine-pullsecret-envtest",
+			Namespace:       testNamespace,
+			RuleSetName:     ruleset.Name,
+			ImagePullSecret: "my-registry-secret",
+		})
+		require.NoError(t, k8sClient.Create(ctx, engine))
+		t.Cleanup(func() {
+			if err := k8sClient.Delete(ctx, engine); err != nil {
+				t.Logf("Failed to delete engine: %v", err)
+			}
+		})
+
+		result, err := reconciler.Reconcile(ctx, ctrl.Request{
+			NamespacedName: types.NamespacedName{
+				Name:      engine.Name,
+				Namespace: engine.Namespace,
+			},
+		})
+		require.NoError(t, err)
+		assert.False(t, result.Requeue)
+
+		t.Log("Fetching WasmPlugin from API server")
+		wasmPlugin := &unstructured.Unstructured{}
+		wasmPlugin.SetGroupVersionKind(schema.GroupVersionKind{
+			Group:   "extensions.istio.io",
+			Version: "v1alpha1",
+			Kind:    "WasmPlugin",
+		})
+		err = k8sClient.Get(ctx, types.NamespacedName{
+			Name:      fmt.Sprintf("%s%s", WasmPluginNamePrefix, engine.Name),
+			Namespace: engine.Namespace,
+		}, wasmPlugin)
+		require.NoError(t, err)
+
+		spec, found, err := getNestedMap(wasmPlugin.Object, "spec")
+		require.NoError(t, err)
+		require.True(t, found, "spec not found in WasmPlugin")
+
+		secret, found, err := getNestedString(spec, "imagePullSecret")
+		require.NoError(t, err)
+		require.True(t, found, "imagePullSecret should be persisted in WasmPlugin spec after server-side apply")
+		assert.Equal(t, "my-registry-secret", secret)
+	})
+
+	t.Run("imagePullSecret omitted in WasmPlugin when not set", func(t *testing.T) {
+		engine := utils.NewTestEngine(utils.EngineOptions{
+			Name:        "engine-no-pullsecret-envtest",
+			Namespace:   testNamespace,
+			RuleSetName: ruleset.Name,
+		})
+		require.NoError(t, k8sClient.Create(ctx, engine))
+		t.Cleanup(func() {
+			if err := k8sClient.Delete(ctx, engine); err != nil {
+				t.Logf("Failed to delete engine: %v", err)
+			}
+		})
+
+		result, err := reconciler.Reconcile(ctx, ctrl.Request{
+			NamespacedName: types.NamespacedName{
+				Name:      engine.Name,
+				Namespace: engine.Namespace,
+			},
+		})
+		require.NoError(t, err)
+		assert.False(t, result.Requeue)
+
+		t.Log("Fetching WasmPlugin from API server")
+		wasmPlugin := &unstructured.Unstructured{}
+		wasmPlugin.SetGroupVersionKind(schema.GroupVersionKind{
+			Group:   "extensions.istio.io",
+			Version: "v1alpha1",
+			Kind:    "WasmPlugin",
+		})
+		err = k8sClient.Get(ctx, types.NamespacedName{
+			Name:      fmt.Sprintf("%s%s", WasmPluginNamePrefix, engine.Name),
+			Namespace: engine.Namespace,
+		}, wasmPlugin)
+		require.NoError(t, err)
+
+		spec, found, err := getNestedMap(wasmPlugin.Object, "spec")
+		require.NoError(t, err)
+		require.True(t, found, "spec not found in WasmPlugin")
+
+		_, found = spec["imagePullSecret"]
+		assert.False(t, found, "imagePullSecret should not be present in WasmPlugin spec when not set")
+	})
 }
 
 func TestEngineReconciler_ValidationRejection(t *testing.T) {

@@ -171,6 +171,11 @@ func (r *EngineReconciler) buildWasmPlugin(engine *wafv1alpha1.Engine, wasmURL s
 		},
 	}
 
+	if engine.Spec.Driver.Istio.Wasm.ImagePullSecret != nil {
+		spec := wasmPlugin.Object["spec"].(map[string]any)
+		spec["imagePullSecret"] = *engine.Spec.Driver.Istio.Wasm.ImagePullSecret
+	}
+
 	wasmPlugin.SetGroupVersionKind(schema.GroupVersionKind{
 		Group:   "extensions.istio.io",
 		Version: "v1alpha1",

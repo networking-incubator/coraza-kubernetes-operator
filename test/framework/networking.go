@@ -288,7 +288,7 @@ func (g *GatewayProxy) ExpectHeaderStatus(path string, headers map[string]string
 // logf logs via t.Logf if the test is still running. The maintain goroutine
 // may outlive the test, and t.Logf panics after the test finishes (Go 1.24+).
 // t.Context() is cancelled when the test completes, so we check it first.
-func (g *GatewayProxy) logf(format string, args ...interface{}) {
+func (g *GatewayProxy) logf(format string, args ...any) {
 	if g.s.T.Context().Err() != nil {
 		return
 	}

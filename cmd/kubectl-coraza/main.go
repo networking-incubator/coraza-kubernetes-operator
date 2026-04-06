@@ -113,7 +113,7 @@ func genCRS(cmd *cobra.Command, _ []string) error {
 
 	ignoreSet := map[string]struct{}{}
 	if strings.TrimSpace(ignoreCSV) != "" {
-		for _, p := range strings.Split(ignoreCSV, ",") {
+		for p := range strings.SplitSeq(ignoreCSV, ",") {
 			id := strings.TrimSpace(p)
 			if id != "" {
 				ignoreSet[id] = struct{}{}

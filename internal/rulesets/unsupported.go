@@ -298,7 +298,7 @@ func ruleIDsByTier(tier Tier) []int {
 // SecLang comments are lines whose first non-whitespace character is #.
 func stripCommentLines(rules string) string {
 	var b strings.Builder
-	for _, line := range strings.Split(rules, "\n") {
+	for line := range strings.SplitSeq(rules, "\n") {
 		trimmed := strings.TrimSpace(line)
 		if len(trimmed) == 0 || trimmed[0] == '#' {
 			continue

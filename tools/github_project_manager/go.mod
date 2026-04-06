@@ -1,6 +1,6 @@
 module github.com/networking-incubator/coraza-kubernetes-operator/tools/github_project_manager
 
-go 1.26.0
+go 1.26.1
 
 require (
 	github.com/Masterminds/semver/v3 v3.4.0
