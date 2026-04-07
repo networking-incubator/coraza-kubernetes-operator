@@ -210,7 +210,11 @@ func TestCoreRuleSetConformance(t *testing.T) {
 		// Close the log stream first to unblock the streaming goroutine,
 		// then wait for it to finish before closing the file.
 		_ = logStream.Close()
-		<-logDone // Wait for streaming goroutine to finish
+		select {
+		case <-logDone:
+		case <-time.After(10 * time.Second):
+			s.T.Log("warning: timed out waiting for log streaming goroutine")
+		}
 		_ = logFile.Close()
 		s.T.Logf("Gateway logs saved to: %s", logFile.Name())
 	})
