@@ -24,36 +24,35 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestValidateConfigMapRules(t *testing.T) {
+func TestValidateRuleSourceRules(t *testing.T) {
 	t.Run("valid rules return nil", func(t *testing.T) {
-		err := validateConfigMapRules(`SecDefaultAction "phase:1,log,auditlog,pass"`, "test-cm", nil)
+		err := validateRuleSourceRules(`SecDefaultAction "phase:1,log,auditlog,pass"`, "test-rs", nil)
 		assert.NoError(t, err)
 	})
 
-	t.Run("invalid rules return error mentioning ConfigMap name", func(t *testing.T) {
-		err := validateConfigMapRules(`SecInvalidDirective "bad"`, "bad-cm", nil)
+	t.Run("invalid rules return error mentioning RuleSource name", func(t *testing.T) {
+		err := validateRuleSourceRules(`SecInvalidDirective "bad"`, "bad-rs", nil)
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "bad-cm")
+		assert.Contains(t, err.Error(), "bad-rs")
 		assert.Contains(t, err.Error(), "doesn't contain valid rules")
 	})
 
-	t.Run("missing file error is skipped when file exists in secretData", func(t *testing.T) {
-		secretData := map[string][]byte{"rule1.data": []byte("content")}
-		err := validateConfigMapRules(
+	t.Run("missing file error is skipped when file exists in dataFiles", func(t *testing.T) {
+		dataFiles := map[string][]byte{"rule1.data": []byte("content")}
+		err := validateRuleSourceRules(
 			`SecRule REQUEST_URI "@pmFromFile rule1.data" "id:1,phase:1,deny"`,
-			"data-cm", secretData,
+			"data-rs", dataFiles,
 		)
 		assert.NoError(t, err)
 	})
 
-	t.Run("missing file error is reported when file not in secretData", func(t *testing.T) {
-		err := validateConfigMapRules(
+	t.Run("missing file error is reported when file not in dataFiles", func(t *testing.T) {
+		err := validateRuleSourceRules(
 			`SecRule REQUEST_URI "@pmFromFile missing.data" "id:1,phase:1,deny"`,
-			"data-cm", nil,
+			"data-rs", nil,
 		)
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "data-cm")
-		// Adversarial: user-visible error must not embed memfs/container absolute paths.
+		assert.Contains(t, err.Error(), "data-rs")
 		msg := err.Error()
 		if strings.Contains(msg, "/") {
 			for _, leak := range []string{"/var/", "/etc/", "/tmp/", "/app/", "/root/"} {

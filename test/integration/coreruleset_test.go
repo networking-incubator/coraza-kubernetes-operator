@@ -31,7 +31,7 @@ import (
 // keep the test focused.
 //
 // For full CRS loading, consider importing github.com/corazawaf/coraza-coreruleset
-// and loading the complete ruleset into ConfigMaps.
+// and loading the complete ruleset into RuleSources.
 //
 // Related: https://github.com/networking-incubator/coraza-kubernetes-operator/issues/12
 func TestCoreRulesetCompatibility(t *testing.T) {
@@ -54,7 +54,7 @@ func TestCoreRulesetCompatibility(t *testing.T) {
 
 	s.Step("deploy coreruleset-compatible rules")
 
-	s.CreateConfigMap(ns, "base-rules", `
+	s.CreateRuleSource(ns, "base-rules", `
 SecRuleEngine On
 SecRequestBodyAccess On
 SecResponseBodyAccess Off
@@ -64,7 +64,7 @@ SecAuditEngine RelevantOnly
 `)
 
 	// SQL injection detection (inspired by CRS rule 942100)
-	s.CreateConfigMap(ns, "sqli-rules", `
+	s.CreateRuleSource(ns, "sqli-rules", `
 SecRule ARGS "@rx (?i:(\b(select|union|insert|update|delete|drop)\b.*\b(from|into|where|table)\b))" \
   "id:942100,\
   phase:2,\
@@ -76,7 +76,7 @@ SecRule ARGS "@rx (?i:(\b(select|union|insert|update|delete|drop)\b.*\b(from|int
 `)
 
 	// XSS detection (inspired by CRS rule 941100)
-	s.CreateConfigMap(ns, "xss-rules", `
+	s.CreateRuleSource(ns, "xss-rules", `
 SecRule ARGS "@rx (?i:<script[^>]*>)" \
   "id:941100,\
   phase:2,\

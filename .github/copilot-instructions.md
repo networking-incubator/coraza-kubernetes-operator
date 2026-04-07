@@ -33,7 +33,7 @@ Only provide minor feedback when the user explicitly requests it with `/copilot 
 
 ## Project Overview
 
-This is a Kubernetes operator (controller-runtime) that manages two CRDs: **Engine** and **RuleSet** (group `waf.k8s.coraza.io`, version `v1alpha1`). Engine creates Istio `WasmPlugin` resources. RuleSet aggregates SecLang WAF rules from ConfigMaps into an in-memory cache served over HTTP.
+This is a Kubernetes operator (controller-runtime) that manages two CRDs: **Engine** and **RuleSet** (group `waf.k8s.coraza.io`, version `v1alpha1`). Engine creates Istio `WasmPlugin` resources. RuleSet aggregates SecLang WAF rules from RuleSource objects into an in-memory cache served over HTTP.
 
 The operator is one half of a two-repo system. The other half is a WASM plugin (`coraza-proxy-wasm`) that runs inside Envoy/Istio and polls the operator's cache server for rules. Changes to WasmPlugin config fields (`cache_server_instance`, `cache_server_cluster`, `rule_reload_interval_seconds`) directly affect WASM plugin behavior. Flag any PR that changes these field names or the cache server HTTP API paths (`/rules/<key>`, `/rules/<key>/latest`) as a **Critical cross-repo breaking change**.
 
@@ -45,7 +45,7 @@ The operator is one half of a two-repo system. The other half is a WASM plugin (
 
 ## Cross-Namespace References
 
-Cross-namespace references between Engine, RuleSet, and ConfigMap are explicitly disallowed. Any PR that weakens this constraint needs justification.
+Cross-namespace references between Engine, RuleSet, and RuleSource are explicitly disallowed. Any PR that weakens this constraint needs justification.
 
 ## Testing Expectations
 
@@ -74,7 +74,7 @@ Cross-namespace references between Engine, RuleSet, and ConfigMap are explicitly
 
 This operator manages Web Application Firewall rules. Security is paramount:
 
- - **Input validation:** By default, SecLang rules from ConfigMaps are validated before being accepted, and invalid rules must be rejected with clear error messages in status conditions. The controller supports opting out of per-ConfigMap validation with the `coraza.io/validation: "false"` annotation; even when this is used, the aggregated RuleSet is still validated before caching and must be rejected on validation failure with appropriate status reporting.
+ - **Input validation:** By default, SecLang rules from RuleSource objects are validated before being accepted, and invalid rules must be rejected with clear error messages in status conditions. The controller supports opting out of per-RuleSource validation with the `coraza.io/validation: "false"` annotation on a `type: Rule` RuleSource; even when this is used, the aggregated RuleSet is still validated before caching and must be rejected on validation failure with appropriate status reporting.
 - **Namespace isolation:** Cross-namespace references are **explicitly prohibited**. Never weaken this constraint without security review.
 - **Secret handling:** If PRs introduce credential handling, ensure secrets are never logged or exposed in status fields.
 - **Denial of Service:** Large rule sets or very frequent polling (small reload intervals) can DoS the cache server. Review performance impacts of cache operations and polling configuration.

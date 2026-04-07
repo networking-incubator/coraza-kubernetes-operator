@@ -19,12 +19,43 @@ limitations under the License.
 package utils
 
 import (
-	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	wafv1alpha1 "github.com/networking-incubator/coraza-kubernetes-operator/api/v1alpha1"
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/defaults"
 )
+
+// -----------------------------------------------------------------------------
+// Test Resource Builders - RuleSource
+// -----------------------------------------------------------------------------
+
+// NewTestRuleSource creates a test RuleSource of type Rule with the given rules text.
+func NewTestRuleSource(name, namespace, rules string) *wafv1alpha1.RuleSource {
+	return &wafv1alpha1.RuleSource{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: namespace,
+		},
+		Spec: wafv1alpha1.RuleSourceSpec{
+			Type:  wafv1alpha1.RuleSourceTypeRule,
+			Rules: ptr.To(rules),
+		},
+	}
+}
+
+// NewTestRuleSourceData creates a test RuleSource of type Data with the given files.
+func NewTestRuleSourceData(name, namespace string, files map[string]string) *wafv1alpha1.RuleSource {
+	return &wafv1alpha1.RuleSource{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: namespace,
+		},
+		Spec: wafv1alpha1.RuleSourceSpec{
+			Type:  wafv1alpha1.RuleSourceTypeData,
+			Files: files,
+		},
+	}
+}
 
 // -----------------------------------------------------------------------------
 // Test Resource Builders - RuleSet
@@ -34,8 +65,7 @@ import (
 type RuleSetOptions struct {
 	Name      string
 	Namespace string
-	Rules     []wafv1alpha1.RuleSourceReference
-	RuleData  string
+	Sources   []wafv1alpha1.SourceReference
 }
 
 // NewTestRuleSet creates a test RuleSet resource with sensible defaults
@@ -46,8 +76,8 @@ func NewTestRuleSet(opts RuleSetOptions) *wafv1alpha1.RuleSet {
 	if opts.Namespace == "" {
 		opts.Namespace = "default"
 	}
-	if opts.Rules == nil {
-		opts.Rules = []wafv1alpha1.RuleSourceReference{
+	if opts.Sources == nil {
+		opts.Sources = []wafv1alpha1.SourceReference{
 			{Name: "test-rules"},
 		}
 	}
@@ -58,40 +88,11 @@ func NewTestRuleSet(opts RuleSetOptions) *wafv1alpha1.RuleSet {
 			Namespace: opts.Namespace,
 		},
 		Spec: wafv1alpha1.RuleSetSpec{
-			Rules: opts.Rules,
+			Sources: opts.Sources,
 		},
-	}
-
-	if opts.RuleData != "" {
-		ruleset.Spec.RuleData = opts.RuleData
 	}
 
 	return ruleset
-}
-
-// NewTestConfigMap creates a test ConfigMap with WAF rules
-func NewTestConfigMap(name, namespace, rules string) *corev1.ConfigMap {
-	return &corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
-			Namespace: namespace,
-		},
-		Data: map[string]string{
-			"rules": rules,
-		},
-	}
-}
-
-// NewTestRuleData creates a test Secret with WAF rules data
-func NewTestRuleData(name, namespace string, data map[string][]byte) *corev1.Secret {
-	return &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
-			Namespace: namespace,
-		},
-		Type: wafv1alpha1.RuleDataSecretType,
-		Data: data,
-	}
 }
 
 // -----------------------------------------------------------------------------

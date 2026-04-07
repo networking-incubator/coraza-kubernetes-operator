@@ -23,7 +23,6 @@ import (
 
 	"github.com/corazawaf/coraza/v3"
 	"github.com/go-logr/logr"
-	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -47,8 +46,7 @@ import (
 
 // +kubebuilder:rbac:groups=waf.k8s.coraza.io,resources=rulesets,verbs=get;list;watch;patch;update
 // +kubebuilder:rbac:groups=waf.k8s.coraza.io,resources=rulesets/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch
-// +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
+// +kubebuilder:rbac:groups=waf.k8s.coraza.io,resources=rulesources,verbs=get;list;watch
 
 // -----------------------------------------------------------------------------
 // RuleSetReconciler
@@ -91,19 +89,8 @@ func (r *RuleSetReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			annotationChangedPredicate(wafv1alpha1.AnnotationSkipUnsupportedRulesCheck),
 		))).
 		Watches(
-			&corev1.ConfigMap{},
-			handler.EnqueueRequestsFromMapFunc(r.findRuleSetsForConfigMap),
-		).
-		Watches(
-			&corev1.Secret{},
-			handler.EnqueueRequestsFromMapFunc(r.findRuleSetsForSecret),
-			builder.WithPredicates(predicate.NewPredicateFuncs(func(object client.Object) bool {
-				secret, ok := object.(*corev1.Secret)
-				if !ok {
-					return false
-				}
-				return secret.Type == wafv1alpha1.RuleDataSecretType
-			})),
+			&wafv1alpha1.RuleSource{},
+			handler.EnqueueRequestsFromMapFunc(r.findRuleSetsForRuleSource),
 		).
 		WithOptions(controller.Options{
 			RateLimiter: workqueue.NewTypedItemExponentialFailureRateLimiter[ctrl.Request](
@@ -139,20 +126,14 @@ func (r *RuleSetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, err
 	}
 
-	logDebug(log, req, "RuleSet", "Loading rule data")
-	secretData, done, err := r.loadRuleDataSecret(ctx, log, req, &ruleset)
-	if done || err != nil {
-		return ctrl.Result{}, err
-	}
-
-	logDebug(log, req, "RuleSet", "aggregating rules")
-	aggregatedRules, aggregatedErrors, done, err := r.aggregateRulesFromSources(ctx, log, req, &ruleset, secretData)
+	logDebug(log, req, "RuleSet", "Loading RuleSource objects")
+	dataFiles, aggregatedRules, aggregatedErrors, done, err := r.loadSources(ctx, log, req, &ruleset)
 	if done || err != nil {
 		return ctrl.Result{}, err
 	}
 
 	logInfo(log, req, "RuleSet", "Validating aggregated rules")
-	fsRules := getDataFilesystem(secretData)
+	fsRules := getDataFilesystem(dataFiles)
 	conf := coraza.NewWAFConfig().WithDirectives(aggregatedRules)
 	if fsRules != nil {
 		conf = conf.WithRootFS(fsRules)
@@ -171,7 +152,7 @@ func (r *RuleSetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	}
 
 	logInfo(log, req, "RuleSet", "Caching rules")
-	return r.cacheRules(ctx, log, req, &ruleset, aggregatedRules, secretData, unsupportedMsg)
+	return r.cacheRules(ctx, log, req, &ruleset, aggregatedRules, dataFiles, unsupportedMsg)
 }
 
 // -----------------------------------------------------------------------------

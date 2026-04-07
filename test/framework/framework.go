@@ -27,7 +27,7 @@ limitations under the License.
 //	// ... in a test function:
 //	s := fw.NewScenario(t)
 //	s.CreateNamespace("my-test")
-//	s.CreateConfigMap("my-test", "rules", rulesData)
+//	s.CreateRuleSource("my-test", "rules", rulesData)
 //	s.CreateRuleSet("my-test", "ruleset", refs)
 //	s.CreateEngine("my-test", "engine", framework.EngineOpts{...})
 //	s.ExpectEngineReady("my-test", "engine")

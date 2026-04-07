@@ -19,10 +19,15 @@ spec:
         kind: Engine
         name: engines.waf.k8s.coraza.io
         version: v1alpha1
-      - description: RuleSet defines an ordered set of WAF rules sourced from ConfigMaps.
+      - description: RuleSet defines an ordered set of WAF rules sourced from RuleSources.
         displayName: RuleSet
         kind: RuleSet
         name: rulesets.waf.k8s.coraza.io
+        version: v1alpha1
+      - description: RuleSource holds WAF rule text or data file content for consumption by RuleSets.
+        displayName: RuleSource
+        kind: RuleSource
+        name: rulesources.waf.k8s.coraza.io
         version: v1alpha1
   description: |
     The Coraza Kubernetes Operator provides Web Application Firewall (WAF)
@@ -72,9 +77,6 @@ spec:
       name: networking-incubator
   maturity: alpha
   nativeAPIs:
-    - group: ""
-      kind: ConfigMap
-      version: v1
     - group: ""
       kind: Pod
       version: v1

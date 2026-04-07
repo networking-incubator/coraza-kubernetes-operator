@@ -41,8 +41,8 @@ func TestRuleSetDeletion(t *testing.T) {
 	s.ExpectGatewayProgrammed(ns, "gw")
 
 	s.Step("deploy initial rules")
-	s.CreateConfigMap(ns, "base-rules", `SecRuleEngine On`)
-	s.CreateConfigMap(ns, "block-rules", framework.SimpleBlockRule(9001, "blocked"))
+	s.CreateRuleSource(ns, "base-rules", `SecRuleEngine On`)
+	s.CreateRuleSource(ns, "block-rules", framework.SimpleBlockRule(9001, "blocked"))
 	s.CreateRuleSet(ns, "ruleset", []string{"base-rules", "block-rules"})
 	s.ExpectRuleSetReady(ns, "ruleset")
 
@@ -88,8 +88,8 @@ func TestEngineDeleteRecreate(t *testing.T) {
 	s.ExpectGatewayProgrammed(ns, "gw")
 
 	s.Step("deploy rules")
-	s.CreateConfigMap(ns, "base-rules", `SecRuleEngine On`)
-	s.CreateConfigMap(ns, "block-rules", framework.SimpleBlockRule(9101, "firstblock"))
+	s.CreateRuleSource(ns, "base-rules", `SecRuleEngine On`)
+	s.CreateRuleSource(ns, "block-rules", framework.SimpleBlockRule(9101, "firstblock"))
 	s.CreateRuleSet(ns, "ruleset", []string{"base-rules", "block-rules"})
 
 	s.Step("create first engine")
@@ -119,7 +119,7 @@ func TestEngineDeleteRecreate(t *testing.T) {
 	s.ExpectResourceGone(ns, "coraza-engine-engine", framework.WasmPluginGVR)
 
 	s.Step("update rules for second engine")
-	s.UpdateConfigMap(ns, "block-rules", framework.SimpleBlockRule(9102, "secondblock"))
+	s.UpdateRuleSource(ns, "block-rules", framework.SimpleBlockRule(9102, "secondblock"))
 
 	s.Step("recreate engine")
 	s.CreateEngine(ns, "engine", framework.EngineOpts{
@@ -134,21 +134,21 @@ func TestEngineDeleteRecreate(t *testing.T) {
 	gw.ExpectAllowed("/?test=firstblock") // Old rule should no longer block
 }
 
-// TestConfigMapDeletion verifies that deleting a ConfigMap referenced by a RuleSet
+// TestRuleSourceDeletion verifies that deleting a RuleSource referenced by a RuleSet
 // causes the RuleSet to become degraded, but cached rules continue to apply.
-func TestConfigMapDeletion(t *testing.T) {
+func TestRuleSourceDeletion(t *testing.T) {
 	t.Parallel()
 	s := fw.NewScenario(t)
 
-	ns := s.GenerateNamespace("cm-delete")
+	ns := s.GenerateNamespace("rs-delete")
 
 	s.Step("create gateway")
 	s.CreateGateway(ns, "gw")
 	s.ExpectGatewayProgrammed(ns, "gw")
 
 	s.Step("deploy rules")
-	s.CreateConfigMap(ns, "base-rules", `SecRuleEngine On`)
-	s.CreateConfigMap(ns, "block-rules", framework.SimpleBlockRule(9201, "blocked"))
+	s.CreateRuleSource(ns, "base-rules", `SecRuleEngine On`)
+	s.CreateRuleSource(ns, "block-rules", framework.SimpleBlockRule(9201, "blocked"))
 	s.CreateRuleSet(ns, "ruleset", []string{"base-rules", "block-rules"})
 	s.ExpectRuleSetReady(ns, "ruleset")
 
@@ -166,21 +166,18 @@ func TestConfigMapDeletion(t *testing.T) {
 	gw := s.ProxyToGateway(ns, "gw")
 	gw.ExpectBlocked("/?test=blocked")
 
-	s.Step("delete ConfigMap")
-	err := s.F.KubeClient.CoreV1().ConfigMaps(ns).Delete(
-		context.Background(), "block-rules", metav1.DeleteOptions{},
-	)
-	if err != nil {
-		t.Fatalf("failed to delete configmap: %v", err)
-	}
+	s.Step("delete RuleSource")
+	s.DeleteRuleSource(ns, "block-rules")
 
-	s.Step("verify cached rules still apply")
-	// Cached rules should continue working
+	s.Step("verify RuleSet becomes degraded after source deletion")
+	s.ExpectRuleSetDegraded(ns, "ruleset")
+
+	s.Step("verify cached rules still apply despite degraded RuleSet")
 	gw.ExpectBlocked("/?test=blocked")
 	gw.ExpectAllowed("/?test=safe")
 }
 
-// TestRuleSetOrderMatters verifies that ConfigMaps in a RuleSet are processed
+// TestRuleSetOrderMatters verifies that RuleSources in a RuleSet are processed
 // in order, and rule precedence is maintained.
 func TestRuleSetOrderMatters(t *testing.T) {
 	t.Parallel()
@@ -194,14 +191,14 @@ func TestRuleSetOrderMatters(t *testing.T) {
 
 	s.Step("deploy rules with specific order")
 	// First rule: allow everything with "safe" prefix
-	s.CreateConfigMap(ns, "allow-rules", `SecRuleEngine On
+	s.CreateRuleSource(ns, "allow-rules", `SecRuleEngine On
 SecRule REQUEST_URI "@beginsWith /safe" "id:9301,phase:1,pass,nolog"`)
 
 	// Second rule: block everything with "blocked" (should apply after allow)
-	s.CreateConfigMap(ns, "block-rules", `SecRule REQUEST_URI|ARGS "@contains blocked" "id:9302,phase:2,deny,status:403"`)
+	s.CreateRuleSource(ns, "block-rules", `SecRule REQUEST_URI|ARGS "@contains blocked" "id:9302,phase:2,deny,status:403"`)
 
 	// Third rule: specific override - block even safe paths with "override"
-	s.CreateConfigMap(ns, "override-rules", `SecRule REQUEST_URI "@contains override" "id:9303,phase:1,deny,status:403"`)
+	s.CreateRuleSource(ns, "override-rules", `SecRule REQUEST_URI "@contains override" "id:9303,phase:1,deny,status:403"`)
 
 	s.CreateRuleSet(ns, "ruleset", []string{"allow-rules", "block-rules", "override-rules"})
 
@@ -237,7 +234,7 @@ func TestEmptyRuleSet(t *testing.T) {
 	s.ExpectGatewayProgrammed(ns, "gw")
 
 	s.Step("deploy rules with engine disabled")
-	s.CreateConfigMap(ns, "disabled-rules", `SecRuleEngine Off`)
+	s.CreateRuleSource(ns, "disabled-rules", `SecRuleEngine Off`)
 	s.CreateRuleSet(ns, "ruleset", []string{"disabled-rules"})
 
 	s.Step("create engine")

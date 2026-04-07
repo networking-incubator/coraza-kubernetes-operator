@@ -8,15 +8,6 @@ rules:
 - apiGroups:
   - ""
   resources:
-  - configmaps
-  - secrets
-  verbs:
-  - get
-  - list
-  - watch
-- apiGroups:
-  - ""
-  resources:
   - pods
   verbs:
   - list
@@ -131,3 +122,11 @@ rules:
   - get
   - patch
   - update
+- apiGroups:
+  - waf.k8s.coraza.io
+  resources:
+  - rulesources
+  verbs:
+  - get
+  - list
+  - watch

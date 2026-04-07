@@ -8,7 +8,7 @@ import (
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/rulesets"
 )
 
-// NamedYAML is one generated ConfigMap manifest (full document YAML).
+// NamedYAML is one generated RuleSource manifest (full document YAML).
 type NamedYAML struct {
 	Name string
 	Doc  string
@@ -20,32 +20,32 @@ type BuildStats struct {
 	Skipped   int
 }
 
-// ConfFileResult holds one .conf outcome for logging (mirrors buildConfigMapYAML).
+// ConfFileResult holds one .conf outcome for logging.
 type ConfFileResult struct {
 	BaseName   string
 	Warns      []string
-	ConfigName string
+	SourceName string
 	YAML       string
 	SkipReason string
 }
 
 // ManifestBundle is the full multi-doc output before writing to stdout.
 type ManifestBundle struct {
-	BaseConfigMapYAML string
-	ExtraConfigMaps   []NamedYAML
-	SecretDoc         string
-	RuleSetDoc        string
-	Stats             BuildStats
-	ConfFileResults   []ConfFileResult
+	BaseRuleSourceYAML string
+	ExtraRuleSources   []NamedYAML
+	DataRuleSourceDoc  string
+	RuleSetDoc         string
+	Stats              BuildStats
+	ConfFileResults    []ConfFileResult
 }
 
-// Build produces base ConfigMap, per-.conf ConfigMaps, optional Secret, and RuleSet from a
-// parsed [CRSVersion]. It does not read stderr or write to stdout.
+// Build produces base RuleSource, per-.conf RuleSources, optional Data RuleSource,
+// and RuleSet from a parsed [CRSVersion]. It does not read stderr or write to stdout.
 func Build(opts Options, scan ScanResult, ver CRSVersion) (*ManifestBundle, error) {
 	opts = mergeUnsupportedIDs(opts)
 
 	baseYAML, baseRulesScalar := baseRulesYAML(ver.Normalized, ver.Setup, opts.IncludeTestRule)
-	baseYAML = injectNamespaceInBaseConfigMapYAML(baseYAML, opts.Namespace)
+	baseYAML = injectNamespaceInBaseRuleSourceYAML(baseYAML, opts.Namespace)
 	if err := checkPayloadSize(baseRulesScalar, "base-rules", opts); err != nil {
 		return nil, err
 	}
@@ -56,19 +56,19 @@ func Build(opts Options, scan ScanResult, ver CRSVersion) (*ManifestBundle, erro
 	processed, skipped := 0, 0
 
 	for _, p := range scan.ConfPaths {
-		name, cmYAML, skipReason, warns, berr := buildConfigMapYAML(p, opts)
+		name, rsYAML, skipReason, warns, berr := buildRuleSourceYAML(p, opts)
 		confResults = append(confResults, ConfFileResult{
 			BaseName:   filepath.Base(p),
 			Warns:      warns,
-			ConfigName: name,
-			YAML:       cmYAML,
+			SourceName: name,
+			YAML:       rsYAML,
 			SkipReason: skipReason,
 		})
 		if berr != nil {
 			return nil, berr
 		}
-		if cmYAML != "" {
-			extra = append(extra, NamedYAML{Name: name, Doc: cmYAML})
+		if rsYAML != "" {
+			extra = append(extra, NamedYAML{Name: name, Doc: rsYAML})
 			names = append(names, name)
 			processed++
 		} else {
@@ -76,10 +76,10 @@ func Build(opts Options, scan ScanResult, ver CRSVersion) (*ManifestBundle, erro
 		}
 	}
 
-	secretDoc := ""
+	dataDoc := ""
 	if len(scan.DataPaths) > 0 {
 		var serr error
-		secretDoc, serr = buildDataSecretYAML(scan.DataPaths, opts)
+		dataDoc, serr = buildDataRuleSourceYAML(scan.DataPaths, opts)
 		if serr != nil {
 			return nil, serr
 		}
@@ -88,12 +88,12 @@ func Build(opts Options, scan ScanResult, ver CRSVersion) (*ManifestBundle, erro
 	rs := rulesetYAML(names, opts, len(scan.DataPaths) > 0)
 
 	return &ManifestBundle{
-		BaseConfigMapYAML: baseYAML,
-		ExtraConfigMaps:   extra,
-		SecretDoc:         secretDoc,
-		RuleSetDoc:        rs,
-		Stats:             BuildStats{Processed: processed, Skipped: skipped},
-		ConfFileResults:   confResults,
+		BaseRuleSourceYAML: baseYAML,
+		ExtraRuleSources:   extra,
+		DataRuleSourceDoc:  dataDoc,
+		RuleSetDoc:         rs,
+		Stats:              BuildStats{Processed: processed, Skipped: skipped},
+		ConfFileResults:    confResults,
 	}, nil
 }
 

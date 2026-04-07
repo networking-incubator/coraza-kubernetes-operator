@@ -29,7 +29,7 @@ import (
 	"github.com/networking-incubator/coraza-kubernetes-operator/test/framework"
 )
 
-// TestRapidRuleUpdates verifies that rapidly updating ConfigMap rules
+// TestRapidRuleUpdates verifies that rapidly updating RuleSource rules
 // multiple times results in the final state being correctly applied.
 func TestRapidRuleUpdates(t *testing.T) {
 	t.Parallel()
@@ -42,8 +42,8 @@ func TestRapidRuleUpdates(t *testing.T) {
 	s.ExpectGatewayProgrammed(ns, "gw")
 
 	s.Step("deploy initial rules")
-	s.CreateConfigMap(ns, "base-rules", `SecRuleEngine On`)
-	s.CreateConfigMap(ns, "block-rules", framework.SimpleBlockRule(11001, "initial"))
+	s.CreateRuleSource(ns, "base-rules", `SecRuleEngine On`)
+	s.CreateRuleSource(ns, "block-rules", framework.SimpleBlockRule(11001, "initial"))
 	s.CreateRuleSet(ns, "ruleset", []string{"base-rules", "block-rules"})
 
 	s.CreateEngine(ns, "engine", framework.EngineOpts{
@@ -61,7 +61,7 @@ func TestRapidRuleUpdates(t *testing.T) {
 	s.Step("perform 10 rapid rule updates")
 	for i := 1; i <= 10; i++ {
 		pattern := fmt.Sprintf("pattern-%d", i)
-		s.UpdateConfigMap(ns, "block-rules", framework.SimpleBlockRule(11001+i, pattern))
+		s.UpdateRuleSource(ns, "block-rules", framework.SimpleBlockRule(11001+i, pattern))
 		// Small delay to allow some processing, but rapid enough to test race conditions
 		time.Sleep(100 * time.Millisecond)
 	}
@@ -92,8 +92,8 @@ func TestGatewayPodRestart(t *testing.T) {
 	s.ExpectGatewayProgrammed(ns, "gw")
 
 	s.Step("deploy rules")
-	s.CreateConfigMap(ns, "base-rules", `SecRuleEngine On`)
-	s.CreateConfigMap(ns, "block-rules", framework.SimpleBlockRule(11201, "blocked"))
+	s.CreateRuleSource(ns, "base-rules", `SecRuleEngine On`)
+	s.CreateRuleSource(ns, "block-rules", framework.SimpleBlockRule(11201, "blocked"))
 	s.CreateRuleSet(ns, "ruleset", []string{"base-rules", "block-rules"})
 
 	s.CreateEngine(ns, "engine", framework.EngineOpts{
@@ -149,8 +149,8 @@ func TestEngineRecreateAfterGateway(t *testing.T) {
 	ns := s.GenerateNamespace("engine-first")
 
 	s.Step("deploy rules")
-	s.CreateConfigMap(ns, "base-rules", `SecRuleEngine On`)
-	s.CreateConfigMap(ns, "block-rules", framework.SimpleBlockRule(11301, "blocked"))
+	s.CreateRuleSource(ns, "base-rules", `SecRuleEngine On`)
+	s.CreateRuleSource(ns, "block-rules", framework.SimpleBlockRule(11301, "blocked"))
 	s.CreateRuleSet(ns, "ruleset", []string{"base-rules", "block-rules"})
 
 	s.Step("create engine before gateway exists")
@@ -198,10 +198,10 @@ func TestConcurrentRuleSetUpdates(t *testing.T) {
 	}
 
 	s.Step("deploy multiple engines with separate rulesets")
-	s.CreateConfigMap(ns, "base-rules", `SecRuleEngine On`)
+	s.CreateRuleSource(ns, "base-rules", `SecRuleEngine On`)
 
 	for _, e := range engines {
-		s.CreateConfigMap(ns, fmt.Sprintf("rules-%s", e.name), framework.SimpleBlockRule(e.ruleID, e.pattern))
+		s.CreateRuleSource(ns, fmt.Sprintf("rules-%s", e.name), framework.SimpleBlockRule(e.ruleID, e.pattern))
 		s.CreateRuleSet(ns, fmt.Sprintf("ruleset-%s", e.name), []string{"base-rules", fmt.Sprintf("rules-%s", e.name)})
 		s.CreateEngine(ns, e.name, framework.EngineOpts{
 			RuleSetName: fmt.Sprintf("ruleset-%s", e.name),
@@ -221,10 +221,10 @@ func TestConcurrentRuleSetUpdates(t *testing.T) {
 	gw.ExpectBlocked("/?test=gamma")
 
 	s.Step("update all rulesets concurrently")
-	// Update all ConfigMaps rapidly
+	// Update all RuleSources rapidly
 	for i, e := range engines {
 		newPattern := fmt.Sprintf("updated-%d", i+1)
-		s.UpdateConfigMap(ns, fmt.Sprintf("rules-%s", e.name), framework.SimpleBlockRule(e.ruleID+100, newPattern))
+		s.UpdateRuleSource(ns, fmt.Sprintf("rules-%s", e.name), framework.SimpleBlockRule(e.ruleID+100, newPattern))
 	}
 
 	s.Step("wait for reconciliation")

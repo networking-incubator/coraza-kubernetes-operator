@@ -22,15 +22,11 @@ func (r *RuleSetReconciler) cacheRules(
 	req ctrl.Request,
 	ruleset *wafv1alpha1.RuleSet,
 	aggregatedRules string,
-	secretData map[string][]byte,
+	dataFiles map[string][]byte,
 	unsupportedMsg string,
 ) (ctrl.Result, error) {
 	cacheKey := fmt.Sprintf("%s/%s", ruleset.Namespace, ruleset.Name)
-	// NOTE: The data stored in the cache (including any RuleData sourced from a Secret)
-	// is served by the cache HTTP server for consumption by the WASM plugin and must
-	// therefore not contain sensitive or credential material. Treat the cache server
-	// endpoint as internal / trusted-only in deployments.
-	r.Cache.Put(cacheKey, aggregatedRules, secretData)
+	r.Cache.Put(cacheKey, aggregatedRules, dataFiles)
 	logInfo(log, req, "RuleSet", "Stored rules in cache", "cacheKey", cacheKey)
 
 	statusMsg := buildCacheReadyMessage(ruleset.Namespace, ruleset.Name, unsupportedMsg)

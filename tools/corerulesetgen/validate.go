@@ -8,12 +8,12 @@ import (
 	"k8s.io/apimachinery/pkg/util/validation"
 )
 
-// Approximate max size for a single ConfigMap "rules" entry or one Secret stringData value
+// Approximate max size for a single RuleSource "rules" entry or one Data files value
 // to stay under etcd limits (~1 MiB per object / value).
 const maxRulesPayloadBytes = 900 * 1024
 
-// Approximate max total size of all Secret stringData values combined.
-const maxSecretStringDataTotalBytes = 900 * 1024
+// Approximate max total size of all Data files values combined.
+const maxDataFilesTotalBytes = 900 * 1024
 
 var (
 	validVersionRe = regexp.MustCompile(`^\d+(\.\d+)*$`)
@@ -56,7 +56,7 @@ func checkPayloadSize(rulesBlock string, objectName string, opts Options) error 
 	return nil
 }
 
-func checkSecretStringDataSize(secretName string, entries map[string]string, opts Options) error {
+func checkRuleSourceDataSize(sourceName string, entries map[string]string, opts Options) error {
 	if opts.SkipSizeCheck {
 		return nil
 	}
@@ -64,44 +64,44 @@ func checkSecretStringDataSize(secretName string, entries map[string]string, opt
 	for k, v := range entries {
 		n := len(v)
 		if n > maxRulesPayloadBytes {
-			return fmt.Errorf("secret %q key %q is about %d bytes (limit %d per value): trim data files or pass --skip-size-check to override (not recommended)",
-				secretName, k, n, maxRulesPayloadBytes)
+			return fmt.Errorf("RuleSource %q file %q is about %d bytes (limit %d per value): trim data files or pass --skip-size-check to override (not recommended)",
+				sourceName, k, n, maxRulesPayloadBytes)
 		}
 		total += n
 	}
-	if total > maxSecretStringDataTotalBytes {
-		return fmt.Errorf("secret %q stringData total is about %d bytes (limit %d): split data across secrets or pass --skip-size-check to override (not recommended)",
-			secretName, total, maxSecretStringDataTotalBytes)
+	if total > maxDataFilesTotalBytes {
+		return fmt.Errorf("RuleSource %q files total is about %d bytes (limit %d): split data across RuleSources or pass --skip-size-check to override (not recommended)",
+			sourceName, total, maxDataFilesTotalBytes)
 	}
 	return nil
 }
 
-// validateConfigMapObjectName ensures the final metadata.name is acceptable to the
+// validateRuleSourceObjectName ensures the final metadata.name is acceptable to the
 // apiserver (RFC 1123 DNS subdomain, max 253 runes), including after NamePrefix/NameSuffix.
-func validateConfigMapObjectName(name string) error {
+func validateRuleSourceObjectName(name string) error {
 	if errs := validation.IsDNS1123Subdomain(name); len(errs) > 0 {
-		return fmt.Errorf("invalid ConfigMap name %q: %s", name, strings.Join(errs, "; "))
+		return fmt.Errorf("invalid RuleSource name %q: %s", name, strings.Join(errs, "; "))
 	}
 	return nil
 }
 
-// validateSecretStringDataKey ensures a Secret stringData key derived from a filename is
-// valid for the apiserver (same rules as ConfigMap data keys).
-func validateSecretStringDataKey(key string) error {
+// validateDataFileKey ensures a RuleSource files key derived from a filename is
+// valid for the apiserver.
+func validateDataFileKey(key string) error {
 	if errs := validation.IsConfigMapKey(key); len(errs) > 0 {
-		return fmt.Errorf("invalid Secret stringData key %q (from data filename): %s", key, strings.Join(errs, "; "))
+		return fmt.Errorf("invalid RuleSource files key %q (from data filename): %s", key, strings.Join(errs, "; "))
 	}
 	return nil
 }
 
-func generateConfigMapName(fileBase string) (string, error) {
+func generateRuleSourceName(fileBase string) (string, error) {
 	name := strings.ToLower(strings.TrimSuffix(fileBase, ".conf"))
 	name = strings.ReplaceAll(name, "_", "-")
 	name = nameSanitizeRe.ReplaceAllString(name, "")
 	name = strings.TrimLeft(name, "-.")
 	name = strings.TrimRight(name, "-.")
 	if name == "" {
-		return "", fmt.Errorf("cannot generate valid ConfigMap name from file: %s", fileBase)
+		return "", fmt.Errorf("cannot generate valid RuleSource name from file: %s", fileBase)
 	}
 	return name, nil
 }

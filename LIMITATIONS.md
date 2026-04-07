@@ -12,7 +12,7 @@ The RuleSet controller **automatically detects and rejects** any RuleSet contain
 
 - The RuleSet is marked **Degraded** with reason `UnsupportedRules` and a message listing each unsupported rule ID, its category, and a brief description.
 - The new, rejected revision is **not cached**. If a previous valid revision was already cached, that last-known-good entry continues to be served until the unsupported rules are removed and a new valid revision is reconciled.
-- The RuleSet will not be requeued automatically — the user must remove or replace the unsupported rules and update the ConfigMap(s) to produce a new, valid cached revision.
+- The RuleSet will not be requeued automatically — the user must remove or replace the unsupported rules and update the RuleSource(s) to produce a new, valid cached revision.
 - This behavior can be overridden with the annotation `waf.k8s.coraza.io/skip-unsupported-rules-check: "true"`. The issue will still be logged and reported, but wont block.
 Unsupported rules are classified into two tiers:
 

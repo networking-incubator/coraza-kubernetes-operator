@@ -74,7 +74,7 @@ These tests validate the operator's behavior on a live cluster, including:
 - Engine and RuleSet reconciliation
 - Gateway attachment and configuration
 - Multiple gateways and engines scenarios
-- Live ConfigMap mutations
+- Live RuleSource mutations
 
 Environment variables:
 - `KIND_CLUSTER_NAME` - Name of the KIND cluster to use (default: `coraza-kubernetes-operator-integration`)
@@ -90,7 +90,7 @@ make test.conformance
 
 This will:
 1. Download CoreRuleSet (version specified by `CORERULESET_VERSION`)
-2. Generate ConfigMaps with test rules included
+2. Generate RuleSource manifests with test rules included
 3. Deploy a test Gateway with the full CoreRuleSet
 4. Run FTW (Framework for Testing WAFs) tests against it
 
@@ -151,7 +151,7 @@ func TestExample(t *testing.T) {
     s := fw.NewScenario(t)
 
     s.CreateNamespace("my-test")
-    s.CreateConfigMap("my-test", "rules", `SecRuleEngine On
+    s.CreateRuleSource("my-test", "rules", `SecRuleEngine On
 SecRule ARGS "@contains attack" "id:1,phase:2,deny,status:403"`)
     s.CreateRuleSet("my-test", "ruleset", []string{"rules"})
     s.CreateGateway("my-test", "gateway")
@@ -174,7 +174,7 @@ Example scenarios for the v0.2.0 validation issues live in `test/integration/`:
 - `coreruleset_test.go` - CoreRuleSet compatibility (#12)
 - `multiple_gateways_test.go` - Multiple Gateways (#13)
 - `multi_engine_gateway_test.go` - Multiple Engines + Gateways (#52)
-- `reconcile_test.go` - Reconciliation of live RuleSet/ConfigMap mutations
+- `reconcile_test.go` - Reconciliation of live RuleSet/RuleSource mutations
 
 # Working with CoreRuleSet
 
@@ -198,9 +198,9 @@ This downloads and extracts the CoreRuleSet to `tmp/coreruleset/`.
 Environment variables:
 - `CORERULESET_VERSION` - Version to download (default: `v4.24.1`)
 
-## Generating ConfigMaps
+## Generating RuleSource Manifests
 
-Generate Kubernetes ConfigMaps from CoreRuleSet rules for testing:
+Generate Kubernetes RuleSource manifests from CoreRuleSet rules for testing:
 
 ```bash
 make coraza.generaterules
@@ -209,12 +209,12 @@ make coraza.generaterules
 This runs `kubectl-coraza` (`go run ./cmd/kubectl-coraza generate coreruleset` via the Makefile) to:
 1. Download CoreRuleSet (if not already present)
 2. Process each `.conf` file in the rules directory (non-recursive, same as before)
-3. Generate ConfigMaps for each rule file
-4. Generate a Secret for `.data` files
-5. Create a RuleSet resource referencing all ConfigMaps
+3. Generate a RuleSource (`type: Rule`) for each rule file
+4. Generate a RuleSource (`type: Data`) for `.data` files
+5. Create a RuleSet resource referencing all RuleSources via `spec.sources`
 6. Output everything to `tmp/rules/rules.yaml`
 
-Conformance CI runs `make coreruleset.verify-parity`, which regenerates that manifest (see the `coreruleset.verify-parity` target in the Makefile for the exact `kubectl-coraza` flags) and checks `sha256sum` against `tools/corerulesetgen/testdata/coreruleset_parity.sha256`. After bumping `CORERULESET_VERSION` or changing generator output for that path, refresh the checksum with `make coreruleset.verify-parity` (it will fail until you run `sha256sum tmp/rules/rules.yaml` and replace the hash line in `tools/corerulesetgen/testdata/coreruleset_parity.sha256`).
+Conformance CI runs `make coreruleset.verify-parity`, which regenerates that manifest (see the `coreruleset.verify-parity` target in the Makefile for the exact `kubectl-coraza` flags) and checks `sha256sum` against `tools/corerulesetgen/testdata/coreruleset_parity.sha256`. After bumping `CORERULESET_VERSION` or changing generator output, refresh the checksum with `make coreruleset.verify-parity` (it will fail until you run `sha256sum tmp/rules/rules.yaml` and replace the hash line in `tools/corerulesetgen/testdata/coreruleset_parity.sha256`).
 
 Install the plugin for ad hoc use: build `bin/kubectl-coraza` (`make build`) and ensure it is on your `PATH` as `kubectl-coraza` so `kubectl coraza …` resolves it ([plugin discovery](https://kubernetes.io/docs/tasks/extend-kubectl/kubectl-plugins/)).
 
@@ -228,10 +228,10 @@ Install the plugin for ad hoc use: build `bin/kubectl-coraza` (`make build`) and
 - `--version` - CoreRuleSet version (required); accepts `4.24.1` and `v4.24.1`
 - `--ignore-rules` - Comma-separated rule IDs to exclude (e.g. `949110,949111,980130`)
 - `--ignore-pmFromFile` - Strip rules containing `@pmFromFile` (not supported by Coraza WASM paths)
-- `--include-test-rule` - Append the X-CRS-Test block to the bundled `base-rules` ConfigMap
-- `--ruleset-name`, `--namespace` / `-n`, `--data-secret-name`, `--name-prefix`, `--name-suffix`
+- `--include-test-rule` - Append the X-CRS-Test block to the bundled `base-rules` RuleSource
+- `--ruleset-name`, `--namespace` / `-n`, `--data-source-name`, `--name-prefix`, `--name-suffix`
 - `--dry-run=client` - Same stdout output; stderr notes dry-run (no cluster writes are performed in either case)
-- `--skip-size-check` - Override the plugin’s approximate per-ConfigMap size guard (avoid unless necessary)
+- `--skip-size-check` - Override the plugin’s approximate per-RuleSource size guard (avoid unless necessary)
 
 The version is normalized (leading `v` stripped) and validated before use.
 

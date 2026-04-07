@@ -214,17 +214,17 @@ func ignoreReason(ruleID string, autoIgnored map[string]struct{}) string {
 	return "Rule ID in ignore list"
 }
 
-func buildConfigMapYAML(path string, opts Options) (name, yamlOut, skipReason string, warns []string, err error) {
+func buildRuleSourceYAML(path string, opts Options) (name, yamlOut, skipReason string, warns []string, err error) {
 	base := filepath.Base(path)
-	rawName, err := generateConfigMapName(base)
+	rawName, err := generateRuleSourceName(base)
 	if err != nil {
 		return "", "", err.Error(), nil, err
 	}
 	name = opts.NamePrefix + rawName + opts.NameSuffix
 	if name == "" {
-		return "", "", "invalid empty ConfigMap name", nil, fmt.Errorf("empty ConfigMap name after prefix/suffix")
+		return "", "", "invalid empty RuleSource name", nil, fmt.Errorf("empty RuleSource name after prefix/suffix")
 	}
-	if err := validateConfigMapObjectName(name); err != nil {
+	if err := validateRuleSourceObjectName(name); err != nil {
 		return "", "", err.Error(), nil, err
 	}
 
@@ -237,11 +237,11 @@ func buildConfigMapYAML(path string, opts Options) (name, yamlOut, skipReason st
 		return "", "", "No SecRule or SecAction directives found", warns, nil
 	}
 
-	indented := indentRulesMultiline(processed)
+	indented := indentMultiline(processed, 4)
 	payload := indented + "\n"
 	if err := checkPayloadSize(payload, name, opts); err != nil {
 		return "", "", "", warns, err
 	}
-	yamlOut = formatConfigMapYAML(name, opts.Namespace, indented)
+	yamlOut = formatRuleSourceYAML(name, opts.Namespace, indented)
 	return name, yamlOut, "", warns, nil
 }

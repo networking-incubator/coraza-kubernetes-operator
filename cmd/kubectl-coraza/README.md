@@ -1,6 +1,6 @@
 # kubectl-coraza
 
-A [kubectl plugin](https://kubernetes.io/docs/tasks/extend-kubectl/kubectl-plugins/) that generates **RuleSet**, **ConfigMap**, and **Secret** manifests from OWASP CoreRuleSet files on disk.
+A [kubectl plugin](https://kubernetes.io/docs/tasks/extend-kubectl/kubectl-plugins/) that generates **RuleSource** manifests (rule text and data files) and a **RuleSet** (`spec.sources`) from OWASP CoreRuleSet files on disk.
 
 > The operator validates and compiles rules after you apply them; this tool does not compile Coraza rules.
 
@@ -33,12 +33,12 @@ Reads `*.conf` and optional `*.data` from a single directory (non-recursive). Ou
 | `--version` | CRS version, e.g. `4.24.1` (required) |
 | `-n`, `--namespace` | Set `metadata.namespace` on every object |
 | `--ruleset-name` | RuleSet name (default `default-ruleset`) |
-| `--data-secret-name` | Secret name for `*.data` (default `coreruleset-data`) |
+| `--data-source-name` | `RuleSource` name for `*.data` files (`type: Data`; default `coreruleset-data`) |
 | `--ignore-rules` | Comma-separated rule IDs to drop |
 | `--ignore-unsupported-rules` | Unsupported-rule profile to exclude (default `wasm`); set to `none` to emit full CRS (see `LIMITATIONS.md`) |
 | `--ignore-pmFromFile` | Strip `SecRule` lines using `@pmFromFile` |
 | `--include-test-rule` | Append X-CRS-Test block to `base-rules` |
-| `--name-prefix` / `--name-suffix` | Prefix/suffix for ConfigMap names |
+| `--name-prefix` / `--name-suffix` | Prefix/suffix for `RuleSource` names derived from `*.conf` filenames |
 | `--dry-run=client` | Preview output without cluster access |
 | `--skip-size-check` | Allow oversized payloads (etcd may still reject) |
 

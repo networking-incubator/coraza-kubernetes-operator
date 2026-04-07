@@ -14,7 +14,7 @@ applyTo: "test/integration/**/*.go"
 - Use `s.Step("description")` to separate logical phases. This appears in test output on failure.
 - Resource ordering matters — the operator has a dependency chain:
   1. `GenerateNamespace` → `CreateGateway` → `ExpectGatewayProgrammed`
-  2. `CreateConfigMap` → `CreateRuleSet`
+  2. `CreateRuleSource` → `CreateRuleSet`
   3. `CreateEngine` (references RuleSet + Gateway) → `ExpectEngineReady`
   4. `ProxyToGateway` → `ExpectBlocked` / `ExpectAllowed` / `ExpectStatus`
 - Do not use raw `dynamic.Resource()` calls for create/delete. Use `s.Create*` methods — they register cleanup automatically.

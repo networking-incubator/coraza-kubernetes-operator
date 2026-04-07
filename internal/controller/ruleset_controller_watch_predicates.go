@@ -30,36 +30,22 @@ import (
 // RuleSet Controller - Watch Predicates
 // -----------------------------------------------------------------------------
 
-// findRuleSetsForConfigMap maps a ConfigMap to the RuleSets that reference it
-// via the "spec.rules.name" field index.
-func (r *RuleSetReconciler) findRuleSetsForConfigMap(ctx context.Context, configMap client.Object) []reconcile.Request {
+// findRuleSetsForRuleSource maps a RuleSource to the RuleSets that reference it (if any).
+func (r *RuleSetReconciler) findRuleSetsForRuleSource(ctx context.Context, ruleSource client.Object) []reconcile.Request {
 	log := logf.FromContext(ctx)
 
 	var ruleSetList wafv1alpha1.RuleSetList
-	if err := r.List(ctx, &ruleSetList,
-		client.InNamespace(configMap.GetNamespace()),
-		client.MatchingFields{"spec.rules.name": configMap.GetName()},
-	); err != nil {
-		log.Error(err, "RuleSet: Failed to list RuleSets by index", "namespace", configMap.GetNamespace())
+	if err := r.List(ctx, &ruleSetList, client.InNamespace(ruleSource.GetNamespace())); err != nil {
+		log.Error(err, "RuleSet: Failed to list RuleSets", "namespace", ruleSource.GetNamespace())
 		return nil
 	}
 
-	return collectRequests(ruleSetList.Items, func(rs *wafv1alpha1.RuleSet) bool { return true })
-}
-
-// findRuleSetsForSecret maps a Secret to the RuleSets that reference it
-// via the "spec.ruleData" field index.
-func (r *RuleSetReconciler) findRuleSetsForSecret(ctx context.Context, secret client.Object) []reconcile.Request {
-	log := logf.FromContext(ctx)
-
-	var ruleSetList wafv1alpha1.RuleSetList
-	if err := r.List(ctx, &ruleSetList,
-		client.InNamespace(secret.GetNamespace()),
-		client.MatchingFields{"spec.ruleData": secret.GetName()},
-	); err != nil {
-		log.Error(err, "RuleSet: Failed to list RuleSets by index", "namespace", secret.GetNamespace())
-		return nil
-	}
-
-	return collectRequests(ruleSetList.Items, func(rs *wafv1alpha1.RuleSet) bool { return true })
+	return collectRequests(ruleSetList.Items, func(rs *wafv1alpha1.RuleSet) bool {
+		for _, src := range rs.Spec.Sources {
+			if src.Name == ruleSource.GetName() {
+				return true
+			}
+		}
+		return false
+	})
 }

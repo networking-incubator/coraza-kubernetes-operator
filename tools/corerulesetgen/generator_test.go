@@ -23,10 +23,10 @@ func TestGenerate_minimalFixture(t *testing.T) {
 
 	want, err := os.ReadFile(filepath.Join(dir, "golden.yaml"))
 	require.NoError(t, err)
-	require.Equal(t, string(want), out.String(), "update golden with: go test ./internal/corerulesetgen -run TestGenerate_minimalFixture")
+	require.Equal(t, string(want), out.String(), "update golden with: go test ./tools/corerulesetgen -run TestGenerate_minimalFixture")
 }
 
-func TestGenerate_withDataSecret(t *testing.T) {
+func TestGenerate_withDataSource(t *testing.T) {
 	dir := filepath.Join("testdata", "withdata")
 	var out bytes.Buffer
 	var errBuf bytes.Buffer
@@ -54,7 +54,7 @@ func TestBuildPipeline_minimalFixture(t *testing.T) {
 		RulesDir:       rulesPath,
 		Version:        "4.24.1",
 		RuleSetName:    "default-ruleset",
-		DataSecretName: "coreruleset-data",
+		DataSourceName: "coreruleset-data",
 	}, scan, ver)
 	require.NoError(t, err)
 
@@ -66,7 +66,7 @@ func TestBuildPipeline_minimalFixture(t *testing.T) {
 	require.Equal(t, string(want), out.String())
 }
 
-func TestBuildPipeline_withDataSecret(t *testing.T) {
+func TestBuildPipeline_withDataSource(t *testing.T) {
 	dir := filepath.Join("testdata", "withdata")
 	rulesPath := filepath.Join(dir, "rules")
 	ver, err := ParseCRSVersion("4.0.0")
@@ -78,7 +78,7 @@ func TestBuildPipeline_withDataSecret(t *testing.T) {
 		RulesDir:       rulesPath,
 		Version:        "4.0.0",
 		RuleSetName:    "default-ruleset",
-		DataSecretName: "coreruleset-data",
+		DataSourceName: "coreruleset-data",
 	}, scan, ver)
 	require.NoError(t, err)
 

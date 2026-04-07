@@ -5,19 +5,19 @@ import (
 	"io"
 )
 
-// WriteManifests writes multi-document YAML in the same order as Generate: base ConfigMap,
-// extra ConfigMaps, optional Secret, RuleSet (with trailing newline after RuleSet).
+// WriteManifests writes multi-document YAML in the same order as Generate: base RuleSource,
+// extra RuleSources, optional Data RuleSource, RuleSet (with trailing newline after RuleSet).
 func WriteManifests(w io.Writer, b *ManifestBundle) error {
-	if _, err := fmt.Fprintln(w, b.BaseConfigMapYAML); err != nil {
+	if _, err := fmt.Fprintln(w, b.BaseRuleSourceYAML); err != nil {
 		return err
 	}
-	for _, cm := range b.ExtraConfigMaps {
-		if _, err := fmt.Fprint(w, "---\n"+cm.Doc); err != nil {
+	for _, rs := range b.ExtraRuleSources {
+		if _, err := fmt.Fprint(w, "---\n"+rs.Doc); err != nil {
 			return err
 		}
 	}
-	if b.SecretDoc != "" {
-		if _, err := fmt.Fprint(w, "---\n"+b.SecretDoc); err != nil {
+	if b.DataRuleSourceDoc != "" {
+		if _, err := fmt.Fprint(w, "---\n"+b.DataRuleSourceDoc); err != nil {
 			return err
 		}
 	}

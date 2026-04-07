@@ -47,8 +47,8 @@ func TestHighThroughput(t *testing.T) {
 	s.ExpectGatewayProgrammed(ns, "gw")
 
 	s.Step("deploy rules")
-	s.CreateConfigMap(ns, "base-rules", `SecRuleEngine On`)
-	s.CreateConfigMap(ns, "block-rules", framework.SimpleBlockRule(12001, "blocked"))
+	s.CreateRuleSource(ns, "base-rules", `SecRuleEngine On`)
+	s.CreateRuleSource(ns, "block-rules", framework.SimpleBlockRule(12001, "blocked"))
 	s.CreateRuleSet(ns, "ruleset", []string{"base-rules", "block-rules"})
 
 	s.CreateEngine(ns, "engine", framework.EngineOpts{
@@ -127,8 +127,8 @@ func TestMixedTrafficLoad(t *testing.T) {
 	s.ExpectGatewayProgrammed(ns, "gw")
 
 	s.Step("deploy multiple rules")
-	s.CreateConfigMap(ns, "base-rules", `SecRuleEngine On`)
-	s.CreateConfigMap(ns, "block-rules", `
+	s.CreateRuleSource(ns, "base-rules", `SecRuleEngine On`)
+	s.CreateRuleSource(ns, "block-rules", `
 SecRule ARGS:attack "@contains sqli" "id:12101,phase:2,deny,status:403,msg:'SQL injection'"
 SecRule ARGS:attack "@contains xss" "id:12102,phase:2,deny,status:403,msg:'XSS'"
 SecRule ARGS:attack "@contains rce" "id:12103,phase:2,deny,status:403,msg:'RCE'"
@@ -237,8 +237,8 @@ func TestSustainedLoad(t *testing.T) {
 	s.ExpectGatewayProgrammed(ns, "gw")
 
 	s.Step("deploy rules")
-	s.CreateConfigMap(ns, "base-rules", `SecRuleEngine On`)
-	s.CreateConfigMap(ns, "block-rules", framework.SimpleBlockRule(12201, "blocked"))
+	s.CreateRuleSource(ns, "base-rules", `SecRuleEngine On`)
+	s.CreateRuleSource(ns, "block-rules", framework.SimpleBlockRule(12201, "blocked"))
 	s.CreateRuleSet(ns, "ruleset", []string{"base-rules", "block-rules"})
 
 	s.CreateEngine(ns, "engine", framework.EngineOpts{

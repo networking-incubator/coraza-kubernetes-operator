@@ -1,0 +1,95 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.19.0
+  name: rulesources.waf.k8s.coraza.io
+spec:
+  group: waf.k8s.coraza.io
+  names:
+    kind: RuleSource
+    listKind: RuleSourceList
+    plural: rulesources
+    singular: rulesource
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.type
+      name: Type
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          RuleSource holds WAF rule text or data file content for consumption by
+          RuleSet resources. It replaces the previous use of ConfigMaps (for rules)
+          and Secrets (for @pmFromFile data) as storage for WAF rule material.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: spec defines the rule or data content.
+            properties:
+              files:
+                additionalProperties:
+                  type: string
+                description: |-
+                  files maps filenames to file content, used for @pmFromFile data.
+                  Required when type is Data; must not be set when type is Rule.
+                type: object
+              rules:
+                description: |-
+                  rules contains SecLang rule text. Required when type is Rule;
+                  must not be set when type is Data.
+                type: string
+              type:
+                description: type discriminates between Rule and Data fragments.
+                enum:
+                - Rule
+                - Data
+                type: string
+            required:
+            - type
+            type: object
+        required:
+        - spec
+        type: object
+        x-kubernetes-validations:
+        - message: rules must be set and non-empty when type is Rule
+          rule: 'self.spec.type == ''Rule'' ? has(self.spec.rules) && self.spec.rules
+            != "" : true'
+        - message: files must not be set when type is Rule
+          rule: 'self.spec.type == ''Rule'' ? !has(self.spec.files) || size(self.spec.files)
+            == 0 : true'
+        - message: files must be non-empty when type is Data
+          rule: 'self.spec.type == ''Data'' ? has(self.spec.files) && size(self.spec.files)
+            > 0 : true'
+        - message: rules must not be set when type is Data
+          rule: 'self.spec.type == ''Data'' ? !has(self.spec.rules) || self.spec.rules
+            == "" : true'
+        - message: files keys must be valid data file names (alphanumeric, '-', '_',
+            '.'; max 253 chars)
+          rule: 'self.spec.type == ''Data'' && has(self.spec.files) ? self.spec.files.all(k,
+            k.matches(''^[-._a-zA-Z0-9]+$'') && size(k) <= 253) : true'
+    served: true
+    storage: true
+    subresources: {}

@@ -39,13 +39,13 @@ func TestSQLInjectionPatterns(t *testing.T) {
 	s.ExpectGatewayProgrammed(ns, "gw")
 
 	s.Step("deploy SQL injection detection rules")
-	s.CreateConfigMap(ns, "base-rules", `SecRuleEngine On
+	s.CreateRuleSource(ns, "base-rules", `SecRuleEngine On
 SecDebugLogLevel 9
 SecDebugLog /dev/stdout
 SecRequestBodyAccess On`)
 
 	// Comprehensive SQLi detection rules
-	s.CreateConfigMap(ns, "sqli-rules", `
+	s.CreateRuleSource(ns, "sqli-rules", `
 # Union-based SQLi
 SecRule ARGS "@rx (?i:union\s+(all\s+)?select)" "id:13001,phase:2,deny,status:403,msg:'Union-based SQLi',log,auditlog"
 
@@ -121,12 +121,12 @@ func TestXSSPatterns(t *testing.T) {
 	s.ExpectGatewayProgrammed(ns, "gw")
 
 	s.Step("deploy XSS detection rules")
-	s.CreateConfigMap(ns, "base-rules", `SecRuleEngine On
+	s.CreateRuleSource(ns, "base-rules", `SecRuleEngine On
 SecDebugLogLevel 9
 SecDebugLog /dev/stdout
 SecRequestBodyAccess On`)
 
-	s.CreateConfigMap(ns, "xss-rules", `
+	s.CreateRuleSource(ns, "xss-rules", `
 # Script tags
 SecRule ARGS "@rx (?i:<script[^>]*>)" "id:13101,phase:2,deny,status:403,msg:'Script tag XSS',log,auditlog"
 
@@ -201,11 +201,11 @@ func TestPathTraversal(t *testing.T) {
 	s.ExpectGatewayProgrammed(ns, "gw")
 
 	s.Step("deploy path traversal detection rules")
-	s.CreateConfigMap(ns, "base-rules", `SecRuleEngine On
+	s.CreateRuleSource(ns, "base-rules", `SecRuleEngine On
 SecDebugLogLevel 9
 SecDebugLog /dev/stdout`)
 
-	s.CreateConfigMap(ns, "traversal-rules", `
+	s.CreateRuleSource(ns, "traversal-rules", `
 # Basic path traversal
 SecRule REQUEST_URI|ARGS "@rx \.\.(\/|\\\\|%5[cC])" "id:13201,phase:1,deny,status:403,msg:'Path traversal',log,auditlog"
 
@@ -267,12 +267,12 @@ func TestCommandInjection(t *testing.T) {
 	s.ExpectGatewayProgrammed(ns, "gw")
 
 	s.Step("deploy command injection detection rules")
-	s.CreateConfigMap(ns, "base-rules", `SecRuleEngine On
+	s.CreateRuleSource(ns, "base-rules", `SecRuleEngine On
 SecDebugLogLevel 9
 SecDebugLog /dev/stdout
 SecRequestBodyAccess On`)
 
-	s.CreateConfigMap(ns, "cmdi-rules", `
+	s.CreateRuleSource(ns, "cmdi-rules", `
 # Command separators
 SecRule ARGS "@rx [;|&`+"`"+`$]" "id:13301,phase:2,deny,status:403,msg:'Command separator',log,auditlog"
 
@@ -337,11 +337,11 @@ func TestProtocolAttacks(t *testing.T) {
 	s.ExpectGatewayProgrammed(ns, "gw")
 
 	s.Step("deploy protocol attack detection rules")
-	s.CreateConfigMap(ns, "base-rules", `SecRuleEngine On
+	s.CreateRuleSource(ns, "base-rules", `SecRuleEngine On
 SecDebugLogLevel 9
 SecDebugLog /dev/stdout`)
 
-	s.CreateConfigMap(ns, "protocol-rules", `
+	s.CreateRuleSource(ns, "protocol-rules", `
 # HTTP response splitting
 SecRule ARGS "@rx (%0d%0a|%0d|%0a|\r\n|\r|\n)" "id:13401,phase:2,deny,status:403,msg:'HTTP response splitting',log,auditlog"
 

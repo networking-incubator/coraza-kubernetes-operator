@@ -23,10 +23,10 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	corev1 "k8s.io/api/core/v1"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
@@ -61,25 +61,25 @@ func TestRuleSetReconciler_ReconcileNotFound(t *testing.T) {
 	assert.Equal(t, reconcile.Result{}, result)
 }
 
-func TestRuleSetReconciler_ReconcileConfigMaps(t *testing.T) {
+func TestRuleSetReconciler_ReconcileRuleSources(t *testing.T) {
 	tests := []struct {
 		name          string
 		ruleSetName   string
-		configMaps    map[string]string
+		ruleSources   map[string]string
 		expectedRules string
 	}{
 		{
-			name:        "single ConfigMap",
-			ruleSetName: "single-cm-ruleset",
-			configMaps: map[string]string{
+			name:        "single RuleSource",
+			ruleSetName: "single-src-ruleset",
+			ruleSources: map[string]string{
 				"test-rules": "SecRule REQUEST_URI \"@contains /admin\" \"id:1,deny\"",
 			},
 			expectedRules: "SecRule REQUEST_URI \"@contains /admin\" \"id:1,deny\"",
 		},
 		{
-			name:        "multiple ConfigMaps",
-			ruleSetName: "multi-cm-ruleset",
-			configMaps: map[string]string{
+			name:        "multiple RuleSources",
+			ruleSetName: "multi-src-ruleset",
+			ruleSources: map[string]string{
 				"rules-1": "SecCollectionTimeout 1",
 				"rules-2": "SecCollectionTimeout 2",
 				"rules-3": "SecCollectionTimeout 3",
@@ -93,34 +93,34 @@ func TestRuleSetReconciler_ReconcileConfigMaps(t *testing.T) {
 			ctx := context.Background()
 			ruleSetCache := cache.NewRuleSetCache()
 
-			t.Logf("Creating %d ConfigMap(s)", len(tt.configMaps))
-			var refs []wafv1alpha1.RuleSourceReference
+			t.Logf("Creating %d RuleSource(s)", len(tt.ruleSources))
+			var refs []wafv1alpha1.SourceReference
 			var names []string
-			for name := range tt.configMaps {
+			for name := range tt.ruleSources {
 				names = append(names, name)
 			}
-			sort.Strings(names) // need a consistent order for testing
+			sort.Strings(names)
 
-			t.Logf("Creating ConfigMaps: %v", names)
+			t.Logf("Creating RuleSources: %v", names)
 			for _, name := range names {
-				data := tt.configMaps[name]
-				cm := utils.NewTestConfigMap(name, testNamespace, data)
-				require.NoError(t, k8sClient.Create(ctx, cm))
+				data := tt.ruleSources[name]
+				rs := utils.NewTestRuleSource(name, testNamespace, data)
+				require.NoError(t, k8sClient.Create(ctx, rs))
 
 				t.Cleanup(func() {
-					if err := k8sClient.Delete(ctx, cm); err != nil {
-						t.Logf("Failed to delete ConfigMap %s: %v", name, err)
+					if err := k8sClient.Delete(ctx, rs); err != nil {
+						t.Logf("Failed to delete RuleSource %s: %v", name, err)
 					}
 				})
 
-				refs = append(refs, wafv1alpha1.RuleSourceReference{Name: name})
+				refs = append(refs, wafv1alpha1.SourceReference{Name: name})
 			}
 
-			t.Log("Creating RuleSet referencing ConfigMaps")
+			t.Log("Creating RuleSet referencing RuleSources")
 			ruleSet := utils.NewTestRuleSet(utils.RuleSetOptions{
 				Name:      tt.ruleSetName,
 				Namespace: testNamespace,
-				Rules:     refs,
+				Sources:   refs,
 			})
 
 			t.Log("Creating RuleSet in Kubernetes")
@@ -161,16 +161,16 @@ func TestRuleSetReconciler_ReconcileConfigMaps(t *testing.T) {
 	}
 }
 
-func TestRuleSetReconciler_MissingConfigMap(t *testing.T) {
+func TestRuleSetReconciler_MissingRuleSource(t *testing.T) {
 	ctx := context.Background()
 
 	ruleSetCache := cache.NewRuleSetCache()
 
-	t.Log("Creating RuleSet referencing non-existent ConfigMap")
+	t.Log("Creating RuleSet referencing non-existent RuleSource")
 	ruleSet := utils.NewTestRuleSet(utils.RuleSetOptions{
-		Name:      "missing-cm-ruleset",
+		Name:      "missing-src-ruleset",
 		Namespace: testNamespace,
-		Rules: []wafv1alpha1.RuleSourceReference{
+		Sources: []wafv1alpha1.SourceReference{
 			{Name: "non-existent"},
 		},
 	})
@@ -182,7 +182,7 @@ func TestRuleSetReconciler_MissingConfigMap(t *testing.T) {
 		}
 	})
 
-	t.Log("Reconciling RuleSet - should requeue due to missing ConfigMap")
+	t.Log("Reconciling RuleSet - should requeue due to missing RuleSource")
 	recorder := utils.NewFakeRecorder()
 	reconciler := &RuleSetReconciler{
 		Client:   k8sClient,
@@ -197,107 +197,49 @@ func TestRuleSetReconciler_MissingConfigMap(t *testing.T) {
 		},
 	})
 
-	t.Log("Verifying cache was not populated due to missing ConfigMap")
+	t.Log("Verifying cache was not populated due to missing RuleSource")
 	require.NoError(t, err)
-	assert.Equal(t, reconcile.Result{}, result, "Should requeue when ConfigMap is not found")
-	cacheKey := testNamespace + "/missing-cm-ruleset"
+	assert.Equal(t, reconcile.Result{}, result, "Should requeue when RuleSource is not found")
+	cacheKey := testNamespace + "/missing-src-ruleset"
 	_, ok := ruleSetCache.Get(cacheKey)
 	assert.False(t, ok)
 
-	assert.True(t, recorder.HasEvent("Warning", "ConfigMapNotFound"),
-		"expected Warning/ConfigMapNotFound event; got: %v", recorder.Events)
-}
-
-func TestRuleSetReconciler_ConfigMapMissingRulesKey(t *testing.T) {
-	ctx := context.Background()
-
-	ruleSetCache := cache.NewRuleSetCache()
-
-	t.Log("Creating ConfigMap without 'rules' key")
-	cm := &corev1.ConfigMap{}
-	cm.Name = "invalid-cm"
-	cm.Namespace = testNamespace
-	cm.Data = map[string]string{"wrong-key": "some data"}
-	err := k8sClient.Create(ctx, cm)
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		if err := k8sClient.Delete(ctx, cm); err != nil {
-			t.Logf("Failed to delete configmap: %v", err)
-		}
-	})
-
-	t.Log("Creating RuleSet referencing invalid ConfigMap")
-	ruleSet := utils.NewTestRuleSet(utils.RuleSetOptions{
-		Name:      "invalid-ruleset",
-		Namespace: testNamespace,
-		Rules: []wafv1alpha1.RuleSourceReference{
-			{Name: "invalid-cm"},
-		},
-	})
-	err = k8sClient.Create(ctx, ruleSet)
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		if err := k8sClient.Delete(ctx, ruleSet); err != nil {
-			t.Logf("Failed to delete RuleSet: %v", err)
-		}
-	})
-
-	t.Log("Reconciling RuleSet")
-	recorder := utils.NewFakeRecorder()
-	reconciler := &RuleSetReconciler{
-		Client:   k8sClient,
-		Scheme:   scheme,
-		Recorder: recorder,
-		Cache:    ruleSetCache,
-	}
-	result, err := reconciler.Reconcile(ctx, ctrl.Request{
-		NamespacedName: types.NamespacedName{
-			Name:      ruleSet.Name,
-			Namespace: ruleSet.Namespace,
-		},
-	})
-
-	t.Log("Verifying error due to missing 'rules' key in ConfigMap")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "missing 'rules' key")
-	assert.Equal(t, reconcile.Result{}, result)
-
-	assert.True(t, recorder.HasEvent("Warning", "InvalidConfigMap"),
-		"expected Warning/InvalidConfigMap event; got: %v", recorder.Events)
+	assert.True(t, recorder.HasEvent("Warning", "RuleSourceNotFound"),
+		"expected Warning/RuleSourceNotFound event; got: %v", recorder.Events)
 }
 
 func TestRuleSetReconciler_ValidationRejection(t *testing.T) {
 	tests := []struct {
 		name          string
 		ruleSetName   string
-		rules         []wafv1alpha1.RuleSourceReference
+		sources       []wafv1alpha1.SourceReference
 		expectedError string
 	}{
 		{
-			name:          "no rules specified",
-			ruleSetName:   "no-rules-ruleset",
-			rules:         []wafv1alpha1.RuleSourceReference{},
-			expectedError: "spec.rules: Required value",
+			name:          "no sources specified",
+			ruleSetName:   "no-sources-ruleset",
+			sources:       []wafv1alpha1.SourceReference{},
+			expectedError: "spec.sources: Required value",
 		},
 		{
-			name:        "too many rules",
-			ruleSetName: "too-many-rules-ruleset",
-			rules: func() []wafv1alpha1.RuleSourceReference {
-				rules := make([]wafv1alpha1.RuleSourceReference, 2049)
-				for i := range rules {
-					rules[i] = wafv1alpha1.RuleSourceReference{Name: "test"}
+			name:        "too many sources",
+			ruleSetName: "too-many-sources-ruleset",
+			sources: func() []wafv1alpha1.SourceReference {
+				sources := make([]wafv1alpha1.SourceReference, 2049)
+				for i := range sources {
+					sources[i] = wafv1alpha1.SourceReference{Name: "test"}
 				}
-				return rules
+				return sources
 			}(),
-			expectedError: "spec.rules: Too many",
+			expectedError: "spec.sources: Too many",
 		},
 		{
-			name:        "empty rule name",
+			name:        "empty source name",
 			ruleSetName: "empty-name-ruleset",
-			rules: []wafv1alpha1.RuleSourceReference{
+			sources: []wafv1alpha1.SourceReference{
 				{Name: ""},
 			},
-			expectedError: "spec.rules[0].name: Required value",
+			expectedError: "spec.sources[0].name: Required value",
 		},
 	}
 
@@ -309,7 +251,7 @@ func TestRuleSetReconciler_ValidationRejection(t *testing.T) {
 			ruleSet := &wafv1alpha1.RuleSet{}
 			ruleSet.Name = tt.ruleSetName
 			ruleSet.Namespace = testNamespace
-			ruleSet.Spec.Rules = tt.rules
+			ruleSet.Spec.Sources = tt.sources
 			err := k8sClient.Create(ctx, ruleSet)
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), tt.expectedError)
@@ -322,21 +264,21 @@ func TestRuleSetReconciler_UpdateCache(t *testing.T) {
 
 	ruleSetCache := cache.NewRuleSetCache()
 
-	t.Log("Creating ConfigMap with initial rules")
-	cm := utils.NewTestConfigMap("update-rules", "default", "SecDefaultAction \"phase:1,log,auditlog,pass\"")
-	err := k8sClient.Create(ctx, cm)
+	t.Log("Creating RuleSource with initial rules")
+	rs := utils.NewTestRuleSource("update-rules", "default", "SecDefaultAction \"phase:1,log,auditlog,pass\"")
+	err := k8sClient.Create(ctx, rs)
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		if err := k8sClient.Delete(ctx, cm); err != nil {
-			t.Logf("Failed to delete configmap: %v", err)
+		if err := k8sClient.Delete(ctx, rs); err != nil {
+			t.Logf("Failed to delete RuleSource: %v", err)
 		}
 	})
 
-	t.Log("Creating RuleSet referencing ConfigMap")
+	t.Log("Creating RuleSet referencing RuleSource")
 	ruleSet := utils.NewTestRuleSet(utils.RuleSetOptions{
 		Name:      "update-ruleset",
 		Namespace: testNamespace,
-		Rules: []wafv1alpha1.RuleSourceReference{
+		Sources: []wafv1alpha1.SourceReference{
 			{Name: "update-rules"},
 		},
 	})
@@ -363,18 +305,18 @@ func TestRuleSetReconciler_UpdateCache(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	t.Log("Updating ConfigMap with new rules")
+	t.Log("Updating RuleSource with new rules")
 	cacheKey := testNamespace + "/update-ruleset"
 	entry1, _ := ruleSetCache.Get(cacheKey)
 	uuid1 := entry1.UUID
-	var updatedCM corev1.ConfigMap
-	err = k8sClient.Get(ctx, types.NamespacedName{Name: "update-rules", Namespace: testNamespace}, &updatedCM)
+	var updatedRS wafv1alpha1.RuleSource
+	err = k8sClient.Get(ctx, types.NamespacedName{Name: "update-rules", Namespace: testNamespace}, &updatedRS)
 	require.NoError(t, err)
-	updatedCM.Data["rules"] = "SecDefaultAction \"phase:2,log,auditlog,pass\""
-	err = k8sClient.Update(ctx, &updatedCM)
+	updatedRS.Spec.Rules = ptr.To("SecDefaultAction \"phase:2,log,auditlog,pass\"")
+	err = k8sClient.Update(ctx, &updatedRS)
 	require.NoError(t, err)
 
-	t.Log("Reconciling after ConfigMap update to refresh cache")
+	t.Log("Reconciling after RuleSource update to refresh cache")
 	_, err = reconciler.Reconcile(ctx, ctrl.Request{
 		NamespacedName: types.NamespacedName{
 			Name:      ruleSet.Name,
@@ -389,6 +331,121 @@ func TestRuleSetReconciler_UpdateCache(t *testing.T) {
 	assert.NotEqual(t, uuid1, entry2.UUID, "UUID should change when rules are updated")
 }
 
+func TestRuleSetReconciler_DataOnlyRuleSetRejected(t *testing.T) {
+	ctx := context.Background()
+	ruleSetCache := cache.NewRuleSetCache()
+
+	dataSrc := utils.NewTestRuleSourceData("data-only-src", testNamespace, map[string]string{
+		"test.data": "some-content",
+	})
+	require.NoError(t, k8sClient.Create(ctx, dataSrc))
+	t.Cleanup(func() {
+		if err := k8sClient.Delete(ctx, dataSrc); err != nil {
+			t.Logf("failed to delete %s: %v", dataSrc.Name, err)
+		}
+	})
+
+	ruleSet := utils.NewTestRuleSet(utils.RuleSetOptions{
+		Name:      "data-only-ruleset",
+		Namespace: testNamespace,
+		Sources: []wafv1alpha1.SourceReference{
+			{Name: "data-only-src"},
+		},
+	})
+	require.NoError(t, k8sClient.Create(ctx, ruleSet))
+	t.Cleanup(func() {
+		if err := k8sClient.Delete(ctx, ruleSet); err != nil {
+			t.Logf("failed to delete RuleSet: %v", err)
+		}
+	})
+
+	recorder := utils.NewFakeRecorder()
+	reconciler := &RuleSetReconciler{
+		Client:   k8sClient,
+		Scheme:   scheme,
+		Recorder: recorder,
+		Cache:    ruleSetCache,
+	}
+	result, err := reconciler.Reconcile(ctx, ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: ruleSet.Name, Namespace: ruleSet.Namespace},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, reconcile.Result{}, result)
+
+	cacheKey := testNamespace + "/data-only-ruleset"
+	_, ok := ruleSetCache.Get(cacheKey)
+	assert.False(t, ok, "cache should be empty for data-only RuleSet")
+
+	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: ruleSet.Name, Namespace: ruleSet.Namespace}, ruleSet))
+	ready := apimeta.FindStatusCondition(ruleSet.Status.Conditions, "Ready")
+	require.NotNil(t, ready)
+	assert.Equal(t, metav1.ConditionFalse, ready.Status)
+	assert.Equal(t, "NoRuleSources", ready.Reason)
+	assert.Contains(t, ready.Message, "at least one RuleSource of type Rule")
+
+	assert.True(t, recorder.HasEvent("Warning", "NoRuleSources"),
+		"expected Warning/NoRuleSources event; got: %v", recorder.Events)
+}
+
+func TestRuleSetReconciler_DataSourcesDuplicateFileKeysLastListedWins(t *testing.T) {
+	ctx := context.Background()
+	ruleSetCache := cache.NewRuleSetCache()
+
+	dataFirst := utils.NewTestRuleSourceData("dup-data-first", testNamespace, map[string]string{
+		"overlap.data": "alpha",
+	})
+	dataSecond := utils.NewTestRuleSourceData("dup-data-second", testNamespace, map[string]string{
+		"overlap.data": "bravo",
+	})
+	ruleSrc := utils.NewTestRuleSource("dup-rule", testNamespace,
+		`SecRule ARGS "@pmFromFile overlap.data" "id:77777,phase:1,pass,nolog"`,
+	)
+
+	for _, obj := range []*wafv1alpha1.RuleSource{dataFirst, dataSecond, ruleSrc} {
+		rs := obj
+		require.NoError(t, k8sClient.Create(ctx, rs))
+		t.Cleanup(func() {
+			if err := k8sClient.Delete(ctx, rs); err != nil {
+				t.Logf("failed to delete %s: %v", rs.Name, err)
+			}
+		})
+	}
+
+	ruleSet := utils.NewTestRuleSet(utils.RuleSetOptions{
+		Name:      "dup-key-ruleset",
+		Namespace: testNamespace,
+		Sources: []wafv1alpha1.SourceReference{
+			{Name: "dup-data-first"},
+			{Name: "dup-data-second"},
+			{Name: "dup-rule"},
+		},
+	})
+	require.NoError(t, k8sClient.Create(ctx, ruleSet))
+	t.Cleanup(func() {
+		if err := k8sClient.Delete(ctx, ruleSet); err != nil {
+			t.Logf("failed to delete RuleSet: %v", err)
+		}
+	})
+
+	reconciler := &RuleSetReconciler{
+		Client:   k8sClient,
+		Scheme:   scheme,
+		Recorder: utils.NewTestRecorder(),
+		Cache:    ruleSetCache,
+	}
+	_, err := reconciler.Reconcile(ctx, ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: ruleSet.Name, Namespace: ruleSet.Namespace},
+	})
+	require.NoError(t, err)
+
+	cacheKey := testNamespace + "/dup-key-ruleset"
+	entry, ok := ruleSetCache.Get(cacheKey)
+	require.True(t, ok)
+	require.Contains(t, entry.DataFiles, "overlap.data")
+	assert.Equal(t, []byte("bravo"), entry.DataFiles["overlap.data"],
+		"later-listed Data RuleSource should overwrite the same files map key")
+}
+
 func TestRuleSetReconciler_ValidateRules(t *testing.T) {
 	ctx := context.Background()
 
@@ -400,58 +457,49 @@ func TestRuleSetReconciler_ValidateRules(t *testing.T) {
 		Cache:    ruleSetCache,
 	}
 
-	rules := []struct {
+	ruleSources := []struct {
 		name    string
 		content string
 	}{
 		{
-			name:    "update-rules",
+			name:    "update-rules-src",
 			content: "SecDefaultAction \"phase:1,log,auditlog,pass\"",
 		},
 		{
-			name:    "dumb-rule",
+			name:    "dumb-rule-src",
 			content: "SecRule REMOTE_ADDR \".*\" \"id:12345,phase:1,pass,nolog,msg:'Test rule'\"",
 		},
 		{
-			name:    "invalid-rule",
+			name:    "invalid-rule-src",
 			content: "SecDefaultActionXPTO \"THIS IS VERY MUCH INVALID\"",
 		},
 		{
-			name:    "referother",
+			name:    "referother-src",
 			content: "SecRuleUpdateTargetById 12345 \"REMOTE_ADDR\"",
 		},
 		{
-			name:    "withdata",
+			name:    "withdata-src",
 			content: "SecRule REQUEST_URI \"@pmFromFile rule1.data\" \"id:55555,phase:1,deny,status:403,msg:'File Match'\"",
 		},
 	}
-	for _, rule := range rules {
-		cm := utils.NewTestConfigMap(rule.name, "default", rule.content)
-		err := k8sClient.Create(ctx, cm)
+	for _, rule := range ruleSources {
+		rs := utils.NewTestRuleSource(rule.name, "default", rule.content)
+		err := k8sClient.Create(ctx, rs)
 		require.NoError(t, err)
 		t.Cleanup(func() {
-			if err := k8sClient.Delete(ctx, cm); err != nil {
-				t.Logf("Failed to delete configmap: %v", err)
+			if err := k8sClient.Delete(ctx, rs); err != nil {
+				t.Logf("Failed to delete RuleSource: %v", err)
 			}
 		})
 	}
 
-	ruleData := map[string][]byte{
-		"rule1.data": []byte("something\nanotherthing"),
-	}
-	secretdata := utils.NewTestRuleData("ruledata", "default", ruleData)
-	require.NoError(t, k8sClient.Create(ctx, secretdata))
-	t.Cleanup(func() {
-		if err := k8sClient.Delete(ctx, secretdata); err != nil {
-			t.Logf("Failed to delete secret: %v", err)
-		}
+	ruleData := utils.NewTestRuleSourceData("ruledata-src", "default", map[string]string{
+		"rule1.data": "something\nanotherthing",
 	})
-	secretdataWrongType := utils.NewTestRuleData("ruledatawrongtype", "default", ruleData)
-	secretdataWrongType.Type = "generic"
-	require.NoError(t, k8sClient.Create(ctx, secretdataWrongType))
+	require.NoError(t, k8sClient.Create(ctx, ruleData))
 	t.Cleanup(func() {
-		if err := k8sClient.Delete(ctx, secretdataWrongType); err != nil {
-			t.Logf("Failed to delete secret: %v", err)
+		if err := k8sClient.Delete(ctx, ruleData); err != nil {
+			t.Logf("Failed to delete RuleSource: %v", err)
 		}
 	})
 
@@ -459,8 +507,8 @@ func TestRuleSetReconciler_ValidateRules(t *testing.T) {
 		ruleSet := utils.NewTestRuleSet(utils.RuleSetOptions{
 			Name:      "ruleset-simple",
 			Namespace: testNamespace,
-			Rules: []wafv1alpha1.RuleSourceReference{
-				{Name: "update-rules"},
+			Sources: []wafv1alpha1.SourceReference{
+				{Name: "update-rules-src"},
 			},
 		})
 		err := k8sClient.Create(ctx, ruleSet)
@@ -485,9 +533,9 @@ func TestRuleSetReconciler_ValidateRules(t *testing.T) {
 		ruleSet := utils.NewTestRuleSet(utils.RuleSetOptions{
 			Name:      "ruleset-invalid",
 			Namespace: testNamespace,
-			Rules: []wafv1alpha1.RuleSourceReference{
-				{Name: "update-rules"},
-				{Name: "invalid-rule"},
+			Sources: []wafv1alpha1.SourceReference{
+				{Name: "update-rules-src"},
+				{Name: "invalid-rule-src"},
 			},
 		})
 		err := k8sClient.Create(ctx, ruleSet)
@@ -512,21 +560,21 @@ func TestRuleSetReconciler_ValidateRules(t *testing.T) {
 		ready := apimeta.FindStatusCondition(ruleSet.Status.Conditions, "Ready")
 		assert.Equal(t, metav1.ConditionFalse, ready.Status)
 		assert.Equal(t, "InvalidRuleSet", ready.Reason)
-		assert.Contains(t, ready.Message, "ConfigMap invalid-rule doesn't contain valid rules: invalid WAF config from string: unknown directive \"secdefaultactionxpto\"")
+		assert.Contains(t, ready.Message, "RuleSource invalid-rule-src doesn't contain valid rules: invalid WAF config from string: unknown directive \"secdefaultactionxpto\"")
 		degraded := apimeta.FindStatusCondition(ruleSet.Status.Conditions, "Degraded")
 		assert.Equal(t, metav1.ConditionTrue, degraded.Status)
 		assert.Equal(t, "InvalidRuleSet", degraded.Reason)
-		assert.Contains(t, degraded.Message, "ConfigMap invalid-rule doesn't contain valid rules: invalid WAF config from string: unknown directive \"secdefaultactionxpto\"")
+		assert.Contains(t, degraded.Message, "RuleSource invalid-rule-src doesn't contain valid rules: invalid WAF config from string: unknown directive \"secdefaultactionxpto\"")
 	})
 
 	t.Run("ruleset referring other rules should pass", func(t *testing.T) {
 		ruleSet := utils.NewTestRuleSet(utils.RuleSetOptions{
 			Name:      "ruleset-references",
 			Namespace: testNamespace,
-			Rules: []wafv1alpha1.RuleSourceReference{
-				{Name: "update-rules"},
-				{Name: "dumb-rule"},
-				{Name: "referother"},
+			Sources: []wafv1alpha1.SourceReference{
+				{Name: "update-rules-src"},
+				{Name: "dumb-rule-src"},
+				{Name: "referother-src"},
 			},
 		})
 		err := k8sClient.Create(ctx, ruleSet)
@@ -553,14 +601,14 @@ func TestRuleSetReconciler_ValidateRules(t *testing.T) {
 		assert.Equal(t, "RulesCached", ready.Reason)
 	})
 
-	t.Run("ruleset using a valid ruledata should pass", func(t *testing.T) {
+	t.Run("ruleset using a valid data source should pass", func(t *testing.T) {
 		ruleSet := utils.NewTestRuleSet(utils.RuleSetOptions{
 			Name:      "ruleset-validdata",
 			Namespace: testNamespace,
-			Rules: []wafv1alpha1.RuleSourceReference{
-				{Name: "withdata"},
+			Sources: []wafv1alpha1.SourceReference{
+				{Name: "ruledata-src"},
+				{Name: "withdata-src"},
 			},
-			RuleData: "ruledata",
 		})
 		err := k8sClient.Create(ctx, ruleSet)
 		require.NoError(t, err)
@@ -586,14 +634,14 @@ func TestRuleSetReconciler_ValidateRules(t *testing.T) {
 		assert.Equal(t, "RulesCached", ready.Reason)
 	})
 
-	t.Run("ruleset using a ruledata with wrong type should fail", func(t *testing.T) {
+	t.Run("ruleset referring missing RuleSource should fail", func(t *testing.T) {
 		ruleSet := utils.NewTestRuleSet(utils.RuleSetOptions{
-			Name:      "ruleset-invaliddatatype",
+			Name:      "ruleset-missingsrc",
 			Namespace: testNamespace,
-			Rules: []wafv1alpha1.RuleSourceReference{
-				{Name: "withdata"},
+			Sources: []wafv1alpha1.SourceReference{
+				{Name: "dumb-rule-src"},
+				{Name: "notvalid"},
 			},
-			RuleData: "ruledatawrongtype",
 		})
 		err := k8sClient.Create(ctx, ruleSet)
 		require.NoError(t, err)
@@ -616,51 +664,16 @@ func TestRuleSetReconciler_ValidateRules(t *testing.T) {
 		require.NoError(t, err)
 		ready := apimeta.FindStatusCondition(ruleSet.Status.Conditions, "Ready")
 		assert.Equal(t, metav1.ConditionFalse, ready.Status)
-		assert.Equal(t, "RuleDataSecretTypeMismatch", ready.Reason)
-		assert.Equal(t, "Failed to use RuleData secret ruledatawrongtype: the secret type must be of type coraza/data", ready.Message)
-
+		assert.Equal(t, "RuleSourceNotFound", ready.Reason)
+		assert.Equal(t, "Referenced RuleSource notvalid does not exist", ready.Message)
 	})
 
-	t.Run("ruleset referring invalid ruledata secret should fail", func(t *testing.T) {
-		ruleSet := utils.NewTestRuleSet(utils.RuleSetOptions{
-			Name:      "ruleset-invalidsecret",
-			Namespace: testNamespace,
-			Rules: []wafv1alpha1.RuleSourceReference{
-				{Name: "dumb-rule"},
-			},
-			RuleData: "notvalid",
-		})
-		err := k8sClient.Create(ctx, ruleSet)
-		require.NoError(t, err)
-		t.Cleanup(func() {
-			if err := k8sClient.Delete(ctx, ruleSet); err != nil {
-				t.Logf("Failed to delete RuleSet: %v", err)
-			}
-		})
-		t.Log("Performing initial reconciliation")
-		resource := types.NamespacedName{
-			Name:      ruleSet.Name,
-			Namespace: ruleSet.Namespace,
-		}
-
-		_, err = reconciler.Reconcile(ctx, ctrl.Request{
-			NamespacedName: resource,
-		})
-		require.NoError(t, err)
-		err = k8sClient.Get(ctx, resource, ruleSet)
-		require.NoError(t, err)
-		ready := apimeta.FindStatusCondition(ruleSet.Status.Conditions, "Ready")
-		assert.Equal(t, metav1.ConditionFalse, ready.Status)
-		assert.Equal(t, "SecretNotFound", ready.Reason)
-		assert.Equal(t, "Referenced Secret notvalid does not exist", ready.Message)
-	})
-
-	t.Run("ruleset referring @pmFromFile without a RuleData should fail", func(t *testing.T) {
+	t.Run("ruleset referring @pmFromFile without a Data source should fail", func(t *testing.T) {
 		ruleSet := utils.NewTestRuleSet(utils.RuleSetOptions{
 			Name:      "ruleset-invaliddata",
 			Namespace: testNamespace,
-			Rules: []wafv1alpha1.RuleSourceReference{
-				{Name: "withdata"},
+			Sources: []wafv1alpha1.SourceReference{
+				{Name: "withdata-src"},
 			},
 		})
 		err := k8sClient.Create(ctx, ruleSet)
@@ -695,21 +708,21 @@ func TestRuleSetReconciler_UnsupportedRules(t *testing.T) {
 	t.Run("ruleset with unsupported rule should be rejected", func(t *testing.T) {
 		ruleSetCache := cache.NewRuleSetCache()
 
-		t.Log("Creating ConfigMap with an unsupported multipart charset detection rule")
-		cm := utils.NewTestConfigMap("unsupported-rules", testNamespace,
-			`SecRule REQUEST_HEADERS "@rx charset" "id:922110,phase:1,deny,status:403,msg:'Charset attack'"`)
-		require.NoError(t, k8sClient.Create(ctx, cm))
+		t.Log("Creating RuleSource with an unsupported response body inspection rule")
+		rs := utils.NewTestRuleSource("unsupported-rules-src", testNamespace,
+			`SecRule RESPONSE_BODY "@rx error" "id:950150,phase:4,deny,status:403,msg:'Data leakage'"`)
+		require.NoError(t, k8sClient.Create(ctx, rs))
 		t.Cleanup(func() {
-			if err := k8sClient.Delete(ctx, cm); err != nil {
-				t.Logf("Failed to delete ConfigMap: %v", err)
+			if err := k8sClient.Delete(ctx, rs); err != nil {
+				t.Logf("Failed to delete RuleSource: %v", err)
 			}
 		})
 
 		ruleSet := utils.NewTestRuleSet(utils.RuleSetOptions{
 			Name:      "unsupported-ruleset",
 			Namespace: testNamespace,
-			Rules: []wafv1alpha1.RuleSourceReference{
-				{Name: "unsupported-rules"},
+			Sources: []wafv1alpha1.SourceReference{
+				{Name: "unsupported-rules-src"},
 			},
 		})
 		require.NoError(t, k8sClient.Create(ctx, ruleSet))
@@ -767,21 +780,21 @@ func TestRuleSetReconciler_UnsupportedRules(t *testing.T) {
 	t.Run("ruleset with only supported rules should succeed", func(t *testing.T) {
 		ruleSetCache := cache.NewRuleSetCache()
 
-		t.Log("Creating ConfigMap with only supported rules")
-		cm := utils.NewTestConfigMap("supported-rules", testNamespace,
+		t.Log("Creating RuleSource with only supported rules")
+		rs := utils.NewTestRuleSource("supported-rules-src", testNamespace,
 			`SecRule REQUEST_URI "@contains /admin" "id:1,phase:1,deny,status:403"`)
-		require.NoError(t, k8sClient.Create(ctx, cm))
+		require.NoError(t, k8sClient.Create(ctx, rs))
 		t.Cleanup(func() {
-			if err := k8sClient.Delete(ctx, cm); err != nil {
-				t.Logf("Failed to delete ConfigMap: %v", err)
+			if err := k8sClient.Delete(ctx, rs); err != nil {
+				t.Logf("Failed to delete RuleSource: %v", err)
 			}
 		})
 
 		ruleSet := utils.NewTestRuleSet(utils.RuleSetOptions{
 			Name:      "supported-ruleset",
 			Namespace: testNamespace,
-			Rules: []wafv1alpha1.RuleSourceReference{
-				{Name: "supported-rules"},
+			Sources: []wafv1alpha1.SourceReference{
+				{Name: "supported-rules-src"},
 			},
 		})
 		require.NoError(t, k8sClient.Create(ctx, ruleSet))
@@ -832,30 +845,30 @@ func TestRuleSetReconciler_UnsupportedRules(t *testing.T) {
 	t.Run("ruleset mixing supported and unsupported rules should be rejected", func(t *testing.T) {
 		ruleSetCache := cache.NewRuleSetCache()
 
-		cmSupported := utils.NewTestConfigMap("mix-supported", testNamespace,
+		rsSupported := utils.NewTestRuleSource("mix-supported-src", testNamespace,
 			`SecRule REQUEST_URI "@contains /test" "id:1,phase:1,pass,nolog"`)
-		require.NoError(t, k8sClient.Create(ctx, cmSupported))
+		require.NoError(t, k8sClient.Create(ctx, rsSupported))
 		t.Cleanup(func() {
-			if err := k8sClient.Delete(ctx, cmSupported); err != nil {
-				t.Logf("Failed to delete ConfigMap: %v", err)
+			if err := k8sClient.Delete(ctx, rsSupported); err != nil {
+				t.Logf("Failed to delete RuleSource: %v", err)
 			}
 		})
 
-		cmUnsupported := utils.NewTestConfigMap("mix-unsupported", testNamespace,
-			`SecRule REQUEST_HEADERS "@rx charset" "id:922110,phase:1,deny,status:403"`)
-		require.NoError(t, k8sClient.Create(ctx, cmUnsupported))
+		rsUnsupported := utils.NewTestRuleSource("mix-unsupported-src", testNamespace,
+			`SecRule RESPONSE_BODY "@rx leak" "id:956100,phase:4,deny,status:403"`)
+		require.NoError(t, k8sClient.Create(ctx, rsUnsupported))
 		t.Cleanup(func() {
-			if err := k8sClient.Delete(ctx, cmUnsupported); err != nil {
-				t.Logf("Failed to delete ConfigMap: %v", err)
+			if err := k8sClient.Delete(ctx, rsUnsupported); err != nil {
+				t.Logf("Failed to delete RuleSource: %v", err)
 			}
 		})
 
 		ruleSet := utils.NewTestRuleSet(utils.RuleSetOptions{
 			Name:      "mixed-ruleset",
 			Namespace: testNamespace,
-			Rules: []wafv1alpha1.RuleSourceReference{
-				{Name: "mix-supported"},
-				{Name: "mix-unsupported"},
+			Sources: []wafv1alpha1.SourceReference{
+				{Name: "mix-supported-src"},
+				{Name: "mix-unsupported-src"},
 			},
 		})
 		require.NoError(t, k8sClient.Create(ctx, ruleSet))
@@ -902,20 +915,20 @@ func TestRuleSetReconciler_UnsupportedRules(t *testing.T) {
 		require.True(t, ok, "pre-condition: cache entry should exist")
 		priorUUID := prior.UUID
 
-		t.Log("Creating ConfigMap with unsupported rules (simulating a bad update)")
-		cm := utils.NewTestConfigMap("update-to-unsupported-rules", testNamespace,
-			`SecRule REQUEST_HEADERS "@rx charset" "id:922110,phase:1,deny,status:403,msg:'Bad update'"`)
-		require.NoError(t, k8sClient.Create(ctx, cm))
+		t.Log("Creating RuleSource with unsupported rules (simulating a bad update)")
+		rs := utils.NewTestRuleSource("update-to-unsupported-rules-src", testNamespace,
+			`SecRule RESPONSE_BODY "@rx error" "id:950150,phase:4,deny,status:403,msg:'Bad update'"`)
+		require.NoError(t, k8sClient.Create(ctx, rs))
 		t.Cleanup(func() {
-			if err := k8sClient.Delete(ctx, cm); err != nil {
-				t.Logf("Failed to delete ConfigMap: %v", err)
+			if err := k8sClient.Delete(ctx, rs); err != nil {
+				t.Logf("Failed to delete RuleSource: %v", err)
 			}
 		})
 
 		ruleSet := utils.NewTestRuleSet(utils.RuleSetOptions{
 			Name:      "update-to-unsupported",
 			Namespace: testNamespace,
-			Rules:     []wafv1alpha1.RuleSourceReference{{Name: "update-to-unsupported-rules"}},
+			Sources:   []wafv1alpha1.SourceReference{{Name: "update-to-unsupported-rules-src"}},
 		})
 		require.NoError(t, k8sClient.Create(ctx, ruleSet))
 
@@ -948,20 +961,20 @@ func TestRuleSetReconciler_UnsupportedRules(t *testing.T) {
 	t.Run("ruleset with skip annotation should be cached with unsupported rules listed in status", func(t *testing.T) {
 		ruleSetCache := cache.NewRuleSetCache()
 
-		t.Log("Creating ConfigMap with an unsupported multipart charset detection rule")
-		const unsupportedRule = `SecRule REQUEST_HEADERS "@rx charset" "id:922110,phase:1,deny,status:403,msg:'Charset attack'"`
-		cm := utils.NewTestConfigMap("skip-annotation-rules", testNamespace, unsupportedRule)
-		require.NoError(t, k8sClient.Create(ctx, cm))
+		t.Log("Creating RuleSource with an unsupported response body inspection rule")
+		const unsupportedRule = `SecRule RESPONSE_BODY "@rx error" "id:950150,phase:4,deny,status:403,msg:'Data leakage'"`
+		rs := utils.NewTestRuleSource("skip-annotation-rules-src", testNamespace, unsupportedRule)
+		require.NoError(t, k8sClient.Create(ctx, rs))
 		t.Cleanup(func() {
-			if err := k8sClient.Delete(ctx, cm); err != nil {
-				t.Logf("Failed to delete ConfigMap: %v", err)
+			if err := k8sClient.Delete(ctx, rs); err != nil {
+				t.Logf("Failed to delete RuleSource: %v", err)
 			}
 		})
 
 		ruleSet := utils.NewTestRuleSet(utils.RuleSetOptions{
 			Name:      "skip-annotation-ruleset",
 			Namespace: testNamespace,
-			Rules:     []wafv1alpha1.RuleSourceReference{{Name: "skip-annotation-rules"}},
+			Sources:   []wafv1alpha1.SourceReference{{Name: "skip-annotation-rules-src"}},
 		})
 		ruleSet.Annotations = map[string]string{
 			wafv1alpha1.AnnotationSkipUnsupportedRulesCheck: "true",

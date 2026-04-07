@@ -58,11 +58,11 @@ Validation and Coraza compilation happen in the operator after you apply resourc
 	}
 	coreruleset := &cobra.Command{
 		Use:   "coreruleset",
-		Short: "Emit ConfigMaps, optional coraza/data Secret, and RuleSet from CoreRuleSet .conf/.data files",
+		Short: "Emit RuleSource manifests and a RuleSet from CoreRuleSet .conf/.data files",
 		Long: `Reads *.conf and *.data from a single directory (non-recursive), matching the behavior of the
 former Makefile Python generator. Output is a multi-document YAML stream on stdout.
 
-RuleSet references ConfigMaps in the same namespace as the RuleSet; set --namespace when you
+RuleSet references RuleSource objects in the same namespace as the RuleSet; set --namespace when you
 need metadata.namespace on every object.`,
 		RunE: genCRS,
 	}
@@ -74,12 +74,12 @@ need metadata.namespace on every object.`,
 	_ = coreruleset.MarkFlagRequired("version")
 	flags.String("ignore-rules", "", "comma-separated rule IDs to drop")
 	flags.Bool("ignore-pmFromFile", false, "strip SecRule lines that use @pmFromFile")
-	flags.Bool("include-test-rule", false, "append X-CRS-Test block to the bundled base-rules ConfigMap")
+	flags.Bool("include-test-rule", false, "append X-CRS-Test block to the bundled base-rules RuleSource")
 	flags.String("ruleset-name", "default-ruleset", "metadata.name of the RuleSet")
 	flags.StringP("namespace", "n", "", "if set, metadata.namespace on all generated objects")
-	flags.String("data-secret-name", "coreruleset-data", "Secret name for *.data files (type coraza/data)")
-	flags.String("name-prefix", "", "optional prefix for ConfigMap names derived from *.conf filenames (not base-rules)")
-	flags.String("name-suffix", "", "optional suffix for ConfigMap names derived from *.conf filenames")
+	flags.String("data-source-name", "coreruleset-data", "RuleSource name for *.data files (type Data)")
+	flags.String("name-prefix", "", "optional prefix for RuleSource names derived from *.conf filenames (not base-rules)")
+	flags.String("name-suffix", "", "optional suffix for RuleSource names derived from *.conf filenames")
 	flags.String("dry-run", "", "if set to client, print the same manifests and annotate stderr (no cluster access is performed either way)")
 	flags.Bool("skip-size-check", false, "allow very large rules payloads (not recommended; etcd limits may still reject applies)")
 	flags.String("ignore-unsupported-rules", "wasm", "unsupported-rule profile to exclude (e.g. wasm); set to \"none\" to emit the full CRS (see LIMITATIONS.md)")
@@ -106,7 +106,7 @@ func genCRS(cmd *cobra.Command, _ []string) error {
 	includeTest, _ := flags.GetBool("include-test-rule")
 	rulesetName, _ := flags.GetString("ruleset-name")
 	namespace, _ := flags.GetString("namespace")
-	dataSecret, _ := flags.GetString("data-secret-name")
+	dataSourceName, _ := flags.GetString("data-source-name")
 	namePrefix, _ := flags.GetString("name-prefix")
 	nameSuffix, _ := flags.GetString("name-suffix")
 	dry, _ := flags.GetString("dry-run")
@@ -139,7 +139,7 @@ func genCRS(cmd *cobra.Command, _ []string) error {
 		IncludeTestRule:        includeTest,
 		RuleSetName:            rulesetName,
 		Namespace:              namespace,
-		DataSecretName:         dataSecret,
+		DataSourceName:         dataSourceName,
 		NamePrefix:             namePrefix,
 		NameSuffix:             nameSuffix,
 		DryRun:                 strings.EqualFold(strings.TrimSpace(dry), "client"),

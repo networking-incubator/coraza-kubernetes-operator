@@ -25,7 +25,7 @@ import (
 )
 
 // TestReconciliation validates that the operator's reconciliation loop
-// reacts to live resource changes (RuleSet mutations, ConfigMap content
+// reacts to live resource changes (RuleSet mutations, RuleSource content
 // updates) and propagates them to the WAF.
 func TestReconciliation(t *testing.T) {
 	t.Parallel()
@@ -40,8 +40,8 @@ func TestReconciliation(t *testing.T) {
 	s.ExpectGatewayProgrammed(ns, "reconcile-gw")
 
 	s.Step("deploy initial rules")
-	s.CreateConfigMap(ns, "base-rules", `SecRuleEngine On`)
-	s.CreateConfigMap(ns, "block-evil",
+	s.CreateRuleSource(ns, "base-rules", `SecRuleEngine On`)
+	s.CreateRuleSource(ns, "block-evil",
 		framework.SimpleBlockRule(3001, "evilmonkey"),
 	)
 	s.CreateRuleSet(ns, "ruleset", []string{"base-rules", "block-evil"})
@@ -69,30 +69,30 @@ func TestReconciliation(t *testing.T) {
 	gw.ExpectBlocked("/?test=evilmonkey")
 	gw.ExpectAllowed("/?test=safe")
 
-	// --- RuleSet mutation: add a new ConfigMap ref ---
+	// --- RuleSet mutation: add a new RuleSource ref ---
 
 	s.Step("add sinistermonkey rule to ruleset")
-	s.CreateConfigMap(ns, "block-sinister",
+	s.CreateRuleSource(ns, "block-sinister",
 		framework.SimpleBlockRule(3002, "sinistermonkey"),
 	)
 	s.UpdateRuleSet(ns, "ruleset", []string{"base-rules", "block-evil", "block-sinister"})
 
 	gw.ExpectBlocked("/sinistermonkey")
 
-	// --- ConfigMap content update: replace rule in-place ---
+	// --- RuleSource content update: replace rule in-place ---
 
 	s.Step("replace sinistermonkey rule with maniacalmonkey")
-	s.UpdateConfigMap(ns, "block-sinister",
+	s.UpdateRuleSource(ns, "block-sinister",
 		framework.SimpleBlockRule(3002, "maniacalmonkey"),
 	)
 
 	gw.ExpectAllowed("/sinistermonkey")
 	gw.ExpectBlocked("/maniacalmonkey")
 
-	// --- ConfigMap content update: replace with garbage
+	// --- RuleSource content update: replace with garbage
 
 	s.Step("replace rules with garbage")
-	s.UpdateConfigMap(ns, "block-sinister", "SecDoesNotExist")
+	s.UpdateRuleSource(ns, "block-sinister", "SecDoesNotExist")
 
 	s.ExpectRuleSetDegraded(ns, "ruleset")
 

@@ -6,11 +6,9 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-
-	wafv1alpha1 "github.com/networking-incubator/coraza-kubernetes-operator/api/v1alpha1"
 )
 
-func injectNamespaceInBaseConfigMapYAML(doc, ns string) string {
+func injectNamespaceInBaseRuleSourceYAML(doc, ns string) string {
 	if ns == "" {
 		return doc
 	}
@@ -22,7 +20,7 @@ func injectNamespaceInBaseConfigMapYAML(doc, ns string) string {
 	return strings.Replace(doc, old, newHead+ns+"\n  name: base-rules", 1)
 }
 
-// baseRulesYAML returns the base-rules ConfigMap document and the data.rules multiline scalar (for size checks only).
+// baseRulesYAML returns the base-rules RuleSource document and the rules scalar (for size checks only).
 func baseRulesYAML(normalizedVersion, crsSetupVersion string, includeTest bool) (yamlDoc string, rulesScalar string) {
 	inner := fmt.Sprintf(`    SecRuleEngine On
     SecRequestBodyAccess On
@@ -103,7 +101,7 @@ func baseRulesYAML(normalizedVersion, crsSetupVersion string, includeTest bool) 
 `, normalizedVersion, normalizedVersion, crsSetupVersion)
 	inner = strings.TrimRight(inner, "\n")
 
-	body := "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: base-rules\ndata:\n  rules: |\n" + inner
+	body := "apiVersion: waf.k8s.coraza.io/v1alpha1\nkind: RuleSource\nmetadata:\n  name: base-rules\nspec:\n  type: Rule\n  rules: |\n" + inner
 	s := strings.TrimRight(body, "\n")
 	if includeTest {
 		s += "\n" + xCRSTestBlock
@@ -145,26 +143,29 @@ const xCRSTestBlock = `    SecResponseBodyMimeType text/plain text/html text/xml
      msg:'X-CRS-Test %{MATCHED_VAR}',\
      ctl:ruleRemoveById=1-999999"`
 
-func indentRulesMultiline(processed string) string {
+// indentMultiline prefixes each line with indent spaces for YAML block scalars.
+// indent must exceed the column of the block's mapping key so the scalar is valid YAML.
+func indentMultiline(processed string, indent int) string {
+	prefix := strings.Repeat(" ", indent)
 	var b strings.Builder
 	for line := range strings.SplitSeq(processed, "\n") {
 		if strings.TrimSpace(line) == "" {
-			b.WriteString("    \n")
+			b.WriteString(prefix)
+			b.WriteByte('\n')
 		} else {
-			b.WriteString("    ")
+			b.WriteString(prefix)
 			b.WriteString(line)
 			b.WriteByte('\n')
 		}
 	}
-	s := b.String()
-	return strings.TrimSuffix(s, "\n")
+	return strings.TrimSuffix(b.String(), "\n")
 }
 
-func buildDataSecretYAML(dataFiles []string, opts Options) (string, error) {
+func buildDataRuleSourceYAML(dataFiles []string, opts Options) (string, error) {
 	entries := make(map[string]string, len(dataFiles))
 	for _, p := range dataFiles {
 		key := filepath.Base(p)
-		if err := validateSecretStringDataKey(key); err != nil {
+		if err := validateDataFileKey(key); err != nil {
 			return "", fmt.Errorf("data file %s: %w", p, err)
 		}
 		raw, err := os.ReadFile(p)
@@ -173,63 +174,64 @@ func buildDataSecretYAML(dataFiles []string, opts Options) (string, error) {
 		}
 		entries[key] = strings.ToValidUTF8(string(raw), "")
 	}
-	if err := checkSecretStringDataSize(opts.DataSecretName, entries, opts); err != nil {
+	if err := checkRuleSourceDataSize(opts.DataSourceName, entries, opts); err != nil {
 		return "", err
 	}
-	return formatSecretYAML(opts.DataSecretName, opts.Namespace, entries), nil
+	return formatDataRuleSourceYAML(opts.DataSourceName, opts.Namespace, entries), nil
 }
 
-func rulesetYAML(configmapNames []string, opts Options, includeRuleData bool) string {
-	ruleData := ""
-	if includeRuleData {
-		ruleData = opts.DataSecretName
+func rulesetYAML(sourceNames []string, opts Options, includeData bool) string {
+	dataSourceName := ""
+	if includeData {
+		dataSourceName = opts.DataSourceName
 	}
-	return formatRuleSetYAML(opts.RuleSetName, opts.Namespace, configmapNames, ruleData)
+	return formatRuleSetYAML(opts.RuleSetName, opts.Namespace, sourceNames, dataSourceName)
 }
 
-func formatConfigMapYAML(name, namespace, indentedRules string) string {
+func formatRuleSourceYAML(name, namespace, indentedRules string) string {
 	var b strings.Builder
-	b.WriteString("apiVersion: v1\nkind: ConfigMap\nmetadata:\n")
+	b.WriteString("apiVersion: waf.k8s.coraza.io/v1alpha1\nkind: RuleSource\nmetadata:\n")
 	if namespace != "" {
 		fmt.Fprintf(&b, "  namespace: %s\n", namespace)
 	}
-	fmt.Fprintf(&b, "  name: %s\ndata:\n  rules: |\n%s\n", name, indentedRules)
+	fmt.Fprintf(&b, "  name: %s\nspec:\n  type: Rule\n  rules: |\n%s\n", name, indentedRules)
 	return b.String()
 }
 
-func formatSecretYAML(secretName, namespace string, stringData map[string]string) string {
-	keys := make([]string, 0, len(stringData))
-	for k := range stringData {
+func formatDataRuleSourceYAML(name, namespace string, files map[string]string) string {
+	keys := make([]string, 0, len(files))
+	for k := range files {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
 
 	var b strings.Builder
-	b.WriteString("apiVersion: v1\nkind: Secret\nmetadata:\n")
+	b.WriteString("apiVersion: waf.k8s.coraza.io/v1alpha1\nkind: RuleSource\nmetadata:\n")
 	if namespace != "" {
 		fmt.Fprintf(&b, "  namespace: %s\n", namespace)
 	}
-	fmt.Fprintf(&b, "  name: %s\ntype: %s\nstringData:\n", secretName, wafv1alpha1.RuleDataSecretType)
+	fmt.Fprintf(&b, "  name: %s\nspec:\n  type: Data\n  files:\n", name)
 	for _, k := range keys {
-		indented := indentRulesMultiline(stringData[k])
-		fmt.Fprintf(&b, "  %s: |\n%s\n", k, indented)
+		// Keys are under spec.files at 4 spaces; block lines must be indented deeper than the key.
+		indented := indentMultiline(files[k], 6)
+		fmt.Fprintf(&b, "    %s: |\n%s\n", k, indented)
 	}
 	return b.String()
 }
 
-func formatRuleSetYAML(rulesetName, namespace string, configmapNames []string, ruleData string) string {
+func formatRuleSetYAML(rulesetName, namespace string, sourceNames []string, dataSourceName string) string {
 	var b strings.Builder
 	b.WriteString("apiVersion: waf.k8s.coraza.io/v1alpha1\nkind: RuleSet\nmetadata:\n")
 	if namespace != "" {
 		fmt.Fprintf(&b, "  namespace: %s\n", namespace)
 	}
-	fmt.Fprintf(&b, "  name: %s\nspec:\n  rules:\n", rulesetName)
-	b.WriteString("    - name: base-rules\n")
-	for _, n := range configmapNames {
-		fmt.Fprintf(&b, "    - name: %s\n", n)
+	fmt.Fprintf(&b, "  name: %s\nspec:\n  sources:\n", rulesetName)
+	if dataSourceName != "" {
+		fmt.Fprintf(&b, "    - name: %s\n", dataSourceName)
 	}
-	if ruleData != "" {
-		fmt.Fprintf(&b, "  ruleData: %s\n", ruleData)
+	b.WriteString("    - name: base-rules\n")
+	for _, n := range sourceNames {
+		fmt.Fprintf(&b, "    - name: %s\n", n)
 	}
 	return b.String()
 }

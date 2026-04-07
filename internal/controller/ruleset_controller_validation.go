@@ -16,20 +16,6 @@ import (
 // RuleSet Validation
 // -----------------------------------------------------------------------------
 
-// validateConfigMapRules validates a single ConfigMap's rules via Coraza.
-// Returns a validation error if the rules are invalid, or nil if valid or
-// if the error is a missing-file error covered by the RuleData Secret.
-func validateConfigMapRules(data, configMapName string, secretData map[string][]byte) error {
-	conf := coraza.NewWAFConfig().WithDirectives(data)
-	if _, err := coraza.NewWAF(conf); err != nil {
-		if shouldSkipMissingFileError(err, secretData) {
-			return nil
-		}
-		return fmt.Errorf("ConfigMap %s doesn't contain valid rules: %w", configMapName, sanitizeErrorMessage(err))
-	}
-	return nil
-}
-
 // validateAggregatedRules validates the aggregated rule set via Coraza.
 // Sets Degraded status and emits Warning events on failure.
 func (r *RuleSetReconciler) validateAggregatedRules(
@@ -42,9 +28,9 @@ func (r *RuleSetReconciler) validateAggregatedRules(
 ) error {
 	if _, err := coraza.NewWAF(conf); err != nil {
 		msg := fmt.Sprintf("Ruleset is invalid\n%v", sanitizeErrorMessage(err))
-		for _, cmapErr := range aggregatedErrors {
-			r.Recorder.Eventf(ruleset, nil, "Warning", "InvalidConfigMap", "Reconcile", truncateEventNote(cmapErr.Error()))
-			msg = fmt.Sprintf("%s\n%v", msg, cmapErr)
+		for _, srcErr := range aggregatedErrors {
+			r.Recorder.Eventf(ruleset, nil, "Warning", "InvalidRuleSource", "Reconcile", truncateEventNote(srcErr.Error()))
+			msg = fmt.Sprintf("%s\n%v", msg, srcErr)
 		}
 		if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "RuleSet", ruleset, &ruleset.Status.Conditions, ruleset.Generation, "InvalidRuleSet", msg); patchErr != nil {
 			return patchErr

@@ -1,8 +1,9 @@
-apiVersion: v1
-kind: ConfigMap
+apiVersion: waf.k8s.coraza.io/v1alpha1
+kind: RuleSource
 metadata:
   name: base-rules
-data:
+spec:
+  type: Rule
   rules: |
     SecRuleEngine On
     SecRequestBodyAccess On
@@ -81,11 +82,12 @@ data:
      ver:'OWASP_CRS/4.24.1',\
      setvar:tx.crs_setup_version=4241"
 ---
-apiVersion: v1
-kind: ConfigMap
+apiVersion: waf.k8s.coraza.io/v1alpha1
+kind: RuleSource
 metadata:
   name: simple
-data:
+spec:
+  type: Rule
   rules: |
     SecRule ARGS "@rx a" "id:100,phase:2,pass,nolog"
 ---
@@ -94,7 +96,7 @@ kind: RuleSet
 metadata:
   name: default-ruleset
 spec:
-  rules:
+  sources:
     - name: base-rules
     - name: simple
 

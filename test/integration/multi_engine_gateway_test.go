@@ -48,8 +48,8 @@ func TestMultiEngineMultiGateway(t *testing.T) {
 		ns := s.GenerateNamespace("multi-target")
 
 		s.Step("create shared rules")
-		s.CreateConfigMap(ns, "base-rules", `SecRuleEngine On`)
-		s.CreateConfigMap(ns, "block-rules",
+		s.CreateRuleSource(ns, "base-rules", `SecRuleEngine On`)
+		s.CreateRuleSource(ns, "block-rules",
 			framework.SimpleBlockRule(1001, "evil"),
 		)
 		s.CreateRuleSet(ns, "shared-rules", []string{"base-rules", "block-rules"})
@@ -99,11 +99,11 @@ func TestMultiEngineMultiGateway(t *testing.T) {
 		s.ExpectGatewayProgrammed(ns, "target-gw")
 
 		s.Step("create two different rule sets")
-		s.CreateConfigMap(ns, "base-rules", `SecRuleEngine On`)
-		s.CreateConfigMap(ns, "rules-a",
+		s.CreateRuleSource(ns, "base-rules", `SecRuleEngine On`)
+		s.CreateRuleSource(ns, "rules-a",
 			framework.SimpleBlockRule(2001, "attackA"),
 		)
-		s.CreateConfigMap(ns, "rules-b",
+		s.CreateRuleSource(ns, "rules-b",
 			framework.SimpleBlockRule(2002, "attackB"),
 		)
 		s.CreateRuleSet(ns, "ruleset-a", []string{"base-rules", "rules-a"})
@@ -149,7 +149,7 @@ func TestMultiEngineMultiGateway(t *testing.T) {
 		ns := s.GenerateNamespace("no-target")
 
 		s.Step("create rules and engine targeting non-existent gateway")
-		s.CreateConfigMap(ns, "base-rules", `SecRuleEngine On`)
+		s.CreateRuleSource(ns, "base-rules", `SecRuleEngine On`)
 		s.CreateRuleSet(ns, "ruleset", []string{"base-rules"})
 		s.CreateEngine(ns, "orphan-engine", framework.EngineOpts{
 			RuleSetName: "ruleset",

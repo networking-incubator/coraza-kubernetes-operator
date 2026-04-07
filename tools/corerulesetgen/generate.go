@@ -27,7 +27,7 @@ type Options struct {
 	IncludeTestRule  bool
 	RuleSetName      string
 	Namespace        string
-	DataSecretName   string
+	DataSourceName   string
 	NamePrefix       string
 	NameSuffix       string
 	DryRun           bool
@@ -50,18 +50,18 @@ type Options struct {
 
 // Result holds a short summary after a successful Generate.
 type Result struct {
-	ConfigMapCount int
-	HasSecret      bool
-	RuleSetName    string
-	Namespace      string
+	RuleSourceCount int
+	HasDataSource   bool
+	RuleSetName     string
+	Namespace       string
 }
 
 func applyDefaults(opts Options) Options {
 	if opts.RuleSetName == "" {
 		opts.RuleSetName = "default-ruleset"
 	}
-	if opts.DataSecretName == "" {
-		opts.DataSecretName = "coreruleset-data"
+	if opts.DataSourceName == "" {
+		opts.DataSourceName = "coreruleset-data"
 	}
 	return opts
 }
@@ -118,7 +118,7 @@ func Generate(out io.Writer, opts Options) (*Result, error) {
 			stderrf(opts.Stderr, "%s", w)
 		}
 		if r.YAML != "" {
-			stderrf(opts.Stderr, "  [ok] Generated ConfigMap: %s\n", r.ConfigName)
+			stderrf(opts.Stderr, "  [ok] Generated RuleSource: %s\n", r.SourceName)
 		} else {
 			stderrf(opts.Stderr, "  [skip] Skipped: %s\n", r.SkipReason)
 		}
@@ -128,11 +128,11 @@ func Generate(out io.Writer, opts Options) (*Result, error) {
 		stderrf(opts.Stderr, "\nProcessing %d data files...\n\n", len(scan.DataPaths))
 		for _, p := range scan.DataPaths {
 			stderrf(opts.Stderr, "Processing: %s\n", filepath.Base(p))
-			stderrf(opts.Stderr, "  [ok] Added to Secret: %s\n", opts.DataSecretName)
+			stderrf(opts.Stderr, "  [ok] Added to RuleSource (Data): %s\n", opts.DataSourceName)
 		}
 	}
 
-	writeGenerateSummary(opts.Stderr, scan.PMFromFileRefs && !opts.IgnorePMFromFile, len(scan.DataPaths) == 0, bundle.Stats.Processed, bundle.Stats.Skipped, len(bundle.ExtraConfigMaps), len(scan.DataPaths), opts.DataSecretName)
+	writeGenerateSummary(opts.Stderr, scan.PMFromFileRefs && !opts.IgnorePMFromFile, len(scan.DataPaths) == 0, bundle.Stats.Processed, bundle.Stats.Skipped, len(bundle.ExtraRuleSources), len(scan.DataPaths), opts.DataSourceName)
 
 	if err := WriteManifests(out, bundle); err != nil {
 		return nil, err
@@ -142,29 +142,29 @@ func Generate(out io.Writer, opts Options) (*Result, error) {
 	if opts.Namespace != "" {
 		stderrf(opts.Stderr, " in namespace %q", opts.Namespace)
 	}
-	stderrf(opts.Stderr, ": %d ConfigMap(s), secret=%v\n", len(bundle.ExtraConfigMaps)+1, len(scan.DataPaths) > 0)
+	stderrf(opts.Stderr, ": %d RuleSource(s), dataSource=%v\n", len(bundle.ExtraRuleSources)+1, len(scan.DataPaths) > 0)
 
 	return &Result{
-		ConfigMapCount: len(bundle.ExtraConfigMaps) + 1,
-		HasSecret:      len(scan.DataPaths) > 0,
-		RuleSetName:    opts.RuleSetName,
-		Namespace:      opts.Namespace,
+		RuleSourceCount: len(bundle.ExtraRuleSources) + 1,
+		HasDataSource:   len(scan.DataPaths) > 0,
+		RuleSetName:     opts.RuleSetName,
+		Namespace:       opts.Namespace,
 	}, nil
 }
 
-func writeGenerateSummary(stderr io.Writer, pmFromFileRefs, noDataFiles bool, processed, skipped, configMapCount, dataFileCount int, dataSecretName string) {
+func writeGenerateSummary(stderr io.Writer, pmFromFileRefs, noDataFiles bool, processed, skipped, ruleSourceCount, dataFileCount int, dataSourceName string) {
 	if pmFromFileRefs && noDataFiles {
-		stderrln(stderr, "warning: @pmFromFile references found under the rules directory but no .data files were emitted into a Secret; add matching .data files or use --ignore-pmFromFile if the operator should not load pmFromFile data.")
+		stderrln(stderr, "warning: @pmFromFile references found under the rules directory but no .data files were emitted into a RuleSource; add matching .data files or use --ignore-pmFromFile if the operator should not load pmFromFile data.")
 	}
 	stderrf(stderr, "\n%s\n", strings.Repeat("=", 60))
 	stderrln(stderr, "Summary:")
 	stderrln(stderr, "  Base rules: 1 (bundled)")
 	stderrf(stderr, "  Processed: %d rule files\n", processed)
 	stderrf(stderr, "  Skipped: %d rule files\n", skipped)
-	stderrf(stderr, "  Total ConfigMaps: %d\n", configMapCount+1)
+	stderrf(stderr, "  Total RuleSources: %d\n", ruleSourceCount+1)
 	stderrf(stderr, "  Data files: %d\n", dataFileCount)
 	if dataFileCount > 0 {
-		stderrf(stderr, "  Data Secret: %s\n", dataSecretName)
+		stderrf(stderr, "  Data RuleSource: %s\n", dataSourceName)
 	}
 	stderrf(stderr, "%s\n\n", strings.Repeat("=", 60))
 }
@@ -176,7 +176,7 @@ func validateResourceNames(opts Options) error {
 		value, label string
 	}{
 		{opts.RuleSetName, "ruleset-name"},
-		{opts.DataSecretName, "data-secret-name"},
+		{opts.DataSourceName, "data-source-name"},
 	} {
 		if errs := validation.IsDNS1123Subdomain(check.value); len(errs) > 0 {
 			return fmt.Errorf("invalid %s %q: %s", check.label, check.value, strings.Join(errs, "; "))
