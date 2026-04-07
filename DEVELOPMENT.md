@@ -1,6 +1,6 @@
 # Development
 
-Guides for developing the Coraza Kubernetes Operator (CKO).
+Guide for developing the Coraza Kubernetes Operator (CKO).
 
 > **Note**: See also: [CONTRIBUTING.md](CONTRIBUTING.md).
 
