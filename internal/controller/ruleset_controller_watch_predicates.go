@@ -30,40 +30,36 @@ import (
 // RuleSet Controller - Watch Predicates
 // -----------------------------------------------------------------------------
 
-// TODO: the functions here should probably be an index on the RuleSet containing
-// the referred resources
-
-// findRuleSetsForConfigMap maps a ConfigMap to the RuleSets that reference it (if any).
+// findRuleSetsForConfigMap maps a ConfigMap to the RuleSets that reference it
+// via the "spec.rules.name" field index.
 func (r *RuleSetReconciler) findRuleSetsForConfigMap(ctx context.Context, configMap client.Object) []reconcile.Request {
 	log := logf.FromContext(ctx)
 
 	var ruleSetList wafv1alpha1.RuleSetList
-	if err := r.List(ctx, &ruleSetList, client.InNamespace(configMap.GetNamespace())); err != nil {
-		log.Error(err, "RuleSet: Failed to list RuleSets", "namespace", configMap.GetNamespace())
+	if err := r.List(ctx, &ruleSetList,
+		client.InNamespace(configMap.GetNamespace()),
+		client.MatchingFields{"spec.rules.name": configMap.GetName()},
+	); err != nil {
+		log.Error(err, "RuleSet: Failed to list RuleSets by index", "namespace", configMap.GetNamespace())
 		return nil
 	}
 
-	return collectRequests(ruleSetList.Items, func(rs *wafv1alpha1.RuleSet) bool {
-		for _, rule := range rs.Spec.Rules {
-			if rule.Name == configMap.GetName() {
-				return true
-			}
-		}
-		return false
-	})
+	return collectRequests(ruleSetList.Items, func(rs *wafv1alpha1.RuleSet) bool { return true })
 }
 
-// findRuleSetsForSecret maps a Secret to the RuleSets that reference it (if any).
+// findRuleSetsForSecret maps a Secret to the RuleSets that reference it
+// via the "spec.ruleData" field index.
 func (r *RuleSetReconciler) findRuleSetsForSecret(ctx context.Context, secret client.Object) []reconcile.Request {
 	log := logf.FromContext(ctx)
 
 	var ruleSetList wafv1alpha1.RuleSetList
-	if err := r.List(ctx, &ruleSetList, client.InNamespace(secret.GetNamespace())); err != nil {
-		log.Error(err, "RuleSet: Failed to list RuleSets", "namespace", secret.GetNamespace())
+	if err := r.List(ctx, &ruleSetList,
+		client.InNamespace(secret.GetNamespace()),
+		client.MatchingFields{"spec.ruleData": secret.GetName()},
+	); err != nil {
+		log.Error(err, "RuleSet: Failed to list RuleSets by index", "namespace", secret.GetNamespace())
 		return nil
 	}
 
-	return collectRequests(ruleSetList.Items, func(rs *wafv1alpha1.RuleSet) bool {
-		return rs.Spec.RuleData == secret.GetName()
-	})
+	return collectRequests(ruleSetList.Items, func(rs *wafv1alpha1.RuleSet) bool { return true })
 }
