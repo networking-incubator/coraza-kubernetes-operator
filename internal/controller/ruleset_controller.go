@@ -159,7 +159,7 @@ func (r *RuleSetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 // initializeStatus sets the initial Progressing condition if the RuleSet has
 // never been reconciled before.
 func (r *RuleSetReconciler) initializeStatus(ctx context.Context, log logr.Logger, req ctrl.Request, ruleset *wafv1alpha1.RuleSet) error {
-	if apimeta.FindStatusCondition(ruleset.Status.Conditions, "Ready") != nil {
+	if apimeta.FindStatusCondition(ruleset.Status.Conditions, conditionReady) != nil {
 		return nil
 	}
 
