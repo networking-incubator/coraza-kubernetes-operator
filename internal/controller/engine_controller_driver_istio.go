@@ -56,6 +56,20 @@ const WasmPluginNamePrefix = "coraza-engine-"
 // provisionIstioEngineWithWasm provisions the Istio WasmPlugin resource for
 // the Engine.
 func (r *EngineReconciler) provisionIstioEngineWithWasm(ctx context.Context, log logr.Logger, req ctrl.Request, engine wafv1alpha1.Engine) (ctrl.Result, error) {
+	// A nil WorkloadSelector would produce an empty Istio selector that matches
+	// all workloads — silently applying the WasmPlugin cluster-wide. CRD
+	// validation normally prevents this, but direct API writes or bypassed
+	// admission can reach here. Treat it as an invalid configuration rather
+	// than generating a broad selector.
+	if engine.Spec.Driver.Istio.Wasm.WorkloadSelector == nil {
+		err := fmt.Errorf("workloadSelector is required: a nil selector would match all workloads")
+		logError(log, req, "Engine", err, "Invalid Wasm configuration")
+		if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "Engine", &engine, &engine.Status.Conditions, engine.Generation, "InvalidConfiguration", err.Error()); patchErr != nil {
+			return ctrl.Result{}, patchErr
+		}
+		return ctrl.Result{}, err
+	}
+
 	// Apply NetworkPolicy first to ensure network restrictions are in place
 	// before the WasmPlugin starts running. This prevents a partially-provisioned
 	// state where the plugin is active without the intended cache-server network

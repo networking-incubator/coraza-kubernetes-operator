@@ -82,6 +82,20 @@ func TestGenCRS_ignoreRulesEmpty(t *testing.T) {
 	assert.NotContains(t, stderr.String(), "Ignoring rule IDs")
 }
 
+func TestGenCRS_ignoreRulesWritesToCmdStderr(t *testing.T) {
+	dir := testdataDir(t, "minimal")
+	cmd, _, stderr := newTestCommand(t)
+	cmd.SetArgs([]string{"generate", "coreruleset", "--rules-dir", dir, "--version", "4.24.1", "--ignore-rules", "100"})
+
+	err := cmd.Execute()
+	require.NoError(t, err)
+
+	// The "Ignoring rule IDs" message must be routed through cmd.ErrOrStderr()
+	// so it appears in the captured stderr buffer, not lost to os.Stderr.
+	assert.Contains(t, stderr.String(), "Ignoring rule IDs")
+	assert.Contains(t, stderr.String(), "100")
+}
+
 func TestGenCRS_dryRun(t *testing.T) {
 	dir := testdataDir(t, "minimal")
 	cmd, stdout, _ := newTestCommand(t)

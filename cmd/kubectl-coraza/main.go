@@ -125,7 +125,7 @@ func genCRS(cmd *cobra.Command, _ []string) error {
 				ids = append(ids, id)
 			}
 			sort.Strings(ids)
-			fmt.Fprintf(os.Stderr, "Ignoring rule IDs: %s\n", strings.Join(ids, ", "))
+			_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "Ignoring rule IDs: %s\n", strings.Join(ids, ", "))
 		}
 	}
 
@@ -142,7 +142,7 @@ func genCRS(cmd *cobra.Command, _ []string) error {
 		NameSuffix:       nameSuffix,
 		DryRun:           strings.EqualFold(strings.TrimSpace(dry), "client"),
 		SkipSizeCheck:    skipSize,
-		Stderr:           os.Stderr,
+		Stderr:           cmd.ErrOrStderr(),
 	}
 
 	_, err := corerulesetgen.Generate(cmd.OutOrStdout(), opts)

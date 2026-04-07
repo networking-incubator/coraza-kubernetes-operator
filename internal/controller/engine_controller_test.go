@@ -565,6 +565,149 @@ func TestEngineReconciler_ImagePullSecretEnvtest(t *testing.T) {
 	})
 }
 
+func TestEngineReconciler_HandleInvalidDriverConfiguration_NilStatus(t *testing.T) {
+	ctx := context.Background()
+
+	engine := &wafv1alpha1.Engine{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "nil-status-engine",
+			Namespace: testNamespace,
+		},
+		Spec: wafv1alpha1.EngineSpec{
+			RuleSet: wafv1alpha1.RuleSetReference{Name: "test-ruleset"},
+		},
+	}
+	// Status is nil (zero value for *EngineStatus).
+	require.Nil(t, engine.Status, "precondition: Status must be nil")
+
+	reconciler := &EngineReconciler{
+		Client:                    k8sClient,
+		Scheme:                    scheme,
+		Recorder:                  utils.NewTestRecorder(),
+		ruleSetCacheServerCluster: "test-cluster",
+		defaultWasmImage:          defaults.DefaultCorazaWasmOCIReference,
+		operatorNamespace:         testNamespace,
+	}
+
+	// handleInvalidDriverConfiguration must not panic when engine.Status is nil.
+	err := reconciler.handleInvalidDriverConfiguration(ctx, ctrl.Log, ctrl.Request{
+		NamespacedName: types.NamespacedName{
+			Name:      engine.Name,
+			Namespace: engine.Namespace,
+		},
+	}, engine)
+	require.Error(t, err, "should return an error for invalid driver configuration")
+	assert.Contains(t, err.Error(), "invalid driver configuration")
+	assert.NotNil(t, engine.Status, "Status should be initialized after the call")
+}
+
+func TestEngineReconciler_SelectDriver_NilStatus(t *testing.T) {
+	ctx := context.Background()
+
+	// Create and persist a valid engine so the status patch inside
+	// handleInvalidDriverConfiguration can talk to the API server.
+	// CRD validation blocks a nil driver, so create a valid resource first,
+	// then modify the fetched object in-memory before calling selectDriver directly.
+	validEngine := utils.NewTestEngine(utils.EngineOptions{
+		Name:      "selectdriver-nil-status",
+		Namespace: testNamespace,
+	})
+	require.NoError(t, k8sClient.Create(ctx, validEngine))
+	t.Cleanup(func() {
+		if err := k8sClient.Delete(ctx, validEngine); err != nil {
+			t.Logf("Failed to delete engine: %v", err)
+		}
+	})
+
+	// Fetch back the persisted engine and strip the driver + status.
+	var fetched wafv1alpha1.Engine
+	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{
+		Name:      validEngine.Name,
+		Namespace: validEngine.Namespace,
+	}, &fetched))
+	fetched.Spec.Driver = nil
+	fetched.Status = nil
+
+	reconciler := &EngineReconciler{
+		Client:                    k8sClient,
+		Scheme:                    scheme,
+		Recorder:                  utils.NewTestRecorder(),
+		ruleSetCacheServerCluster: "test-cluster",
+		defaultWasmImage:          defaults.DefaultCorazaWasmOCIReference,
+		operatorNamespace:         testNamespace,
+	}
+
+	// selectDriver must not panic when Status is nil and driver is invalid.
+	_, err := reconciler.selectDriver(ctx, ctrl.Log, ctrl.Request{
+		NamespacedName: types.NamespacedName{
+			Name:      fetched.Name,
+			Namespace: fetched.Namespace,
+		},
+	}, fetched)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid driver configuration")
+}
+
+func TestEngineReconciler_NilWorkloadSelector_MarksDegraded(t *testing.T) {
+	ctx := context.Background()
+
+	// Create a valid engine so the status patch inside
+	// provisionIstioEngineWithWasm can talk to the API server.
+	engine := utils.NewTestEngine(utils.EngineOptions{
+		Name:        "nil-ws-engine",
+		Namespace:   testNamespace,
+		RuleSetName: "test-ruleset",
+	})
+	require.NoError(t, k8sClient.Create(ctx, engine))
+	t.Cleanup(func() {
+		if err := k8sClient.Delete(ctx, engine); err != nil {
+			t.Logf("Failed to delete engine: %v", err)
+		}
+	})
+
+	reconciler := &EngineReconciler{
+		Client:                    k8sClient,
+		Scheme:                    scheme,
+		Recorder:                  utils.NewTestRecorder(),
+		ruleSetCacheServerCluster: "test-cluster",
+		defaultWasmImage:          defaults.DefaultCorazaWasmOCIReference,
+		operatorNamespace:         testNamespace,
+	}
+	engineReq := ctrl.Request{
+		NamespacedName: types.NamespacedName{
+			Name:      engine.Name,
+			Namespace: engine.Namespace,
+		},
+	}
+
+	// Fetch the persisted engine and strip WorkloadSelector in-memory to
+	// simulate bypassed CRD validation (e.g. direct API write). We cannot
+	// use k8sClient.Update because the CRD webhook rejects the change.
+	var fetched wafv1alpha1.Engine
+	require.NoError(t, k8sClient.Get(ctx, engineReq.NamespacedName, &fetched))
+	fetched.Spec.Driver.Istio.Wasm.WorkloadSelector = nil
+	if fetched.Status == nil {
+		fetched.Status = &wafv1alpha1.EngineStatus{}
+	}
+
+	// Call provisionIstioEngineWithWasm directly — it should detect the nil
+	// WorkloadSelector and mark the Engine Degraded instead of creating a
+	// WasmPlugin that matches all workloads.
+	_, err := reconciler.provisionIstioEngineWithWasm(ctx, ctrl.Log, engineReq, fetched)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "workloadSelector is required")
+
+	var updated wafv1alpha1.Engine
+	require.NoError(t, k8sClient.Get(ctx, engineReq.NamespacedName, &updated))
+	require.NotNil(t, updated.Status)
+
+	degradedCond := apimeta.FindStatusCondition(updated.Status.Conditions, "Degraded")
+	require.NotNil(t, degradedCond, "Engine should have Degraded condition")
+	assert.Equal(t, metav1.ConditionTrue, degradedCond.Status)
+	assert.Equal(t, "InvalidConfiguration", degradedCond.Reason)
+	assert.Contains(t, degradedCond.Message, "workloadSelector is required")
+}
+
 func TestEngineReconciler_ValidationRejection(t *testing.T) {
 	ctx := context.Background()
 

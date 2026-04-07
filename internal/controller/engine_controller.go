@@ -191,6 +191,9 @@ func (r *EngineReconciler) handleInvalidDriverConfiguration(ctx context.Context,
 	err := fmt.Errorf("invalid driver configuration: only Istio driver with Wasm mode is currently supported")
 	logError(log, req, "Engine", err, "Invalid driver configuration")
 
+	if engine.Status == nil {
+		engine.Status = &wafv1alpha1.EngineStatus{}
+	}
 	if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "Engine", engine, &engine.Status.Conditions, engine.Generation, "InvalidConfiguration", err.Error()); patchErr != nil {
 		return fmt.Errorf("validation failed: %w (status patch also failed: %v)", err, patchErr)
 	}
