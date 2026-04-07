@@ -96,30 +96,6 @@ type IstioWasmConfig struct {
 }
 
 // -----------------------------------------------------------------------------
-// Engine Driver - Istio Integration Configuration
-// -----------------------------------------------------------------------------
-
-// IstioIntegrationConfig defines Istio-specific integration options for the
-// Engine.
-type IstioIntegrationConfig struct {
-	// mode specifies what mechanism will be used to integrate the WAF with
-	// Istio.
-	//
-	// Currently only supports "Gateway" mode, utilizing Gateway API resources.
-	//
-	// +required
-	Mode IstioIntegrationMode `json:"mode,omitempty"`
-
-	// workloadSelector specifies the selection criteria for attaching the WAF.
-	//
-	// When mode is "gateway", this selector is used to identify the Gateway
-	// Pods to which the WAF should be attached.
-	//
-	// +required
-	WorkloadSelector metav1.LabelSelector `json:"workloadSelector,omitempty"`
-}
-
-// -----------------------------------------------------------------------------
 // Engine Driver - Istio Integration Mode
 // -----------------------------------------------------------------------------
 
