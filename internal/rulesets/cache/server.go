@@ -17,9 +17,12 @@ limitations under the License.
 package cache
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -49,6 +52,15 @@ const (
 
 	// MaxBodySize is the maximum size of HTTP request bodies (0 bytes - no body expected)
 	MaxBodySize = 0
+
+	// ReadTimeout is the maximum duration for reading the entire request
+	ReadTimeout = 15 * time.Second
+
+	// WriteTimeout is the maximum duration before timing out writes of the response
+	WriteTimeout = 15 * time.Second
+
+	// IdleTimeout is the maximum time to wait for the next request when keep-alives are enabled
+	IdleTimeout = 60 * time.Second
 
 	// GracefulShutdownTimeout is the max time to drain existing connections on shutdown
 	GracefulShutdownTimeout = 10 * time.Second
@@ -96,6 +108,9 @@ func NewServer(cache *RuleSetCache, addr string, logger logr.Logger, gc *Garbage
 		Addr:              addr,
 		Handler:           mux,
 		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       ReadTimeout,
+		WriteTimeout:      WriteTimeout,
+		IdleTimeout:       IdleTimeout,
 		MaxHeaderBytes:    MaxHeaderSize,
 	}
 
@@ -104,12 +119,17 @@ func NewServer(cache *RuleSetCache, addr string, logger logr.Logger, gc *Garbage
 
 // Start the cache server.
 func (s *ruleSetCacheServer) Start(ctx context.Context) error {
+	ln, err := net.Listen("tcp", s.srv.Addr)
+	if err != nil {
+		return fmt.Errorf("cache server listen: %w", err)
+	}
+
 	go s.rungc(ctx)
 
 	errChan := make(chan error, 1)
 	go func() {
 		s.logger.Info("Starting ruleset cache server", "addr", s.srv.Addr)
-		if err := s.srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		if err := s.srv.Serve(ln); err != nil && err != http.ErrServerClosed {
 			errChan <- err
 		}
 	}()
@@ -148,6 +168,8 @@ func (s *ruleSetCacheServer) handleRules(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	r.Body = http.MaxBytesReader(w, r.Body, MaxBodySize)
+
 	path := strings.TrimPrefix(r.URL.Path, "/rules/")
 	if path == "" {
 		http.Error(w, "RuleSet key required", http.StatusBadRequest)
@@ -174,12 +196,15 @@ func (s *ruleSetCacheServer) handleLatest(w http.ResponseWriter, _ *http.Request
 		Timestamp: entry.Timestamp.Format(TimestampFormat),
 	}
 
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		s.logger.Error(err, "Failed to encode latest response")
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-
-	if err := json.NewEncoder(w).Encode(response); err != nil {
-		s.logger.Error(err, "Failed to encode latest response")
-	}
+	_, _ = w.Write(buf.Bytes())
 }
 
 func (s *ruleSetCacheServer) handleGetRules(w http.ResponseWriter, _ *http.Request, cacheKey string) {
@@ -191,12 +216,15 @@ func (s *ruleSetCacheServer) handleGetRules(w http.ResponseWriter, _ *http.Reque
 
 	s.logger.Info("Serving rules from cache", "cacheKey", cacheKey, "uuid", entry.UUID, "availableKeysCount", s.cache.Len(), "cacheSizeBytes", s.cache.TotalSize())
 
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(entry); err != nil {
+		s.logger.Error(err, "Failed to encode rules response")
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-
-	if err := json.NewEncoder(w).Encode(entry); err != nil {
-		s.logger.Error(err, "Failed to encode rules response")
-	}
+	_, _ = w.Write(buf.Bytes())
 }
 
 // -----------------------------------------------------------------------------
