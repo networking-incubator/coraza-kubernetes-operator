@@ -81,7 +81,7 @@ func (r *RuleSetReconciler) fetchConfigMapRules(
 			}
 			return "", false, true, nil
 		}
-		logError(log, req, "RuleSet", err, "Failed to get ConfigMap", "configMapName", configMapName)
+		logAPIError(log, req, "RuleSet", err, "Failed to get ConfigMap", ruleset, "configMapName", configMapName)
 		msg := fmt.Sprintf("Failed to access ConfigMap %s: %v", configMapName, err)
 		if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "RuleSet", ruleset, &ruleset.Status.Conditions, ruleset.Generation, "ConfigMapAccessError", msg); patchErr != nil {
 			return "", false, true, patchErr

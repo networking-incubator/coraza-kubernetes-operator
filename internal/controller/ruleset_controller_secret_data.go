@@ -83,7 +83,7 @@ func (r *RuleSetReconciler) loadRuleDataSecret(
 		}
 		return nil, true, nil
 	default:
-		logError(log, req, "RuleSet", err, "Failed to access RuleData secret", "secretName", ruleDataName)
+		logAPIError(log, req, "RuleSet", err, "Failed to access RuleData secret", ruleset, "secretName", ruleDataName)
 		msg := fmt.Sprintf("Failed to access RuleData secret %s: %v", ruleDataName, err)
 		if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "RuleSet", ruleset, &ruleset.Status.Conditions, ruleset.Generation, "SecretAccessError", msg); patchErr != nil {
 			return nil, true, patchErr

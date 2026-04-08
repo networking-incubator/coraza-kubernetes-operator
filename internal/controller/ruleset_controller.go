@@ -113,7 +113,7 @@ func (r *RuleSetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 			logDebug(log, req, "RuleSet", "Resource not found")
 			return ctrl.Result{}, nil
 		}
-		logError(log, req, "RuleSet", err, "Failed to GET")
+		logAPIError(log, req, "RuleSet", err, "Failed to GET", nil)
 		return ctrl.Result{}, err
 	}
 
@@ -171,12 +171,13 @@ func (r *RuleSetReconciler) initializeStatus(ctx context.Context, log logr.Logge
 		return nil
 	}
 
-	logDebug(log, req, "RuleSet", "Setting initial progressing status")
 	patch := client.MergeFrom(ruleset.DeepCopy())
-	setStatusProgressing(log, req, "RuleSet", &ruleset.Status.Conditions, ruleset.Generation, "Reconciling", "Starting reconciliation")
+	before := snapshotConditions(ruleset.Status.Conditions)
+	applyStatusProgressing(&ruleset.Status.Conditions, ruleset.Generation, "Reconciling", "Starting reconciliation")
 	if err := r.Status().Patch(ctx, ruleset, patch); err != nil {
-		logError(log, req, "RuleSet", err, "Failed to patch initial status")
+		logAPIError(log, req, "RuleSet", err, "Failed to patch initial status", ruleset)
 		return err
 	}
+	logConditionTransitions(log, req, "RuleSet", before, ruleset.Status.Conditions)
 	return nil
 }

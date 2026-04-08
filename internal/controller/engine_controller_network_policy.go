@@ -111,7 +111,7 @@ func (r *EngineReconciler) ensureNetworkPolicyFinalizer(ctx context.Context, log
 	patch := client.MergeFrom(engine.DeepCopy())
 	controllerutil.AddFinalizer(engine, networkPolicyFinalizer)
 	if err := r.Patch(ctx, engine, patch); err != nil {
-		logError(log, req, "Engine", err, "Failed to add NetworkPolicy finalizer")
+		logAPIError(log, req, "Engine", err, "Failed to add NetworkPolicy finalizer", engine)
 		return false, err
 	}
 	logDebug(log, req, "Engine", "Added NetworkPolicy finalizer")
@@ -136,7 +136,7 @@ func (r *EngineReconciler) handleNetworkPolicyDeletion(ctx context.Context, log 
 	patch := client.MergeFrom(engine.DeepCopy())
 	controllerutil.RemoveFinalizer(engine, networkPolicyFinalizer)
 	if err := r.Patch(ctx, engine, patch); err != nil {
-		logError(log, req, "Engine", err, "Failed to remove NetworkPolicy finalizer")
+		logAPIError(log, req, "Engine", err, "Failed to remove NetworkPolicy finalizer", engine)
 		return true, err
 	}
 	logDebug(log, req, "Engine", "Removed NetworkPolicy finalizer")
@@ -169,7 +169,7 @@ func (r *EngineReconciler) applyNetworkPolicy(ctx context.Context, log logr.Logg
 		desired.ResourceVersion = existing.ResourceVersion
 		logDebug(log, req, "Engine", "Updating cache server NetworkPolicy", "networkPolicyName", existing.Name)
 		if err := r.Update(ctx, desired); err != nil {
-			logError(log, req, "Engine", err, "Failed to update NetworkPolicy")
+			logAPIError(log, req, "Engine", err, "Failed to update NetworkPolicy", desired)
 			return err
 		}
 		logInfo(log, req, "Engine", "NetworkPolicy updated", "networkPolicyName", desired.Name, "networkPolicyNamespace", desired.Namespace)
@@ -178,7 +178,7 @@ func (r *EngineReconciler) applyNetworkPolicy(ctx context.Context, log logr.Logg
 
 	logDebug(log, req, "Engine", "Creating cache server NetworkPolicy")
 	if err := r.Create(ctx, desired); err != nil {
-		logError(log, req, "Engine", err, "Failed to create NetworkPolicy")
+		logAPIError(log, req, "Engine", err, "Failed to create NetworkPolicy", desired)
 		return err
 	}
 	logInfo(log, req, "Engine", "NetworkPolicy created", "networkPolicyName", desired.Name, "networkPolicyNamespace", desired.Namespace)
@@ -192,14 +192,15 @@ func (r *EngineReconciler) cleanupNetworkPolicy(ctx context.Context, log logr.Lo
 		client.InNamespace(r.operatorNamespace),
 		engineNetworkPolicyLabels(req.Namespace, req.Name),
 	); err != nil {
-		logError(log, req, "Engine", err, "Failed to list NetworkPolicies for cleanup")
+		logAPIError(log, req, "Engine", err, "Failed to list NetworkPolicies for cleanup", nil,
+			"operatorNamespace", r.operatorNamespace)
 		return err
 	}
 
 	for i := range list.Items {
 		if err := r.Delete(ctx, &list.Items[i]); err != nil {
 			if client.IgnoreNotFound(err) != nil {
-				logError(log, req, "Engine", err, "Failed to cleanup NetworkPolicy")
+				logAPIError(log, req, "Engine", err, "Failed to cleanup NetworkPolicy", &list.Items[i])
 				return err
 			}
 		} else {
