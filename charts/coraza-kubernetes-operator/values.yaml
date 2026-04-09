@@ -32,8 +32,20 @@ metrics:
 
 logging:
   # When true, uses console encoder with debug level (development mode).
-  # When false (default), uses JSON encoder with info level (production mode).
+  # When false (default), the settings below apply for production mode.
   development: false
+  # Log encoding format. Applies when development=false.
+  # Valid values: json, console
+  encoder: json
+  # Minimum log level. Applies when development=false.
+  # Valid values: debug, info, error
+  level: info
+  # Minimum level at which stack traces are captured. Applies when development=false.
+  # Valid values: info, error, panic
+  stacktraceLevel: error
+  # Timestamp encoding format. Applies when development=false.
+  # Valid values: epoch, millis, nano, iso8601, rfc3339, rfc3339nano
+  timeEncoding: rfc3339nano
 
 istio:
   # When empty, the operator does not set an Istio revision label on managed resources.

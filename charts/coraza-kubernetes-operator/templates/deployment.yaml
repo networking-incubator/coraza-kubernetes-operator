@@ -62,7 +62,15 @@ spec:
             {{- if .Values.defaultWasmImage }}
             - --default-wasm-image={{ .Values.defaultWasmImage }}
             {{- end }}
-            - --zap-devel={{ .Values.logging.development }}
+            {{- if .Values.logging.development }}
+            - --zap-devel=true
+            {{- else }}
+            - --zap-devel=false
+            - --zap-encoder={{ .Values.logging.encoder | default "json" }}
+            - --zap-log-level={{ .Values.logging.level | default "info" }}
+            - --zap-stacktrace-level={{ .Values.logging.stacktraceLevel | default "error" }}
+            - --zap-time-encoding={{ .Values.logging.timeEncoding | default "rfc3339nano" }}
+            {{- end }}
           env:
             - name: POD_NAMESPACE
               valueFrom:
