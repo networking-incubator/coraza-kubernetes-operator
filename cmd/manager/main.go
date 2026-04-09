@@ -74,6 +74,7 @@ var (
 
 func main() {
 	cfg := parseFlags()
+	setupLog = ctrl.Log.WithName("setup")
 	logFlags()
 	validateFlags(cfg)
 

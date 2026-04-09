@@ -137,9 +137,9 @@ SecRequestBodyAccess On
 SecRequestBodyLimit 13107200
 SecRequestBodyNoFilesLimit 131072`)
 	s.CreateConfigMap(ns, "body-rules", `
-SecRule REQUEST_BODY "@contains DROP TABLE" "id:6001,phase:2,pass,msg:'SQL injection in body',log,auditlog"
-SecRule REQUEST_BODY "@contains <script>" "id:6002,phase:2,pass,msg:'XSS in body',log,auditlog"
-SecRule REQUEST_BODY "@contains malicious_payload" "id:6003,phase:2,pass,msg:'Malicious payload',log,auditlog"
+SecRule REQUEST_BODY "@contains DROP TABLE" "id:6001,phase:2,deny,status:403,msg:'SQL injection in body',log,auditlog"
+SecRule REQUEST_BODY "@contains <script>" "id:6002,phase:2,deny,status:403,msg:'XSS in body',log,auditlog"
+SecRule REQUEST_BODY "@contains malicious_payload" "id:6003,phase:2,deny,status:403,msg:'Malicious payload',log,auditlog"
 `)
 	s.CreateRuleSet(ns, "ruleset", []string{"base-rules", "body-rules"})
 
@@ -156,14 +156,14 @@ SecRule REQUEST_BODY "@contains malicious_payload" "id:6003,phase:2,pass,msg:'Ma
 
 	gw := s.ProxyToGateway(ns, "gw")
 
-	s.Step("verify SQL injection in body is logged")
-	gw.ExpectPostAllowed("/api/data", "application/json", `{"query": "DROP TABLE users"}`)
+	s.Step("verify SQL injection in body is blocked")
+	gw.ExpectPostBlocked("/api/data", "application/json", `{"query": "DROP TABLE users"}`)
 
-	s.Step("verify XSS in body is logged")
-	gw.ExpectPostAllowed("/api/comment", "text/plain", `<script>alert('xss')</script>`)
+	s.Step("verify XSS in body is blocked")
+	gw.ExpectPostBlocked("/api/comment", "text/plain", `<script>alert('xss')</script>`)
 
-	s.Step("verify malicious payload in form data is logged")
-	gw.ExpectPostAllowed("/api/submit", "application/x-www-form-urlencoded", "data=malicious_payload")
+	s.Step("verify malicious payload in form data is blocked")
+	gw.ExpectPostBlocked("/api/submit", "application/x-www-form-urlencoded", "data=malicious_payload")
 
 	s.Step("verify clean POST body is allowed")
 	gw.ExpectPostAllowed("/api/data", "application/json", `{"name": "safe data"}`)

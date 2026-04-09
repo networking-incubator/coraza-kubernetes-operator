@@ -45,6 +45,12 @@ import (
 // debugLevel is the go-logr level for debug/verbose logging
 const debugLevel = 1
 
+const (
+	conditionReady       = "Ready"
+	conditionDegraded    = "Degraded"
+	conditionProgressing = "Progressing"
+)
+
 // logInfo logs an info-level message with consistent structured context.
 func logInfo(log logr.Logger, req ctrl.Request, kind, msg string, keysAndValues ...any) {
 	args := append([]any{"namespace", req.Namespace, "name", req.Name}, keysAndValues...)
@@ -114,7 +120,7 @@ func extractStatusErrorFields(err error) []any {
 
 // trackedConditionTypes are the operator-owned condition types whose transitions
 // are logged at Info level.
-var trackedConditionTypes = []string{"Ready", "Degraded", "Progressing"}
+var trackedConditionTypes = []string{conditionReady, conditionDegraded, conditionProgressing}
 
 // conditionSnapshot captures the Status and Reason of each tracked condition
 // type before mutation. A nil entry means the condition was absent.
@@ -193,16 +199,16 @@ func setConditionFalse(conditions *[]metav1.Condition, generation int64, conditi
 // applyStatusConditionDegraded mutates conditions to a Degraded state. It does
 // not log; call logConditionTransitions after a successful Status().Patch.
 func applyStatusConditionDegraded(conditions *[]metav1.Condition, generation int64, reason, message string) {
-	setConditionFalse(conditions, generation, "Ready", reason, message)
-	setConditionTrue(conditions, generation, "Degraded", reason, message)
-	apimeta.RemoveStatusCondition(conditions, "Progressing")
+	setConditionFalse(conditions, generation, conditionReady, reason, message)
+	setConditionTrue(conditions, generation, conditionDegraded, reason, message)
+	apimeta.RemoveStatusCondition(conditions, conditionProgressing)
 }
 
 // applyStatusProgressing mutates conditions to a Progressing state. It does not
 // log; call logConditionTransitions after a successful Status().Patch.
 func applyStatusProgressing(conditions *[]metav1.Condition, generation int64, reason, message string) {
-	setConditionFalse(conditions, generation, "Ready", reason, message)
-	setConditionTrue(conditions, generation, "Progressing", reason, message)
+	setConditionFalse(conditions, generation, conditionReady, reason, message)
+	setConditionTrue(conditions, generation, conditionProgressing, reason, message)
 }
 
 // maxEventNoteBytes is the maximum size of the note field in events.k8s.io/v1.
@@ -248,9 +254,9 @@ func patchDegraded(
 // applyStatusReady mutates conditions to Ready. It does not log; call
 // logConditionTransitions after a successful Status().Patch.
 func applyStatusReady(conditions *[]metav1.Condition, generation int64, reason, message string) {
-	setConditionTrue(conditions, generation, "Ready", reason, message)
-	apimeta.RemoveStatusCondition(conditions, "Degraded")
-	apimeta.RemoveStatusCondition(conditions, "Progressing")
+	setConditionTrue(conditions, generation, conditionReady, reason, message)
+	apimeta.RemoveStatusCondition(conditions, conditionDegraded)
+	apimeta.RemoveStatusCondition(conditions, conditionProgressing)
 }
 
 // patchReady marks a resource as Ready, emits a Normal event, and patches the

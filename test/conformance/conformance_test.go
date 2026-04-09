@@ -176,13 +176,11 @@ func TestCoreRuleSetConformance(t *testing.T) {
 			n, err := logStream.Read(buf)
 			if n > 0 {
 				totalBytes += n
-				_, err = logFile.Write(buf[:n])
-				if err != nil {
-					outputErrors = append(outputErrors, err)
+				if _, werr := logFile.Write(buf[:n]); werr != nil {
+					outputErrors = append(outputErrors, werr)
 				}
-				err = logFile.Sync() // Force immediate write to disk
-				if err != nil {
-					outputErrors = append(outputErrors, err)
+				if serr := logFile.Sync(); serr != nil { // Force immediate write to disk
+					outputErrors = append(outputErrors, serr)
 				}
 				// Signal that logs are ready after first successful write+sync
 				if firstWrite {
@@ -200,9 +198,8 @@ func TestCoreRuleSetConformance(t *testing.T) {
 				break
 			}
 		}
-		err = logFile.Sync() // Final sync before goroutine exits
-		if err != nil {
-			outputErrors = append(outputErrors, err)
+		if serr := logFile.Sync(); serr != nil { // Final sync before goroutine exits
+			outputErrors = append(outputErrors, serr)
 		}
 		if len(outputErrors) > 0 {
 			t.Logf("some errors occurred during the log streaming: %+v", outputErrors)
@@ -213,7 +210,11 @@ func TestCoreRuleSetConformance(t *testing.T) {
 		// Close the log stream first to unblock the streaming goroutine,
 		// then wait for it to finish before closing the file.
 		_ = logStream.Close()
-		<-logDone // Wait for streaming goroutine to finish
+		select {
+		case <-logDone:
+		case <-time.After(10 * time.Second):
+			s.T.Log("warning: timed out waiting for log streaming goroutine")
+		}
 		_ = logFile.Close()
 		s.T.Logf("Gateway logs saved to: %s", logFile.Name())
 	})

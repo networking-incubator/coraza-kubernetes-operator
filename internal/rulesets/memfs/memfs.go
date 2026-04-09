@@ -28,15 +28,21 @@ import (
 // MemFS
 // -----------------------------------------------------------------------------
 
+// memEntry holds file data alongside its write timestamp.
+type memEntry struct {
+	data    []byte
+	modTime time.Time
+}
+
 // MemFS is a simple, thread-safe in-memory filesystem
 type MemFS struct {
 	mu    sync.RWMutex
-	files map[string][]byte
+	files map[string]memEntry
 }
 
 // NewMemFS creates a new instance of an in-memory filesystem that implements fs.FS
 func NewMemFS() *MemFS {
-	return &MemFS{files: make(map[string][]byte)}
+	return &MemFS{files: make(map[string]memEntry)}
 }
 
 // WriteFile adds or updates a file in memory
@@ -46,7 +52,7 @@ func (m *MemFS) WriteFile(name string, data []byte) {
 
 	copied := make([]byte, len(data))
 	copy(copied, data)
-	m.files[name] = copied
+	m.files[name] = memEntry{data: copied, modTime: time.Now()}
 }
 
 // Open implements the fs.FS interface (Read-Only access)
@@ -54,15 +60,16 @@ func (m *MemFS) Open(name string) (fs.File, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	data, ok := m.files[name]
+	entry, ok := m.files[name]
 	if !ok {
 		return nil, &fs.PathError{Op: "open", Path: name, Err: fs.ErrNotExist}
 	}
 
 	return &memFile{
-		name:   name,
-		Reader: bytes.NewReader(data),
-		size:   int64(len(data)),
+		name:    name,
+		modTime: entry.modTime,
+		Reader:  bytes.NewReader(entry.data),
+		size:    int64(len(entry.data)),
 	}, nil
 }
 
@@ -72,7 +79,8 @@ func (m *MemFS) Open(name string) (fs.File, error) {
 
 // memFile wraps bytes.Reader to satisfy the fs.File interface
 type memFile struct {
-	name string
+	name    string
+	modTime time.Time
 	*bytes.Reader
 	size int64
 }
@@ -93,7 +101,7 @@ func (f *memFile) Size() int64 { return f.size }
 func (f *memFile) Mode() fs.FileMode { return 0644 }
 
 // ModTime returns a file modification time
-func (f *memFile) ModTime() time.Time { return time.Now() }
+func (f *memFile) ModTime() time.Time { return f.modTime }
 
 // IsDir returns a boolean that represents if a file entry is a directory
 func (f *memFile) IsDir() bool { return false }

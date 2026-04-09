@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/corazawaf/coraza/v3"
@@ -63,6 +64,27 @@ type RuleSetReconciler struct {
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *RuleSetReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	if err := mgr.GetFieldIndexer().IndexField(context.Background(), &wafv1alpha1.RuleSet{}, "spec.rules.name", func(obj client.Object) []string {
+		rs := obj.(*wafv1alpha1.RuleSet)
+		names := make([]string, len(rs.Spec.Rules))
+		for i, rule := range rs.Spec.Rules {
+			names[i] = rule.Name
+		}
+		return names
+	}); err != nil {
+		return fmt.Errorf("index spec.rules.name: %w", err)
+	}
+
+	if err := mgr.GetFieldIndexer().IndexField(context.Background(), &wafv1alpha1.RuleSet{}, "spec.ruleData", func(obj client.Object) []string {
+		rs := obj.(*wafv1alpha1.RuleSet)
+		if rs.Spec.RuleData != "" {
+			return []string{rs.Spec.RuleData}
+		}
+		return nil
+	}); err != nil {
+		return fmt.Errorf("index spec.ruleData: %w", err)
+	}
+
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&wafv1alpha1.RuleSet{}, builder.WithPredicates(predicate.Or(
 			predicate.GenerationChangedPredicate{},
@@ -159,7 +181,7 @@ func (r *RuleSetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 // initializeStatus sets the initial Progressing condition if the RuleSet has
 // never been reconciled before.
 func (r *RuleSetReconciler) initializeStatus(ctx context.Context, log logr.Logger, req ctrl.Request, ruleset *wafv1alpha1.RuleSet) error {
-	if apimeta.FindStatusCondition(ruleset.Status.Conditions, "Ready") != nil {
+	if apimeta.FindStatusCondition(ruleset.Status.Conditions, conditionReady) != nil {
 		return nil
 	}
 
