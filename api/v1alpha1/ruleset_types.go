@@ -67,7 +67,7 @@ type RuleSet struct {
 	// status defines the observed state of RuleSet.
 	//
 	// +optional
-	Status *RuleSetStatus `json:"status,omitempty"`
+	Status RuleSetStatus `json:"status,omitempty,omitzero"`
 }
 
 // RuleSetList contains a list of RuleSet resources.
@@ -113,8 +113,9 @@ type RuleSetSpec struct {
 	// of the file as the value
 	//
 	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
 	// +optional
-	RuleData *string `json:"ruleData,omitempty"`
+	RuleData string `json:"ruleData,omitempty"`
 }
 
 // -----------------------------------------------------------------------------
@@ -122,6 +123,7 @@ type RuleSetSpec struct {
 // -----------------------------------------------------------------------------
 
 // RuleSetCacheServerConfig defines the configuration for the RuleSet cache server.
+// +kubebuilder:validation:MinProperties=0
 type RuleSetCacheServerConfig struct {
 	// pollIntervalSeconds specifies how often the WAF should check for
 	// configuration updates. The value is specified in seconds.
@@ -134,7 +136,7 @@ type RuleSetCacheServerConfig struct {
 	// +kubebuilder:validation:Maximum=3600
 	// +optional
 	// +default=15
-	PollIntervalSeconds *int32 `json:"pollIntervalSeconds,omitempty"`
+	PollIntervalSeconds int32 `json:"pollIntervalSeconds,omitempty"`
 }
 
 // -----------------------------------------------------------------------------
@@ -147,6 +149,7 @@ type RuleSourceReference struct {
 	//
 	// +required
 	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
 	Name string `json:"name,omitempty"`
 }
 
@@ -155,6 +158,7 @@ type RuleSourceReference struct {
 // -----------------------------------------------------------------------------
 
 // RuleSetStatus defines the observed state of RuleSet.
+// +kubebuilder:validation:MinProperties=1
 type RuleSetStatus struct {
 	// conditions represent the current state of the RuleSet resource.
 	// Each condition has a unique type and reflects the status of a specific aspect of the resource.
@@ -170,6 +174,8 @@ type RuleSetStatus struct {
 	// +listMapKey=type
 	// +patchStrategy=merge
 	// +patchMergeKey=type
+	// +kubebuilder:validation:MinItems=1
+	// +kubebuilder:validation:MaxItems=16
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty" patchStrategy:"merge" patchMergeKey:"type" protobuf:"bytes,1,rep,name=conditions"`
 }

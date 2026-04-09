@@ -54,6 +54,7 @@ spec:
                   not be watched.
                   Additionally, the secret must contain the name of each file as the key, and the content
                   of the file as the value
+                maxLength: 253
                 minLength: 1
                 type: string
               rules:
@@ -70,6 +71,7 @@ spec:
                     name:
                       description: name is the name of the ConfigMap in the same namespace
                         as the RuleSet.
+                      maxLength: 253
                       minLength: 1
                       type: string
                   required:
@@ -84,6 +86,7 @@ spec:
             type: object
           status:
             description: status defines the observed state of RuleSet.
+            minProperties: 1
             properties:
               conditions:
                 description: |-
@@ -150,6 +153,8 @@ spec:
                   - status
                   - type
                   type: object
+                maxItems: 16
+                minItems: 1
                 type: array
                 x-kubernetes-list-map-keys:
                 - type

@@ -92,7 +92,7 @@ func (r *EngineReconciler) provisionIstioEngineWithWasm(ctx context.Context, log
 	logDebug(log, req, "Engine", "Finding matched Gateways")
 	gateways, gwErr := r.matchedGateways(ctx, log, req, &engine)
 	if gwErr != nil {
-		logError(log, req, "Engine", gwErr, "Failed to find matched Gateways, not updating Gateway status")
+		logAPIError(log, req, "Engine", gwErr, "Failed to find matched Gateways, not updating Gateway status", &engine)
 	}
 
 	// Status patching is kept inline because it mutates engine.Status.Gateways
@@ -102,11 +102,13 @@ func (r *EngineReconciler) provisionIstioEngineWithWasm(ctx context.Context, log
 	if gwErr == nil {
 		engine.Status.Gateways = gateways
 	}
-	setStatusReady(log, req, "Engine", &engine.Status.Conditions, engine.Generation, "Configured", "WasmPlugin successfully created/updated")
+	before := snapshotConditions(engine.Status.Conditions)
+	applyStatusReady(&engine.Status.Conditions, engine.Generation, "Configured", "WasmPlugin successfully created/updated")
 	if err := r.Status().Patch(ctx, &engine, patch); err != nil {
-		logError(log, req, "Engine", err, "Failed to patch status")
+		logAPIError(log, req, "Engine", err, "Failed to patch status", &engine)
 		return ctrl.Result{}, err
 	}
+	logConditionTransitions(log, req, "Engine", before, engine.Status.Conditions)
 	r.Recorder.Eventf(&engine, nil, "Normal", "WasmPluginCreated", "Provision", "Created WasmPlugin %s/%s", wasmPlugin.GetNamespace(), wasmPlugin.GetName())
 
 	return ctrl.Result{}, nil
@@ -132,7 +134,7 @@ func (r *EngineReconciler) applyWasmPlugin(ctx context.Context, log logr.Logger,
 
 	logDebug(log, req, "Engine", "Applying WasmPlugin", "wasmPluginName", wasmPlugin.GetName())
 	if err := serverSideApply(ctx, r.Client, wasmPlugin); err != nil {
-		logError(log, req, "Engine", err, "Failed to create or update WasmPlugin")
+		logAPIError(log, req, "Engine", err, "Failed to create or update WasmPlugin", wasmPlugin)
 		return nil, err
 	}
 
@@ -149,8 +151,8 @@ func (r *EngineReconciler) wasmPluginOCIURLSource(engine *wafv1alpha1.Engine) (u
 		return r.defaultWasmImage, false
 	}
 	w := engine.Spec.Driver.Istio.Wasm
-	if w.Image != nil && *w.Image != "" {
-		return *w.Image, true
+	if w.Image != "" {
+		return w.Image, true
 	}
 	return r.defaultWasmImage, false
 }
@@ -159,8 +161,8 @@ func (r *EngineReconciler) buildWasmPlugin(engine *wafv1alpha1.Engine, wasmURL s
 	rulesetKey := fmt.Sprintf("%s/%s", engine.Namespace, engine.Spec.RuleSet.Name)
 
 	failurePolicy := wafv1alpha1.FailurePolicyFail
-	if engine.Spec.FailurePolicy != nil {
-		failurePolicy = *engine.Spec.FailurePolicy
+	if engine.Spec.FailurePolicy != "" {
+		failurePolicy = engine.Spec.FailurePolicy
 	}
 
 	pluginConfig := map[string]any{
@@ -169,8 +171,8 @@ func (r *EngineReconciler) buildWasmPlugin(engine *wafv1alpha1.Engine, wasmURL s
 		"failure_policy":        string(failurePolicy),
 	}
 
-	if engine.Spec.Driver.Istio.Wasm.RuleSetCacheServer != nil && engine.Spec.Driver.Istio.Wasm.RuleSetCacheServer.PollIntervalSeconds != nil {
-		pluginConfig["rule_reload_interval_seconds"] = *engine.Spec.Driver.Istio.Wasm.RuleSetCacheServer.PollIntervalSeconds
+	if engine.Spec.Driver.Istio.Wasm.RuleSetCacheServer != nil {
+		pluginConfig["rule_reload_interval_seconds"] = engine.Spec.Driver.Istio.Wasm.RuleSetCacheServer.PollIntervalSeconds
 	}
 
 	matchLabels := engine.Spec.Driver.Istio.Wasm.WorkloadSelector.MatchLabels
@@ -196,9 +198,9 @@ func (r *EngineReconciler) buildWasmPlugin(engine *wafv1alpha1.Engine, wasmURL s
 		},
 	}
 
-	if engine.Spec.Driver.Istio.Wasm.ImagePullSecret != nil {
+	if engine.Spec.Driver.Istio.Wasm.ImagePullSecret != "" {
 		spec := wasmPlugin.Object["spec"].(map[string]any)
-		spec["imagePullSecret"] = *engine.Spec.Driver.Istio.Wasm.ImagePullSecret
+		spec["imagePullSecret"] = engine.Spec.Driver.Istio.Wasm.ImagePullSecret
 	}
 
 	wasmPlugin.SetGroupVersionKind(schema.GroupVersionKind{

@@ -111,7 +111,7 @@ type EngineSpec struct {
 	//
 	// +optional
 	// +default="fail"
-	FailurePolicy *FailurePolicy `json:"failurePolicy,omitempty"`
+	FailurePolicy FailurePolicy `json:"failurePolicy,omitempty"`
 }
 
 // -----------------------------------------------------------------------------
@@ -119,6 +119,7 @@ type EngineSpec struct {
 // -----------------------------------------------------------------------------
 
 // EngineStatus defines the observed state of Engine.
+// +kubebuilder:validation:MinProperties=0
 type EngineStatus struct {
 	// conditions represent the current state of the Engine resource.
 	// Each condition has a unique type and reflects the status of a specific
@@ -135,6 +136,8 @@ type EngineStatus struct {
 	// +listMapKey=type
 	// +patchStrategy=merge
 	// +patchMergeKey=type
+	// +kubebuilder:validation:MinItems=1
+	// +kubebuilder:validation:MaxItems=16
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty" patchStrategy:"merge" patchMergeKey:"type" protobuf:"bytes,1,rep,name=conditions"`
 
@@ -143,6 +146,8 @@ type EngineStatus struct {
 	//
 	// +listType=map
 	// +listMapKey=name
+	// +kubebuilder:validation:MinItems=1
+	// +kubebuilder:validation:MaxItems=16
 	// +optional
 	Gateways []GatewayReference `json:"gateways,omitempty"`
 }
@@ -176,6 +181,7 @@ type RuleSetReference struct {
 	//
 	// +required
 	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
 	Name string `json:"name,omitempty"`
 }
 
@@ -186,5 +192,6 @@ type GatewayReference struct {
 	//
 	// +required
 	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
 	Name string `json:"name,omitempty"`
 }

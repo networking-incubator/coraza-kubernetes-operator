@@ -51,8 +51,8 @@ func (r *RuleSetReconciler) loadRuleDataSecret(
 	ruleset *wafv1alpha1.RuleSet,
 ) (map[string][]byte, bool, error) {
 	var ruleDataName string
-	if ruleset.Spec.RuleData != nil {
-		ruleDataName = *ruleset.Spec.RuleData
+	if ruleset.Spec.RuleData != "" {
+		ruleDataName = ruleset.Spec.RuleData
 	}
 	if ruleDataName == "" {
 		return nil, false, nil
@@ -83,7 +83,7 @@ func (r *RuleSetReconciler) loadRuleDataSecret(
 		}
 		return nil, true, nil
 	default:
-		logError(log, req, "RuleSet", err, "Failed to access RuleData secret", "secretName", ruleDataName)
+		logAPIError(log, req, "RuleSet", err, "Failed to access RuleData secret", ruleset, "secretName", ruleDataName)
 		msg := fmt.Sprintf("Failed to access RuleData secret %s: %v", ruleDataName, err)
 		if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "RuleSet", ruleset, &ruleset.Status.Conditions, ruleset.Generation, "SecretAccessError", msg); patchErr != nil {
 			return nil, true, patchErr

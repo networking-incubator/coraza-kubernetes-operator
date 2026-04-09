@@ -64,6 +64,6 @@ func (r *RuleSetReconciler) findRuleSetsForSecret(ctx context.Context, secret cl
 	}
 
 	return collectRequests(ruleSetList.Items, func(rs *wafv1alpha1.RuleSet) bool {
-		return rs.Spec.RuleData != nil && *rs.Spec.RuleData == secret.GetName()
+		return rs.Spec.RuleData == secret.GetName()
 	})
 }

@@ -58,20 +58,25 @@ spec:
                   driver specifies the driver configuration for the engine. This
                   determines how the WAF engine will be deployed and integrated with some
                   implementation. Currently only supports Istio ingress Gateways.
+                minProperties: 0
                 properties:
                   istio:
                     description: istio configures the Engine to integrate with Istio
                       service mesh.
+                    minProperties: 0
                     properties:
                       wasm:
                         description: wasm configures the Engine to be deployed as
                           a WebAssembly plugin.
+                        minProperties: 0
                         properties:
                           image:
                             description: |-
                               image is the OCI image reference for the Coraza WASM plugin.
                               If omitted the operator uses its configured default WASM OCI reference
                               (--default-wasm-image / CORAZA_DEFAULT_WASM_IMAGE).
+                            maxLength: 1024
+                            minLength: 1
                             type: string
                           imagePullSecret:
                             description: |-
@@ -98,6 +103,7 @@ spec:
                               When omitted, no cache server will be used and no rulesets will be
                               dynamically loaded. This implies that your Engine will be deployed with
                               all rules statically embedded.
+                            minProperties: 0
                             properties:
                               pollIntervalSeconds:
                                 default: 15
@@ -207,6 +213,7 @@ spec:
                   name:
                     description: name is the name of the RuleSet in the same namespace
                       as the Engine.
+                    maxLength: 253
                     minLength: 1
                     type: string
                 required:
@@ -220,6 +227,7 @@ spec:
               rule: has(self.driver)
           status:
             description: status defines the observed state of Engine.
+            minProperties: 0
             properties:
               conditions:
                 description: |-
@@ -287,6 +295,8 @@ spec:
                   - status
                   - type
                   type: object
+                maxItems: 16
+                minItems: 1
                 type: array
                 x-kubernetes-list-map-keys:
                 - type
@@ -303,11 +313,14 @@ spec:
                     name:
                       description: name is the name of the Gateway in the same namespace
                         as the Engine.
+                      maxLength: 253
                       minLength: 1
                       type: string
                   required:
                   - name
                   type: object
+                maxItems: 16
+                minItems: 1
                 type: array
                 x-kubernetes-list-map-keys:
                 - name

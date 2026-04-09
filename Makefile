@@ -31,6 +31,70 @@ CONTROLLER_MANAGER_CONTAINER_IMAGE_BASE ?= $(IMAGE_REGISTRY)/coraza-kubernetes-o
 CONTROLLER_MANAGER_CONTAINER_IMAGE_TAG ?= $(VERSION)
 CONTROLLER_MANAGER_CONTAINER_IMAGE ?= ${CONTROLLER_MANAGER_CONTAINER_IMAGE_BASE}:${CONTROLLER_MANAGER_CONTAINER_IMAGE_TAG}
 
+# OCI image annotations (https://github.com/opencontainers/image-spec/blob/main/annotations.md)
+GIT_REVISION = $(shell git rev-parse HEAD 2>/dev/null || echo unknown)
+OCI_IMAGE_CREATED = $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
+OCI_IMAGE_SOURCE ?= https://github.com/networking-incubator/coraza-kubernetes-operator
+OCI_IMAGE_DOCUMENTATION ?= $(OCI_IMAGE_SOURCE)
+OCI_IMAGE_VENDOR ?= networking-incubator
+OCI_IMAGE_LICENSES ?= Apache-2.0
+
+# Must match the final stage in the root Dockerfile (distroless).
+OCI_OPERATOR_BASE_NAME ?= gcr.io/distroless/static:nonroot
+OCI_OPERATOR_BASE_DIGEST ?= sha256:e3f945647ffb95b5839c07038d64f9811adf17308b9121d8a2b87b6a22a80a39
+
+OCI_IMAGE_TITLE_OPERATOR ?= Coraza Kubernetes Operator
+OCI_IMAGE_DESC_OPERATOR ?= Kubernetes operator for Coraza Web Application Firewall on Gateway API.
+
+OCI_IMAGE_TITLE_BUNDLE ?= Coraza Kubernetes Operator (OLM bundle)
+OCI_IMAGE_DESC_BUNDLE ?= OLM bundle for the Coraza Kubernetes Operator.
+
+OCI_IMAGE_TITLE_CATALOG ?= Coraza Kubernetes Operator (OLM catalog)
+OCI_IMAGE_DESC_CATALOG ?= OLM index/catalog image for the Coraza Kubernetes Operator.
+
+OPM_VERSION ?= v1.64.0
+# Base image for the catalog final stage (see catalog/Dockerfile). When bumping OPM_VERSION, refresh
+# OPM_BASE_DIGEST to the manifest list digest for that tag (e.g. quay.io API or skopeo inspect).
+OPM_BASE_NAME ?= quay.io/operator-framework/opm:$(OPM_VERSION)
+OPM_BASE_DIGEST ?= sha256:a070b901663d00312ccabe06a3c04b961d7326868499fe6c4c6b97025c79f014
+
+OCI_LABELS_OPERATOR = \
+	--label org.opencontainers.image.title="$(OCI_IMAGE_TITLE_OPERATOR)" \
+	--label org.opencontainers.image.description="$(OCI_IMAGE_DESC_OPERATOR)" \
+	--label org.opencontainers.image.version="$(VERSION)" \
+	--label org.opencontainers.image.revision="$(GIT_REVISION)" \
+	--label org.opencontainers.image.created="$(OCI_IMAGE_CREATED)" \
+	--label org.opencontainers.image.source="$(OCI_IMAGE_SOURCE)" \
+	--label org.opencontainers.image.documentation="$(OCI_IMAGE_DOCUMENTATION)" \
+	--label org.opencontainers.image.licenses="$(OCI_IMAGE_LICENSES)" \
+	--label org.opencontainers.image.vendor="$(OCI_IMAGE_VENDOR)" \
+	--label org.opencontainers.image.base.name="$(OCI_OPERATOR_BASE_NAME)" \
+	--label org.opencontainers.image.base.digest="$(OCI_OPERATOR_BASE_DIGEST)"
+
+OCI_LABELS_BUNDLE = \
+	--label org.opencontainers.image.title="$(OCI_IMAGE_TITLE_BUNDLE)" \
+	--label org.opencontainers.image.description="$(OCI_IMAGE_DESC_BUNDLE)" \
+	--label org.opencontainers.image.version="$(VERSION)" \
+	--label org.opencontainers.image.revision="$(GIT_REVISION)" \
+	--label org.opencontainers.image.created="$(OCI_IMAGE_CREATED)" \
+	--label org.opencontainers.image.source="$(OCI_IMAGE_SOURCE)" \
+	--label org.opencontainers.image.documentation="$(OCI_IMAGE_DOCUMENTATION)" \
+	--label org.opencontainers.image.licenses="$(OCI_IMAGE_LICENSES)" \
+	--label org.opencontainers.image.vendor="$(OCI_IMAGE_VENDOR)"
+
+OCI_LABELS_CATALOG = \
+	--label org.opencontainers.image.title="$(OCI_IMAGE_TITLE_CATALOG)" \
+	--label org.opencontainers.image.description="$(OCI_IMAGE_DESC_CATALOG)" \
+	--label org.opencontainers.image.version="$(VERSION)" \
+	--label org.opencontainers.image.revision="$(GIT_REVISION)" \
+	--label org.opencontainers.image.created="$(OCI_IMAGE_CREATED)" \
+	--label org.opencontainers.image.source="$(OCI_IMAGE_SOURCE)" \
+	--label org.opencontainers.image.documentation="$(OCI_IMAGE_DOCUMENTATION)" \
+	--label org.opencontainers.image.licenses="$(OCI_IMAGE_LICENSES)" \
+	--label org.opencontainers.image.vendor="$(OCI_IMAGE_VENDOR)" \
+	--label org.opencontainers.image.base.name="$(OPM_BASE_NAME)" \
+	--label org.opencontainers.image.base.digest="$(OPM_BASE_DIGEST)"
+
 # ------------------------------------------------------------------------------
 # General
 # ------------------------------------------------------------------------------
@@ -53,7 +117,7 @@ build: manifests generate fmt vet lint
 
 .PHONY: build.image
 build.image:
-	$(CONTAINER_TOOL) build -t ${CONTROLLER_MANAGER_CONTAINER_IMAGE} .
+	$(CONTAINER_TOOL) build $(OCI_LABELS_OPERATOR) -t ${CONTROLLER_MANAGER_CONTAINER_IMAGE} .
 
 .PHONY: build.installer
 build.installer: manifests generate helm.sync ## Build a single install manifest (CRDs + operator)
@@ -280,7 +344,6 @@ BUNDLE_IMG ?= $(BUNDLE_IMG_BASE):$(BUNDLE_IMG_TAG)
 CATALOG_IMG_BASE ?= $(IMAGE_REGISTRY)/coraza-kubernetes-operator-catalog
 CATALOG_IMG_TAG ?= $(VERSION)
 CATALOG_IMG ?= $(CATALOG_IMG_BASE):$(CATALOG_IMG_TAG)
-OPM_VERSION ?= v1.64.0
 BUNDLE_DIR ?= bundle
 CATALOG_DIR ?= catalog
 CATALOG_FILE ?= $(CATALOG_DIR)/coraza-kubernetes-operator/catalog.yaml
@@ -305,7 +368,7 @@ bundle.opp: bundle ## Run OPP kiwi tests against staged bundle (needs docker, an
 
 .PHONY: bundle.build
 bundle.build: ## Build the OLM bundle image
-	$(CONTAINER_TOOL) build -f $(BUNDLE_DIR)/bundle.Dockerfile -t $(BUNDLE_IMG) $(BUNDLE_DIR)
+	$(CONTAINER_TOOL) build $(OCI_LABELS_BUNDLE) -f $(BUNDLE_DIR)/bundle.Dockerfile -t $(BUNDLE_IMG) $(BUNDLE_DIR)
 
 .PHONY: bundle.push
 bundle.push: ## Push the OLM bundle image
@@ -329,6 +392,7 @@ catalog.build: ## Build the OLM catalog image (renders bundles via opm)
 		bundle_imgs=$$(python3 hack/list_bundle_images.py $(CATALOG_FILE) $(BUNDLE_IMG_BASE)); \
 	fi && \
 	$(CONTAINER_TOOL) build \
+		$(OCI_LABELS_CATALOG) \
 		--build-arg OPM_VERSION=$(OPM_VERSION) \
 		--build-arg BUNDLE_IMGS="$$bundle_imgs" \
 		-f $(CATALOG_DIR)/Dockerfile -t $(CATALOG_IMG) $(CATALOG_DIR)

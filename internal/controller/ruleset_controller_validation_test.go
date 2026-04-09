@@ -17,6 +17,7 @@ limitations under the License.
 package controller
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -52,5 +53,12 @@ func TestValidateConfigMapRules(t *testing.T) {
 		)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "data-cm")
+		// Adversarial: user-visible error must not embed memfs/container absolute paths.
+		msg := err.Error()
+		if strings.Contains(msg, "/") {
+			for _, leak := range []string{"/var/", "/etc/", "/tmp/", "/app/", "/root/"} {
+				assert.NotContains(t, msg, leak, "validation error leaked a filesystem path segment")
+			}
+		}
 	})
 }

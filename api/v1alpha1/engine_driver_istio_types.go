@@ -30,6 +30,7 @@ import (
 // Exactly one mode must be specified.
 //
 // +kubebuilder:validation:XValidation:rule="[has(self.wasm)].filter(x, x).size() == 1",message="exactly one integration mechanism (Wasm, etc) must be specified"
+// +kubebuilder:validation:MinProperties=0
 type IstioDriverConfig struct {
 	// wasm configures the Engine to be deployed as a WebAssembly plugin.
 	//
@@ -44,6 +45,7 @@ type IstioDriverConfig struct {
 // IstioWasmConfig defines configuration for deploying the Engine as a WASM
 // plugin with Istio.
 //
+// +kubebuilder:validation:MinProperties=0
 // +kubebuilder:validation:XValidation:rule="self.mode == 'gateway' ? has(self.workloadSelector) : true",message="workloadSelector is required when mode is gateway"
 // +kubebuilder:validation:XValidation:rule="!has(self.image) || self.image.matches('^oci://')",message="image must start with oci:// when set"
 // +kubebuilder:validation:XValidation:rule="!has(self.image) || size(self.image) <= 1024",message="image must be at most 1024 characters when set"
@@ -55,7 +57,7 @@ type IstioWasmConfig struct {
 	//
 	// +optional
 	// +default="gateway"
-	Mode *IstioIntegrationMode `json:"mode,omitempty"`
+	Mode IstioIntegrationMode `json:"mode,omitempty"`
 
 	// workloadSelector specifies the selection criteria for attaching the WAF to
 	// Istio resources.
@@ -70,7 +72,9 @@ type IstioWasmConfig struct {
 	// (--default-wasm-image / CORAZA_DEFAULT_WASM_IMAGE).
 	//
 	// +optional
-	Image *string `json:"image,omitempty"`
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=1024
+	Image string `json:"image,omitempty"`
 
 	// imagePullSecret is the name of a Kubernetes Secret in the same namespace
 	// as the Engine that contains Docker registry credentials for pulling the
@@ -79,7 +83,7 @@ type IstioWasmConfig struct {
 	// +optional
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=253
-	ImagePullSecret *string `json:"imagePullSecret,omitempty"`
+	ImagePullSecret string `json:"imagePullSecret,omitempty"`
 
 	// ruleSetCacheServer contains configuration for the ruleset cache server.
 	//

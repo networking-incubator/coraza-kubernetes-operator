@@ -18,7 +18,6 @@ package controller
 
 import (
 	"context"
-	"regexp"
 	"time"
 
 	"github.com/corazawaf/coraza/v3"
@@ -39,10 +38,6 @@ import (
 
 	wafv1alpha1 "github.com/networking-incubator/coraza-kubernetes-operator/api/v1alpha1"
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/rulesets/cache"
-)
-
-var (
-	sanitizeFilePath = regexp.MustCompile(`open (.+): no such file or directory`)
 )
 
 // -----------------------------------------------------------------------------
@@ -113,7 +108,7 @@ func (r *RuleSetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 			logDebug(log, req, "RuleSet", "Resource not found")
 			return ctrl.Result{}, nil
 		}
-		logError(log, req, "RuleSet", err, "Failed to GET")
+		logAPIError(log, req, "RuleSet", err, "Failed to GET", nil)
 		return ctrl.Result{}, err
 	}
 
@@ -164,19 +159,17 @@ func (r *RuleSetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 // initializeStatus sets the initial Progressing condition if the RuleSet has
 // never been reconciled before.
 func (r *RuleSetReconciler) initializeStatus(ctx context.Context, log logr.Logger, req ctrl.Request, ruleset *wafv1alpha1.RuleSet) error {
-	if ruleset.Status == nil {
-		ruleset.Status = &wafv1alpha1.RuleSetStatus{}
-	}
 	if apimeta.FindStatusCondition(ruleset.Status.Conditions, "Ready") != nil {
 		return nil
 	}
 
-	logDebug(log, req, "RuleSet", "Setting initial progressing status")
 	patch := client.MergeFrom(ruleset.DeepCopy())
-	setStatusProgressing(log, req, "RuleSet", &ruleset.Status.Conditions, ruleset.Generation, "Reconciling", "Starting reconciliation")
+	before := snapshotConditions(ruleset.Status.Conditions)
+	applyStatusProgressing(&ruleset.Status.Conditions, ruleset.Generation, "Reconciling", "Starting reconciliation")
 	if err := r.Status().Patch(ctx, ruleset, patch); err != nil {
-		logError(log, req, "RuleSet", err, "Failed to patch initial status")
+		logAPIError(log, req, "RuleSet", err, "Failed to patch initial status", ruleset)
 		return err
 	}
+	logConditionTransitions(log, req, "RuleSet", before, ruleset.Status.Conditions)
 	return nil
 }

@@ -29,7 +29,6 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -749,7 +748,7 @@ func TestEngineReconciler_ValidationRejection(t *testing.T) {
 			name: "image doesn't start with oci://",
 			engineFunc: func() *wafv1alpha1.Engine {
 				engine := utils.NewTestEngine(utils.EngineOptions{})
-				engine.Spec.Driver.Istio.Wasm.Image = ptr.To("docker://invalid-image")
+				engine.Spec.Driver.Istio.Wasm.Image = "docker://invalid-image"
 				return engine
 			},
 			expectedError: "image must start with oci:// when set",
@@ -758,16 +757,16 @@ func TestEngineReconciler_ValidationRejection(t *testing.T) {
 			name: "image too long",
 			engineFunc: func() *wafv1alpha1.Engine {
 				engine := utils.NewTestEngine(utils.EngineOptions{})
-				engine.Spec.Driver.Istio.Wasm.Image = ptr.To("oci://" + string(make([]byte, 1100)))
+				engine.Spec.Driver.Istio.Wasm.Image = "oci://" + string(make([]byte, 1100))
 				return engine
 			},
-			expectedError: fmt.Sprintf("image must be at most %d characters when set", wafv1alpha1.MaxImageLen),
+			expectedError: "Too long: may not be more than 1024 bytes",
 		},
 		{
 			name: "gateway mode without workloadSelector",
 			engineFunc: func() *wafv1alpha1.Engine {
 				engine := utils.NewTestEngine(utils.EngineOptions{})
-				engine.Spec.Driver.Istio.Wasm.Mode = ptr.To(wafv1alpha1.IstioIntegrationModeGateway)
+				engine.Spec.Driver.Istio.Wasm.Mode = wafv1alpha1.IstioIntegrationModeGateway
 				engine.Spec.Driver.Istio.Wasm.WorkloadSelector = nil
 				return engine
 			},
@@ -806,9 +805,6 @@ func TestEngineReconciler_DegradedWhenRuleSetDegraded(t *testing.T) {
 
 	t.Log("Setting RuleSet status to Degraded")
 	patch := client.MergeFrom(ruleSet.DeepCopy())
-	if ruleSet.Status == nil {
-		ruleSet.Status = &wafv1alpha1.RuleSetStatus{}
-	}
 	apimeta.SetStatusCondition(&ruleSet.Status.Conditions, metav1.Condition{
 		Type:               "Degraded",
 		Status:             metav1.ConditionTrue,
@@ -894,7 +890,7 @@ func TestEngineReconciler_ValidationAllowsOmittedWasmImage(t *testing.T) {
 		Name:      "omit-wasm-image",
 		Namespace: testNamespace,
 	})
-	engine.Spec.Driver.Istio.Wasm.Image = nil
+	engine.Spec.Driver.Istio.Wasm.Image = ""
 
 	err := k8sClient.Create(ctx, engine)
 	require.NoError(t, err)
@@ -910,7 +906,7 @@ func TestEngineReconciler_BuildWasmPlugin_WasmImageResolution(t *testing.T) {
 
 	t.Run("nil image uses operator default", func(t *testing.T) {
 		engine := utils.NewTestEngine(utils.EngineOptions{})
-		engine.Spec.Driver.Istio.Wasm.Image = nil
+		engine.Spec.Driver.Istio.Wasm.Image = ""
 		r := &EngineReconciler{defaultWasmImage: operatorDefault}
 		wasmURL, _ := r.wasmPluginOCIURLSource(engine)
 		wp := r.buildWasmPlugin(engine, wasmURL)
@@ -934,7 +930,7 @@ func TestEngineReconciler_BuildWasmPlugin_WasmImageResolution(t *testing.T) {
 	t.Run("explicit image wins over operator default", func(t *testing.T) {
 		custom := "oci://custom.example/wasm:v2"
 		engine := utils.NewTestEngine(utils.EngineOptions{})
-		engine.Spec.Driver.Istio.Wasm.Image = ptr.To(custom)
+		engine.Spec.Driver.Istio.Wasm.Image = custom
 		r := &EngineReconciler{defaultWasmImage: operatorDefault}
 		wasmURL, _ := r.wasmPluginOCIURLSource(engine)
 		wp := r.buildWasmPlugin(engine, wasmURL)

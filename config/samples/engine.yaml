@@ -9,8 +9,6 @@ spec:
   driver:
     istio:
       wasm:
-        # Optional: omit to use the operator default WASM OCI reference.
-        image: "oci://ghcr.io/networking-incubator/coraza-proxy-wasm:1902646ac7391b65be092cdec9b47d29fa5724c7"
         mode: gateway
         workloadSelector:
           matchLabels:

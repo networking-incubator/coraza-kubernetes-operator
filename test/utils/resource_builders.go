@@ -21,7 +21,6 @@ package utils
 import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/utils/ptr"
 
 	wafv1alpha1 "github.com/networking-incubator/coraza-kubernetes-operator/api/v1alpha1"
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/defaults"
@@ -64,7 +63,7 @@ func NewTestRuleSet(opts RuleSetOptions) *wafv1alpha1.RuleSet {
 	}
 
 	if opts.RuleData != "" {
-		ruleset.Spec.RuleData = &opts.RuleData
+		ruleset.Spec.RuleData = opts.RuleData
 	}
 
 	return ruleset
@@ -151,23 +150,23 @@ func NewTestEngine(opts EngineOptions) *wafv1alpha1.Engine {
 			Driver: &wafv1alpha1.DriverConfig{
 				Istio: &wafv1alpha1.IstioDriverConfig{
 					Wasm: &wafv1alpha1.IstioWasmConfig{
-						Image: ptr.To(opts.WasmImage),
+						Image: opts.WasmImage,
 						WorkloadSelector: &metav1.LabelSelector{
 							MatchLabels: opts.WorkloadLabels,
 						},
-						Mode: &opts.IstioIntegrationMode,
+						Mode: opts.IstioIntegrationMode,
 						RuleSetCacheServer: &wafv1alpha1.RuleSetCacheServerConfig{
-							PollIntervalSeconds: &opts.PollIntervalSeconds,
+							PollIntervalSeconds: opts.PollIntervalSeconds,
 						},
 					},
 				},
 			},
-			FailurePolicy: &opts.FailurePolicy,
+			FailurePolicy: opts.FailurePolicy,
 		},
 	}
 
 	if opts.ImagePullSecret != "" {
-		engine.Spec.Driver.Istio.Wasm.ImagePullSecret = new(opts.ImagePullSecret)
+		engine.Spec.Driver.Istio.Wasm.ImagePullSecret = opts.ImagePullSecret
 	}
 
 	return engine
