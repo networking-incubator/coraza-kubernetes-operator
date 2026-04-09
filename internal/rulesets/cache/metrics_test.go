@@ -184,10 +184,9 @@ func TestInstrumentHandler_InFlightGauge(t *testing.T) {
 }
 
 func TestInstrumentHandler_MetricMetadata(t *testing.T) {
-	expected := `
-		# HELP coraza_cache_server_requests_total Total number of HTTP requests handled by the cache server.
-		# TYPE coraza_cache_server_requests_total counter
-	`
+	expected := `# HELP coraza_cache_server_requests_total Total number of HTTP requests handled by the cache server.
+# TYPE coraza_cache_server_requests_total counter
+`
 	requestsTotal.Reset()
 	err := testutil.CollectAndCompare(requestsTotal, strings.NewReader(expected))
 	assert.NoError(t, err, "requestsTotal metadata mismatch")
