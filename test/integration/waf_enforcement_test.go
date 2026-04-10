@@ -130,16 +130,35 @@ func TestRequestBodyInspection(t *testing.T) {
 	s.ExpectGatewayProgrammed(ns, "gw")
 
 	s.Step("deploy rules for body inspection")
+	/* Some explanation about the rules below:
+	We add a pre-rule setting processor for application/json (rule 200001) or defaulting to URLENCODE.
+	This way, users passing bad content-type will still be parsed correctly
+	*/
 	s.CreateConfigMap(ns, "base-rules", `SecRuleEngine On
 SecDebugLogLevel 9
 SecDebugLog /dev/stdout
 SecRequestBodyAccess On
 SecRequestBodyLimit 13107200
-SecRequestBodyNoFilesLimit 131072`)
+SecRequestBodyNoFilesLimit 131072
+SecRule REQUEST_HEADERS:Content-Type "^application/json" \
+    "id:200001,phase:1,t:none,t:lowercase,pass,nolog,ctl:requestBodyProcessor=JSON"
+SecRule REQUEST_HEADERS:Content-Type "!@rx ^application/json" \
+    "id:200000,phase:1,t:none,t:lowercase,pass,nolog,ctl:requestBodyProcessor=URLENCODED"
+`)
+
+	/*
+		When Coraza successfully parses a request (like a JSON body or a standard form),
+		it "explodes" the data into the ARGS collection.
+
+		When it cannot parse the data it will set it as part of REQUEST_BODY.
+		Sometimes, to save memory, a WAF might "empty" the raw REQUEST_BODY buffer
+		once it has successfully moved everything into ARGS.
+		If we only check REQUEST_BODY, or only ARGS we may miss a full request parsing
+	*/
 	s.CreateConfigMap(ns, "body-rules", `
-SecRule REQUEST_BODY "@contains DROP TABLE" "id:6001,phase:2,deny,status:403,msg:'SQL injection in body',log,auditlog"
-SecRule REQUEST_BODY "@contains <script>" "id:6002,phase:2,deny,status:403,msg:'XSS in body',log,auditlog"
-SecRule REQUEST_BODY "@contains malicious_payload" "id:6003,phase:2,deny,status:403,msg:'Malicious payload',log,auditlog"
+SecRule ARGS|REQUEST_BODY "@contains DROP TABLE" "id:6001,phase:2,deny,status:403,msg:'SQL injection in body',log,auditlog"
+SecRule ARGS|REQUEST_BODY "@contains <script>" "id:6002,phase:2,deny,status:403,msg:'XSS in body',log,auditlog"
+SecRule ARGS|REQUEST_BODY "@contains malicious_payload" "id:6003,phase:2,deny,status:403,msg:'Malicious payload',log,auditlog"
 `)
 	s.CreateRuleSet(ns, "ruleset", []string{"base-rules", "body-rules"})
 
