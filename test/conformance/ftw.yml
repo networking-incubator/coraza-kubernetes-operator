@@ -233,7 +233,7 @@ testoverride:
     # =============================================================================
     # Summary of Ignored Tests by Category (Total: 145 tests):
     #
-    # NOTE: 45 ENHANCED SECURITY tests moved to .ftw-overrides.yml as platform
+    # NOTE: 42 ENHANCED SECURITY tests moved to .ftw-overrides.yml as platform
     # overrides (they now run with adjusted expectations instead of being skipped).
     #
     # CATEGORY 2: TOOL LIMITATION (113 tests)
@@ -260,5 +260,5 @@ testoverride:
     #   - PL4 false positives: 2 tests
     #   - retry_once: 5 tests
     #
-    # Test Pass Rate: ~95% (145 ignored + 45 overridden out of ~3,300 total tests)
+    # Test Pass Rate: ~95% (145 ignored + 42 overridden out of ~3,300 total tests)
     # =============================================================================

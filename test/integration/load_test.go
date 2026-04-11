@@ -291,6 +291,6 @@ func TestSustainedLoad(t *testing.T) {
 		total.Load(), correctTotal, float64(correctTotal)/float64(total.Load())*100,
 		blockedCorrect.Load(), allowedCorrect.Load())
 
-	assert.GreaterOrEqual(t, float64(correctTotal)/float64(total.Load()), 0.90,
-		"At least 90%% of requests should have correct response under sustained load")
+	assert.GreaterOrEqual(t, float64(correctTotal)/float64(total.Load()), 0.99,
+		"At least 99%% of requests should have correct response under sustained load")
 }
