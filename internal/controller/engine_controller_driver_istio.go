@@ -119,7 +119,7 @@ func (r *EngineReconciler) provisionIstioEngineWithWasm(ctx context.Context, log
 	gateways, gwErr := r.matchedGateways(ctx, log, req, &engine)
 	if gwErr != nil {
 		logAPIError(log, req, "Engine", gwErr, "Failed to find matched Gateways, not updating Gateway status", &engine)
-		r.Recorder.Eventf(&engine, nil, "Warning", "GatewayMatchFailed", "Reconcile", truncateEventNote(gwErr.Error()))
+		r.Recorder.Eventf(&engine, nil, "Warning", "GatewayMatchFailed", "Reconcile", "%s", truncateEventNote(gwErr.Error()))
 	}
 
 	// Status patching is kept inline because it mutates engine.Status.Gateways
