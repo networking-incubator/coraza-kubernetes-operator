@@ -5,7 +5,7 @@
 # Re-include directories that contain code
 !cmd/
 !api/
-!controllers/
+!internal/
 !pkg/
 !internal/
 

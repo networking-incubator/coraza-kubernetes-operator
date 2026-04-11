@@ -38,6 +38,8 @@ dist/
 
 # documentation
 !README.md
+!CLAUDE.md
+!CODE_OF_CONDUCT.md
 !CONTRIBUTING.md
 !DEVELOPMENT.md
 !SECURITY.md
