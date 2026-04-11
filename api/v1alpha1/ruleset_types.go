@@ -37,7 +37,7 @@ const (
 	RuleDataSecretType = "coraza/data"
 
 	// AnnotationSkipUnsupportedRulesCheck is an annotation to disable the unsupported
-	// rules degredation on a RuleSet (it will still log).
+	// rules degradation on a RuleSet (it will still log).
 	AnnotationSkipUnsupportedRulesCheck = "waf.k8s.coraza.io/skip-unsupported-rules-check"
 )
 
