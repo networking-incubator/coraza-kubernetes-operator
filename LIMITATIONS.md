@@ -195,7 +195,7 @@ These require further analysis to determine appropriate action:
 
 ## Version Information
 
-- **Coraza**: v3.3.3
+- **Coraza**: v3.6.0
 - **CoreRuleSet**: v4.24.1
 - **Envoy/Istio**: WASM filter environment
 - **coraza-proxy-wasm**: Latest
