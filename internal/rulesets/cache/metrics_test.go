@@ -17,19 +17,32 @@ limitations under the License.
 package cache
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
+	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"sigs.k8s.io/controller-runtime/pkg/metrics"
 
 	"github.com/networking-incubator/coraza-kubernetes-operator/test/utils"
 )
+
+// useTestCache is the shared cache instance used by USE metric tests.
+// Registered on the global metrics.Registry in init() so GaugeFunc closures
+// read from this cache.
+var useTestCache = NewRuleSetCache()
+
+func init() {
+	RegisterUSEMetrics(metrics.Registry, useTestCache, DefaultGC())
+}
 
 func TestMetricsRegistered(t *testing.T) {
 	registry := metrics.Registry
@@ -300,6 +313,233 @@ func TestInstrumentHandler_PanicAfterWriteHeaderUsesWrittenCode(t *testing.T) {
 	}()
 	handler.ServeHTTP(httptest.NewRecorder(), req)
 	t.Fatal("expected panic")
+}
+
+// ---------------------------------------------------------------------------
+// USE metrics
+// ---------------------------------------------------------------------------
+
+const (
+	gcMetricEventuallyTimeout = 5 * time.Second
+	gcMetricEventuallyTick    = 10 * time.Millisecond
+)
+
+// startGCLoopForTest runs rungc in the background and registers cleanup that
+// cancels the context and waits for the goroutine to exit.
+func startGCLoopForTest(t *testing.T, srv *ruleSetCacheServer) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(t.Context())
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		srv.rungc(ctx)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		wg.Wait()
+	})
+}
+
+func TestUSEMetricsRegistered(t *testing.T) {
+	// Populate at least one cache key so coraza_cache_entries emits a sample.
+	useTestCache.Put("use-lint/x", "rules", nil)
+
+	problems, err := testutil.GatherAndLint(metrics.Registry,
+		MetricCacheSizeBytes,
+		MetricCacheInstances,
+		MetricCacheEntries,
+		MetricCacheConfigMaxSizeBytes,
+		MetricCacheGCPrunedEntriesTotal,
+		MetricCacheGCSizeLimitExceeded,
+	)
+	require.NoError(t, err)
+	assert.Empty(t, problems, "USE metric lint problems")
+}
+
+func TestUSEMetrics_SizeBytesReflectsCache(t *testing.T) {
+	before := gatherGaugeValue(t, metrics.Registry, MetricCacheSizeBytes)
+	useTestCache.Put("use-size/a", "some rules for size test", nil)
+
+	after := gatherGaugeValue(t, metrics.Registry, MetricCacheSizeBytes)
+	assert.Greater(t, after, before, "size_bytes should increase after Put")
+}
+
+func TestUSEMetrics_InstancesReflectsCache(t *testing.T) {
+	before := gatherGaugeValue(t, metrics.Registry, MetricCacheInstances)
+	useTestCache.Put("use-instances/unique-key", "rules", nil)
+
+	after := gatherGaugeValue(t, metrics.Registry, MetricCacheInstances)
+	assert.Equal(t, before+1, after, "instances should increase by 1 after adding a new key")
+}
+
+func TestUSEMetrics_ConfigMaxSizeBytesIsConstant(t *testing.T) {
+	val := gatherGaugeValue(t, metrics.Registry, MetricCacheConfigMaxSizeBytes)
+	assert.Equal(t, float64(DefaultGC().MaxSize), val)
+}
+
+func TestUSEMetrics_CacheEntriesPerKey(t *testing.T) {
+	c := NewRuleSetCache()
+	collector := newCacheEntriesCollector(c)
+
+	c.Put("ns/foo", "v1", nil)
+	c.Put("ns/foo", "v2", nil)
+	c.Put("ns/bar", "v1", nil)
+
+	ch := make(chan prometheus.Metric, 10)
+	collector.Collect(ch)
+	close(ch)
+
+	byKey := map[string]float64{}
+	for m := range ch {
+		var d dto.Metric
+		require.NoError(t, m.Write(&d))
+		for _, lp := range d.GetLabel() {
+			if lp.GetName() == "cache_key" {
+				byKey[lp.GetValue()] = d.GetGauge().GetValue()
+			}
+		}
+	}
+	assert.Equal(t, float64(2), byKey["ns/foo"])
+	assert.Equal(t, float64(1), byKey["ns/bar"])
+}
+
+func TestUSEMetrics_CacheEntriesCollectorEmitsNoStaleKeys(t *testing.T) {
+	c := NewRuleSetCache()
+	collector := newCacheEntriesCollector(c)
+
+	c.Put("ns/temp", "rules", nil)
+	ch := make(chan prometheus.Metric, 10)
+	collector.Collect(ch)
+	close(ch)
+	assert.Len(t, drainMetrics(ch), 1, "should emit one sample for one key")
+
+	// Empty cache produces zero samples (no stale labels).
+	c2 := NewRuleSetCache()
+	collector2 := newCacheEntriesCollector(c2)
+	ch2 := make(chan prometheus.Metric, 10)
+	collector2.Collect(ch2)
+	close(ch2)
+	assert.Empty(t, drainMetrics(ch2), "empty cache should emit zero samples")
+}
+
+func TestUSEMetrics_GCPrunedByAge(t *testing.T) {
+	gcPrunedEntriesTotal.Reset()
+
+	c := NewRuleSetCache()
+	logger := utils.NewTestLogger(t)
+	gc := &GarbageCollectionConfig{
+		GCInterval: 50 * time.Millisecond,
+		MaxAge:     100 * time.Millisecond,
+		MaxSize:    1024 * 1024 * 1024,
+	}
+	srv := NewServer(c, ":0", logger, gc, newNoopTokenReview())
+
+	c.Put("ns/a", "old", nil)
+	c.Put("ns/a", "new", nil)
+	c.SetEntryTimestamp("ns/a", 0, time.Now().Add(-200*time.Millisecond))
+
+	startGCLoopForTest(t, srv)
+	require.Eventually(t, func() bool {
+		return testutil.ToFloat64(gcPrunedEntriesTotal.WithLabelValues(PruneReasonAge)) >= 1
+	}, gcMetricEventuallyTimeout, gcMetricEventuallyTick, "age prune counter should increment")
+}
+
+func TestUSEMetrics_GCPrunedBySize(t *testing.T) {
+	gcPrunedEntriesTotal.Reset()
+
+	c := NewRuleSetCache()
+	logger := utils.NewTestLogger(t)
+	gc := &GarbageCollectionConfig{
+		GCInterval: 50 * time.Millisecond,
+		MaxAge:     24 * time.Hour,
+		MaxSize:    10,
+	}
+	srv := NewServer(c, ":0", logger, gc, newNoopTokenReview())
+
+	c.Put("ns/a", "old version with enough bytes", nil)
+	c.Put("ns/a", "new version", nil)
+
+	startGCLoopForTest(t, srv)
+	require.Eventually(t, func() bool {
+		return testutil.ToFloat64(gcPrunedEntriesTotal.WithLabelValues(PruneReasonSize)) >= 1
+	}, gcMetricEventuallyTimeout, gcMetricEventuallyTick, "size prune counter should increment")
+}
+
+// Adversarial: RegisterUSEMetrics must be safe to call more than once (sync.Once; no double-register panic).
+func TestRegisterUSEMetrics_SecondCallDoesNotPanic(t *testing.T) {
+	require.NotPanics(t, func() {
+		RegisterUSEMetrics(metrics.Registry, NewRuleSetCache(), DefaultGC())
+	})
+}
+
+// Adversarial: cache_key label must tolerate non-ASCII instance paths (same class of input as HTTP paths).
+func TestUSEMetrics_CacheEntriesCollector_UnicodeCacheKey(t *testing.T) {
+	c := NewRuleSetCache()
+	collector := newCacheEntriesCollector(c)
+	key := "ns/" + string([]rune{0x540d, 0x524d})
+	c.Put(key, "rules", nil)
+
+	ch := make(chan prometheus.Metric, 10)
+	collector.Collect(ch)
+	close(ch)
+
+	var found bool
+	for _, m := range drainMetrics(ch) {
+		var d dto.Metric
+		require.NoError(t, m.Write(&d))
+		for _, lp := range d.GetLabel() {
+			if lp.GetName() == "cache_key" && lp.GetValue() == key {
+				found = true
+				assert.Equal(t, float64(1), d.GetGauge().GetValue())
+			}
+		}
+	}
+	assert.True(t, found, "expected a sample for unicode cache_key %q", key)
+}
+
+func TestUSEMetrics_GCSizeLimitExceeded(t *testing.T) {
+	before := testutil.ToFloat64(gcSizeLimitExceededTotal)
+
+	c := NewRuleSetCache()
+	logger := utils.NewTestLogger(t)
+	gc := &GarbageCollectionConfig{
+		GCInterval: 50 * time.Millisecond,
+		MaxAge:     24 * time.Hour,
+		MaxSize:    5,
+	}
+	srv := NewServer(c, ":0", logger, gc, newNoopTokenReview())
+
+	c.Put("ns/big", "this string is definitely longer than 5 bytes", nil)
+
+	startGCLoopForTest(t, srv)
+	require.Eventually(t, func() bool {
+		return testutil.ToFloat64(gcSizeLimitExceededTotal) > before
+	}, gcMetricEventuallyTimeout, gcMetricEventuallyTick,
+		"size-limit-exceeded counter should increment when latest entry exceeds MaxSize")
+}
+
+// gatherGaugeValue gathers the named gauge metric from a prometheus.Gatherer.
+func gatherGaugeValue(t *testing.T, g prometheus.Gatherer, name string) float64 {
+	t.Helper()
+	families, err := g.Gather()
+	require.NoError(t, err)
+	for _, mf := range families {
+		if mf.GetName() == name {
+			require.NotEmpty(t, mf.GetMetric(), "metric %s has no samples", name)
+			return mf.GetMetric()[0].GetGauge().GetValue()
+		}
+	}
+	t.Fatalf("metric %s not found", name)
+	return 0
+}
+
+func drainMetrics(ch <-chan prometheus.Metric) []prometheus.Metric {
+	out := make([]prometheus.Metric, 0)
+	for m := range ch {
+		out = append(out, m)
+	}
+	return out
 }
 
 // End-to-end: real server mux + instrumentHandler records metrics (same wiring as production).

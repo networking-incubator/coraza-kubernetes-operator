@@ -318,6 +318,7 @@ func (s *ruleSetCacheServer) rungc(ctx context.Context) {
 		case <-ticker.C:
 			prunedByAge := s.cache.Prune(s.gc.MaxAge)
 			if prunedByAge > 0 {
+				gcPrunedEntriesTotal.WithLabelValues(PruneReasonAge).Add(float64(prunedByAge))
 				s.logger.Info("Pruned stale cache entries by age", "count", prunedByAge, "maxAge", s.gc.MaxAge)
 			}
 
@@ -325,11 +326,13 @@ func (s *ruleSetCacheServer) rungc(ctx context.Context) {
 			if currentSize > s.gc.MaxSize {
 				prunedBySize := s.cache.PruneBySize(s.gc.MaxSize)
 				if prunedBySize > 0 {
+					gcPrunedEntriesTotal.WithLabelValues(PruneReasonSize).Add(float64(prunedBySize))
 					s.logger.Info("Pruned cache entries by size", "count", prunedBySize, "maxSize", s.gc.MaxSize, "currentSize", s.cache.TotalSize())
 				}
 
 				finalSize := s.cache.TotalSize()
 				if finalSize > s.gc.MaxSize {
+					gcSizeLimitExceededTotal.Inc()
 					s.logger.Error(errors.New("cache size exceeds maximum"), "CRITICAL: Cache size exceeds maximum even after pruning - latest entry is too large", "currentSize", finalSize, "maxSize", s.gc.MaxSize, "overage", finalSize-s.gc.MaxSize)
 				}
 			}
