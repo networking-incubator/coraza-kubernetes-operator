@@ -43,7 +43,7 @@ jobs:
 
       - name: install python dependencies
         run: |
-          pip install PyYAML ansible jmespath
+          pip install PyYAML==6.0.3 ansible==8.7.0 jmespath==1.0.1
           if [[ -f hack/requirements.txt ]]; then pip install -r hack/requirements.txt; fi
 
       - name: generate bundle and run OPP

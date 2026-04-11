@@ -51,14 +51,16 @@ jobs:
 
       - name: extract version
         id: version
+        env:
+          TAG: ${{ github.event.release.tag_name }}
         run: |
-          TAG="${{ github.event.release.tag_name }}"
           echo "bare=${TAG#v}" >> "$GITHUB_OUTPUT"
 
       - name: generate OLM bundle
-        run: make bundle VERSION=${{ github.event.release.tag_name }}
         env:
+          TAG: ${{ github.event.release.tag_name }}
           CONTROLLER_MANAGER_CONTAINER_IMAGE: ghcr.io/networking-incubator/coraza-kubernetes-operator:${{ github.event.release.tag_name }}
+        run: make bundle VERSION="$TAG"
 
       - name: OPP bundle test (kiwi)
         run: ./hack/operatorhub_opp_test.sh --version "${{ steps.version.outputs.bare }}"
