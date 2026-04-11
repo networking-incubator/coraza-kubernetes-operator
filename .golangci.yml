@@ -4,16 +4,19 @@ run:
 linters:
   default: none
   enable:
+    - bodyclose
     - copyloopvar
     - dupl
     - errcheck
     - ginkgolinter
     - goconst
     - gocyclo
+    - gosec
     - govet
     - ineffassign
     - misspell
     - nakedret
+    - noctx
     - prealloc
     - revive
     - staticcheck
@@ -40,6 +43,22 @@ linters:
       - linters:
           - dupl
         path: internal/*
+      - linters:
+          - gosec
+          - bodyclose
+          - noctx
+        path: _test\.go
+      - linters:
+          - gosec
+          - noctx
+        path: test/
+      - linters:
+          - gosec
+        path: tools/
+      - linters:
+          - revive
+        path: internal/rulesets/memfs/
+        text: "exported:"
     paths:
       - third_party$
       - builtin$
