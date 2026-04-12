@@ -9,7 +9,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
-OPP_SCRIPT_URL="https://raw.githubusercontent.com/redhat-openshift-ecosystem/community-operators-pipeline/ci/latest/ci/scripts/opp.sh"
+OPP_PINNED_COMMIT="fbac22ff0c713188bdcea36791b70fb3999e6e03"
+OPP_SCRIPT_URL="https://raw.githubusercontent.com/redhat-openshift-ecosystem/community-operators-pipeline/${OPP_PINNED_COMMIT}/ci/scripts/opp.sh"
+OPP_SCRIPT_SHA256="0536753bf819207c7d41c262b9b02fa62aa86adfe3298393e94b7b8b4bc30808"
 
 OPERATOR_NAME="coraza-kubernetes-operator"
 OWNER="${OWNER:-k8s-operatorhub}"
@@ -110,6 +112,11 @@ export OPP_PRODUCTION_TYPE="${OPP_PRODUCTION_TYPE:-k8s}"
 
 OPP_SCRIPT_FILE="${TMP_DIR}/opp-pinned.sh"
 curl -fsSL "${OPP_SCRIPT_URL}" -o "${OPP_SCRIPT_FILE}"
+ACTUAL_SHA256="$(sha256sum "${OPP_SCRIPT_FILE}" | awk '{print $1}')"
+if [[ "${ACTUAL_SHA256}" != "${OPP_SCRIPT_SHA256}" ]]; then
+    echo "Error: SHA256 mismatch for opp.sh (expected ${OPP_SCRIPT_SHA256}, got ${ACTUAL_SHA256})" >&2
+    exit 1
+fi
 chmod +x "${OPP_SCRIPT_FILE}"
 
 # upstream opp.sh does `>> $GITHUB_OUTPUT` (e.g. line 620). Unset or empty => bash "ambiguous redirect" outside GitHub Actions.
