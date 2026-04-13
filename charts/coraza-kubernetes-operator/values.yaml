@@ -28,7 +28,11 @@ metrics:
   # can verify the metrics endpoint instead of using insecureSkipVerify.
   caName: ""
   serviceMonitor:
-    enabled: false
+    enabled: true
+    # Additional metric relabelings to apply to scraped samples.
+    metricRelabelings: []
+    # Additional relabelings to apply to the scrape targets.
+    relabelings: []
 
 logging:
   # When true, uses console encoder with debug level (development mode).

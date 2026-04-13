@@ -71,6 +71,12 @@ spec:
             - --zap-stacktrace-level={{ .Values.logging.stacktraceLevel | default "error" }}
             - --zap-time-encoding={{ .Values.logging.timeEncoding | default "rfc3339nano" }}
             {{- end }}
+          {{- if .Values.metrics.enabled }}
+          ports:
+            - name: metrics
+              containerPort: 8443
+              protocol: TCP
+          {{- end }}
           env:
             - name: POD_NAMESPACE
               valueFrom:
