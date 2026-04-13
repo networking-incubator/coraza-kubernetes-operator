@@ -247,7 +247,10 @@ func setupCacheServer(mgr ctrl.Manager, cfg config, kubeClient *kubernetes.Clien
 		MaxSize:    cfg.cacheMaxSize,
 	}
 
-	cache.RegisterUSEMetrics(metrics.Registry, rulesetCache, *gcConfig)
+	if err := cache.RegisterUSEMetrics(metrics.Registry, rulesetCache, *gcConfig); err != nil {
+		setupLog.Error(err, "unable to register USE metrics for ruleset cache")
+		os.Exit(1)
+	}
 
 	tokenReview := kubeClient.AuthenticationV1().TokenReviews()
 	cacheServer := cache.NewServer(rulesetCache, fmt.Sprintf(":%d", cfg.cacheServerPort), ctrl.Log, gcConfig, tokenReview)

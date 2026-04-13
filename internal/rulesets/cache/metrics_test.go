@@ -18,6 +18,7 @@ package cache
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -34,15 +35,6 @@ import (
 
 	"github.com/networking-incubator/coraza-kubernetes-operator/test/utils"
 )
-
-// useTestCache is the shared cache instance used by USE metric tests.
-// Registered on the global metrics.Registry in init() so GaugeFunc closures
-// read from this cache.
-var useTestCache = NewRuleSetCache()
-
-func init() {
-	RegisterUSEMetrics(metrics.Registry, useTestCache, DefaultGC())
-}
 
 func TestMetricsRegistered(t *testing.T) {
 	registry := metrics.Registry
@@ -319,6 +311,16 @@ func TestInstrumentHandler_PanicAfterWriteHeaderUsesWrittenCode(t *testing.T) {
 // USE metrics
 // ---------------------------------------------------------------------------
 
+// newUSEMetricsRegistry returns an isolated prometheus.Registry and RuleSetCache
+// with USE metrics registered for that registry (no shared package-level cache).
+func newUSEMetricsRegistry(t *testing.T) (*prometheus.Registry, *RuleSetCache) {
+	t.Helper()
+	reg := prometheus.NewRegistry()
+	c := NewRuleSetCache()
+	require.NoError(t, RegisterUSEMetrics(reg, c, DefaultGC()))
+	return reg, c
+}
+
 const (
 	gcMetricEventuallyTimeout = 5 * time.Second
 	gcMetricEventuallyTick    = 10 * time.Millisecond
@@ -342,10 +344,11 @@ func startGCLoopForTest(t *testing.T, srv *ruleSetCacheServer) {
 }
 
 func TestUSEMetricsRegistered(t *testing.T) {
+	reg, c := newUSEMetricsRegistry(t)
 	// Populate at least one cache key so coraza_cache_entries emits a sample.
-	useTestCache.Put("use-lint/x", "rules", nil)
+	c.Put("use-lint/x", "rules", nil)
 
-	problems, err := testutil.GatherAndLint(metrics.Registry,
+	problems, err := testutil.GatherAndLint(reg,
 		MetricCacheSizeBytes,
 		MetricCacheInstances,
 		MetricCacheEntries,
@@ -358,23 +361,26 @@ func TestUSEMetricsRegistered(t *testing.T) {
 }
 
 func TestUSEMetrics_SizeBytesReflectsCache(t *testing.T) {
-	before := gatherGaugeValue(t, metrics.Registry, MetricCacheSizeBytes)
-	useTestCache.Put("use-size/a", "some rules for size test", nil)
+	reg, c := newUSEMetricsRegistry(t)
+	before := gatherGaugeValue(t, reg, MetricCacheSizeBytes)
+	c.Put("use-size/a", "some rules for size test", nil)
 
-	after := gatherGaugeValue(t, metrics.Registry, MetricCacheSizeBytes)
+	after := gatherGaugeValue(t, reg, MetricCacheSizeBytes)
 	assert.Greater(t, after, before, "size_bytes should increase after Put")
 }
 
 func TestUSEMetrics_InstancesReflectsCache(t *testing.T) {
-	before := gatherGaugeValue(t, metrics.Registry, MetricCacheInstances)
-	useTestCache.Put("use-instances/unique-key", "rules", nil)
+	reg, c := newUSEMetricsRegistry(t)
+	before := gatherGaugeValue(t, reg, MetricCacheInstances)
+	c.Put("use-instances/unique-key", "rules", nil)
 
-	after := gatherGaugeValue(t, metrics.Registry, MetricCacheInstances)
+	after := gatherGaugeValue(t, reg, MetricCacheInstances)
 	assert.Equal(t, before+1, after, "instances should increase by 1 after adding a new key")
 }
 
 func TestUSEMetrics_ConfigMaxSizeBytesIsConstant(t *testing.T) {
-	val := gatherGaugeValue(t, metrics.Registry, MetricCacheConfigMaxSizeBytes)
+	reg, _ := newUSEMetricsRegistry(t)
+	val := gatherGaugeValue(t, reg, MetricCacheConfigMaxSizeBytes)
 	assert.Equal(t, float64(DefaultGC().MaxSize), val)
 }
 
@@ -466,11 +472,33 @@ func TestUSEMetrics_GCPrunedBySize(t *testing.T) {
 	}, gcMetricEventuallyTimeout, gcMetricEventuallyTick, "size prune counter should increment")
 }
 
-// Adversarial: RegisterUSEMetrics must be safe to call more than once (sync.Once; no double-register panic).
-func TestRegisterUSEMetrics_SecondCallDoesNotPanic(t *testing.T) {
-	require.NotPanics(t, func() {
-		RegisterUSEMetrics(metrics.Registry, NewRuleSetCache(), DefaultGC())
+func TestRegisterUSEMetrics_IdempotentWhenCacheAndGCMatch(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	c := NewRuleSetCache()
+	gc := DefaultGC()
+	require.NoError(t, RegisterUSEMetrics(reg, c, gc))
+	require.NoError(t, RegisterUSEMetrics(reg, c, gc))
+}
+
+func TestRegisterUSEMetrics_ConflictWhenCacheDiffers(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	require.NoError(t, RegisterUSEMetrics(reg, NewRuleSetCache(), DefaultGC()))
+	err := RegisterUSEMetrics(reg, NewRuleSetCache(), DefaultGC())
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrUSEMetricsRegistryConflict))
+}
+
+func TestRegisterUSEMetrics_ConflictWhenGCDiffers(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	c := NewRuleSetCache()
+	require.NoError(t, RegisterUSEMetrics(reg, c, DefaultGC()))
+	err := RegisterUSEMetrics(reg, c, GarbageCollectionConfig{
+		GCInterval: DefaultGC().GCInterval,
+		MaxAge:     DefaultGC().MaxAge,
+		MaxSize:    DefaultGC().MaxSize + 1,
 	})
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrUSEMetricsRegistryConflict))
 }
 
 // Adversarial: cache_key label must tolerate non-ASCII instance paths (same class of input as HTTP paths).

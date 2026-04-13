@@ -17,10 +17,17 @@ limitations under the License.
 package cache
 
 import (
+	"errors"
+	"fmt"
 	"sync"
 
 	"github.com/prometheus/client_golang/prometheus"
 )
+
+// ErrUSEMetricsRegistryConflict is returned when RegisterUSEMetrics is called
+// again for the same *prometheus.Registry with a different RuleSetCache or
+// GarbageCollectionConfig than the first successful registration for that registry.
+var ErrUSEMetricsRegistryConflict = errors.New("USE metrics already registered for this registry with a different RuleSetCache or GarbageCollectionConfig")
 
 // Prometheus metric name constants for the RuleSet cache.
 const (
@@ -38,6 +45,11 @@ const (
 	PruneReasonSize = "size"
 )
 
+type useMetricsRegistration struct {
+	cache *RuleSetCache
+	gc    GarbageCollectionConfig
+}
+
 var (
 	gcPrunedEntriesTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
@@ -54,7 +66,10 @@ var (
 		},
 	)
 
-	registerOnce sync.Once
+	registerMu sync.Mutex
+	// registeredUSEMetricsByPromRegistry records the first successful registration
+	// per *prometheus.Registry so repeat calls can be checked for idempotency.
+	registeredUSEMetricsByPromRegistry = map[*prometheus.Registry]useMetricsRegistration{}
 )
 
 // cacheEntriesCollector implements prometheus.Collector to emit per-cache-key
@@ -89,10 +104,18 @@ func (c *cacheEntriesCollector) Collect(ch chan<- prometheus.Metric) {
 }
 
 // RegisterUSEMetrics registers USE-method (Utilization/Saturation/Errors) metrics
-// for the RuleSet cache. Safe to call multiple times; registration happens at most
-// once per process via sync.Once.
-func RegisterUSEMetrics(reg prometheus.Registerer, c *RuleSetCache, gc GarbageCollectionConfig) {
-	registerOnce.Do(func() {
+// for the RuleSet cache on the given Registerer.
+//
+// For a *prometheus.Registry, a second call with the same RuleSetCache pointer
+// and equal GarbageCollectionConfig returns nil (idempotent). A second call with
+// the same registry but a different cache or GC config returns
+// ErrUSEMetricsRegistryConflict. The process uses one shared set of GC counter
+// collectors; they are bound to the first registry they are registered with.
+//
+// Registerers that are not *prometheus.Registry are not tracked; each call runs
+// MustRegister (typically only once — duplicate metric names panic).
+func RegisterUSEMetrics(reg prometheus.Registerer, c *RuleSetCache, gc GarbageCollectionConfig) error {
+	registerCollectors := func() {
 		reg.MustRegister(
 			prometheus.NewGaugeFunc(
 				prometheus.GaugeOpts{
@@ -119,5 +142,24 @@ func RegisterUSEMetrics(reg prometheus.Registerer, c *RuleSetCache, gc GarbageCo
 			gcPrunedEntriesTotal,
 			gcSizeLimitExceededTotal,
 		)
-	})
+	}
+
+	if r, ok := reg.(*prometheus.Registry); ok {
+		registerMu.Lock()
+		if prev, exists := registeredUSEMetricsByPromRegistry[r]; exists {
+			match := prev.cache == c && prev.gc == gc
+			registerMu.Unlock()
+			if match {
+				return nil
+			}
+			return fmt.Errorf("%w", ErrUSEMetricsRegistryConflict)
+		}
+		registerCollectors()
+		registeredUSEMetricsByPromRegistry[r] = useMetricsRegistration{cache: c, gc: gc}
+		registerMu.Unlock()
+		return nil
+	}
+
+	registerCollectors()
+	return nil
 }
