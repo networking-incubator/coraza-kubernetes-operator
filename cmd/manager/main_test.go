@@ -142,25 +142,3 @@ func TestBuildMetricsServerOptions_SelfSignedWhenNoCert(t *testing.T) {
 	assert.Empty(t, opts.CertName)
 	assert.Empty(t, opts.KeyName)
 }
-
-// -----------------------------------------------------------------------------
-// setupWebhookServer Tests
-// -----------------------------------------------------------------------------
-
-func TestSetupWebhookServer_NoCertPath(t *testing.T) {
-	cfg := config{}
-
-	server := setupWebhookServer(cfg, nil)
-	assert.NotNil(t, server)
-}
-
-func TestSetupWebhookServer_WithCertPath(t *testing.T) {
-	cfg := config{
-		webhookCertPath: "/webhook-certs",
-		webhookCertName: "webhook.crt",
-		webhookCertKey:  "webhook.key",
-	}
-
-	server := setupWebhookServer(cfg, nil)
-	assert.NotNil(t, server)
-}

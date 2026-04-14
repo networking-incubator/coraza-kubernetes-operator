@@ -22,9 +22,6 @@ The operator manager binary accepts the following command-line flags. When deplo
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--webhook-cert-path` | (none) | Directory containing the webhook TLS certificate. |
-| `--webhook-cert-name` | `tls.crt` | Filename of the webhook certificate. |
-| `--webhook-cert-key` | `tls.key` | Filename of the webhook private key. |
 | `--metrics-cert-path` | (none) | Directory containing the metrics server TLS certificate. |
 | `--metrics-cert-name` | `tls.crt` | Filename of the metrics certificate. |
 | `--metrics-cert-key` | `tls.key` | Filename of the metrics private key. |

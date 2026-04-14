@@ -41,7 +41,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
-	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	wafv1alpha1 "github.com/networking-incubator/coraza-kubernetes-operator/api/v1alpha1"
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/controller"
@@ -90,7 +89,6 @@ func main() {
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
 		Scheme:                 scheme,
 		Metrics:                buildMetricsServerOptions(cfg, tlsOpts),
-		WebhookServer:          setupWebhookServer(cfg, tlsOpts),
 		HealthProbeBindAddress: cfg.probeAddr,
 		LeaderElection:         cfg.enableLeaderElect,
 		LeaderElectionID:       "waf.k8s.coraza.io",
@@ -137,9 +135,6 @@ type config struct {
 	metricsCertPath   string
 	metricsCertName   string
 	metricsCertKey    string
-	webhookCertPath   string
-	webhookCertName   string
-	webhookCertKey    string
 	cacheGCInterval   time.Duration
 	cacheMaxAge       time.Duration
 	cacheMaxSize      int
@@ -158,9 +153,6 @@ func parseFlags() config {
 	flag.StringVar(&cfg.probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
 	flag.BoolVar(&cfg.enableLeaderElect, "leader-elect", false, "Enable leader election for controller manager. "+
 		"Enabling this will ensure there is only one active controller manager.")
-	flag.StringVar(&cfg.webhookCertPath, "webhook-cert-path", "", "The directory that contains the webhook certificate.")
-	flag.StringVar(&cfg.webhookCertName, "webhook-cert-name", "tls.crt", "The name of the webhook certificate file.")
-	flag.StringVar(&cfg.webhookCertKey, "webhook-cert-key", "tls.key", "The name of the webhook key file.")
 	flag.StringVar(&cfg.metricsCertPath, "metrics-cert-path", "", "The directory that contains the metrics server certificate.")
 	flag.StringVar(&cfg.metricsCertName, "metrics-cert-name", "tls.crt", "The name of the metrics server certificate file.")
 	flag.StringVar(&cfg.metricsCertKey, "metrics-cert-key", "tls.key", "The name of the metrics server key file.")
@@ -228,25 +220,6 @@ func buildMetricsServerOptions(cfg config, tlsOpts []func(*tls.Config)) metricss
 	}
 
 	return opts
-}
-
-// -----------------------------------------------------------------------------
-// Manager Setup
-// -----------------------------------------------------------------------------
-
-func setupWebhookServer(cfg config, tlsOpts []func(*tls.Config)) webhook.Server {
-	opts := webhook.Options{TLSOpts: tlsOpts}
-
-	if len(cfg.webhookCertPath) > 0 {
-		setupLog.Info("Initializing webhook certificate watcher using provided certificates",
-			"webhook-cert-path", cfg.webhookCertPath, "webhook-cert-name", cfg.webhookCertName, "webhook-cert-key", cfg.webhookCertKey)
-
-		opts.CertDir = cfg.webhookCertPath
-		opts.CertName = cfg.webhookCertName
-		opts.KeyName = cfg.webhookCertKey
-	}
-
-	return webhook.NewServer(opts)
 }
 
 // buildCacheOptions returns cache options that scope the NetworkPolicy informer

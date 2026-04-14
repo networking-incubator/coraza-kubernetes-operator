@@ -201,7 +201,7 @@ run: manifests generate fmt vet
 
 .PHONY: manifests
 manifests: controller-gen
-	"$(CONTROLLER_GEN)" rbac:roleName=coraza-controller-manager crd webhook paths="./..." output:crd:artifacts:config=config/crd/bases
+	"$(CONTROLLER_GEN)" rbac:roleName=coraza-controller-manager crd paths="./..." output:crd:artifacts:config=config/crd/bases
 
 .PHONY: generate
 generate: controller-gen
