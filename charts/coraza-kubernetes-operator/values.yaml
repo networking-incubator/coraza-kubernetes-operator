@@ -29,6 +29,10 @@ metrics:
   caName: ""
   serviceMonitor:
     enabled: false
+    # Additional metric relabelings to apply to scraped samples.
+    metricRelabelings: []
+    # Additional relabelings to apply to the scrape targets.
+    relabelings: []
 
 logging:
   # When true, uses console encoder with debug level (development mode).
