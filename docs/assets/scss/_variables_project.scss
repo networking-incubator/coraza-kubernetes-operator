@@ -1,0 +1,25 @@
+// Brand color overrides for Docsy theme
+// Coraza teal from logo: #2ae0d9
+// Kubernetes blue: #326ce5
+
+$primary:   #326ce5;    // Kubernetes blue - primary actions and links
+$secondary: #2ae0d9;    // Coraza teal - accents, from the logo
+$info:      #e8f0fe;    // Light blue - info sections
+$success:   #28a745;
+$warning:   #ffc107;
+$danger:    #dc3545;
+
+// Typography
+$font-family-sans-serif: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+$font-family-monospace:  "Source Code Pro", "Consolas", "Monaco", monospace;
+$headings-font-weight:   600;
+
+// Box shadows for depth
+$box-shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.06);
+$box-shadow:    0 2px 6px rgba(0, 0, 0, 0.08);
+$box-shadow-lg: 0 4px 12px rgba(0, 0, 0, 0.1);
+
+// Border radius
+$border-radius:    0.375rem;
+$border-radius-lg: 0.5rem;
+$border-radius-sm: 0.25rem;

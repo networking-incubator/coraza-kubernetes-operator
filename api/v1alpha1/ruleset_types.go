@@ -164,7 +164,7 @@ type RuleSetStatus struct {
 	// Each condition has a unique type and reflects the status of a specific aspect of the resource.
 	//
 	// Standard condition types include:
-	// - "Ready": the RuleSet has been processed and and the rules have been cached
+	// - "Ready": the RuleSet has been processed and the rules have been cached
 	// - "Progressing": the resource is being created or updated
 	// - "Degraded": the resource failed to reach or maintain its desired state
 	//

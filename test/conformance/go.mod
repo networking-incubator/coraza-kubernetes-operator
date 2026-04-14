@@ -1,6 +1,6 @@
 module github.com/networking-incubator/coraza-kubernetes-operator/test/conformance
 
-go 1.26.1
+go 1.26.2
 
 tool github.com/coreruleset/go-ftw/v2
 

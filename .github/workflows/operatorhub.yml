@@ -63,7 +63,9 @@ jobs:
         run: make bundle VERSION="$TAG"
 
       - name: OPP bundle test (kiwi)
-        run: ./hack/operatorhub_opp_test.sh --version "${{ steps.version.outputs.bare }}"
+        run: ./hack/operatorhub_opp_test.sh --version "${STEPS_VERSION_OUTPUTS_BARE}"
+        env:
+          STEPS_VERSION_OUTPUTS_BARE: ${{ steps.version.outputs.bare }}
 
       - name: print OPP logs on failure
         if: failure()
@@ -85,7 +87,9 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.OPERATORHUB_TOKEN }}
           GIT_USER: ${{ vars.OPERATORHUB_GIT_USER }}
           GIT_EMAIL: ${{ vars.OPERATORHUB_GIT_EMAIL }}
+          STEPS_VERSION_OUTPUTS_BARE: ${{ steps.version.outputs.bare }}
+          VARS_OPERATORHUB_FORK_OWNER: ${{ vars.OPERATORHUB_FORK_OWNER }}
         run: |
           hack/publish_operatorhub.sh \
-            --version "${{ steps.version.outputs.bare }}" \
-            --fork "${{ vars.OPERATORHUB_FORK_OWNER }}"
+            --version "${STEPS_VERSION_OUTPUTS_BARE}" \
+            --fork "${VARS_OPERATORHUB_FORK_OWNER}"

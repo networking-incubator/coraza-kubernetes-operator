@@ -6,6 +6,7 @@ updates:
       - "/"
       - "/test/conformance"
       - "/tools/github_project_manager"
+      - "/docs"
     schedule:
       interval: "weekly"
       day: "monday"
@@ -25,7 +26,9 @@ updates:
 
   # Dependencies listed in Dockerfile
   - package-ecosystem: "docker"
-    directory: "/"
+    directories:
+      - "/"
+      - "/docs"
     schedule:
       interval: "weekly"
       day: "monday"
@@ -38,6 +41,26 @@ updates:
     commit-message:
       prefix: "deps"
       include: "scope"
+
+  # npm dependencies for the documentation build (PostCSS toolchain)
+  - package-ecosystem: "npm"
+    directory: "/docs"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "07:00"
+      timezone: "Canada/Eastern"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+      - "javascript"
+    commit-message:
+      prefix: "deps"
+      include: "scope"
+    groups:
+      all-updates:
+        patterns:
+          - "*"
 
   #  Github actions updates
   - package-ecosystem: "github-actions"

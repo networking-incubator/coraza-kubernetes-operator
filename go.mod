@@ -1,6 +1,6 @@
 module github.com/networking-incubator/coraza-kubernetes-operator
 
-go 1.26.1
+go 1.26.2
 
 require (
 	github.com/corazawaf/coraza/v3 v3.7.0

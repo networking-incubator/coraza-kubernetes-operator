@@ -1,0 +1,540 @@
+// Custom styles for Coraza Kubernetes Operator docs
+
+// ------------------------------------------------------------------
+// Fix sticky navbar overlapping content on anchor scroll
+// ------------------------------------------------------------------
+html {
+  scroll-padding-top: 4.5rem;
+}
+
+// ==================================================================
+// LIGHT MODE (default)
+// ==================================================================
+
+// ------------------------------------------------------------------
+// Navbar
+// ------------------------------------------------------------------
+.td-navbar {
+  background: #fff;
+  border-bottom: 1px solid #e5e7eb;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+  padding-top: 0.5rem;
+  padding-bottom: 0.5rem;
+
+  .navbar-brand {
+    color: #1a2b4a;
+    margin-right: 1.5rem;
+  }
+
+  .navbar-toggler {
+    border-color: rgba(0, 0, 0, 0.15);
+
+    &:focus {
+      box-shadow: 0 0 0 0.2rem rgba(50, 108, 229, 0.25);
+    }
+  }
+
+  .nav-link {
+    color: #374151;
+    font-weight: 500;
+
+    &:hover,
+    &:focus {
+      color: #326ce5;
+    }
+  }
+
+  &.td-navbar-cover {
+    background: #fff;
+
+    .nav-link {
+      color: #374151;
+      &:hover { color: #326ce5; }
+    }
+
+    .navbar-brand {
+      color: #1a2b4a;
+    }
+  }
+}
+
+// ------------------------------------------------------------------
+// Hero / Cover block (same in both modes — always dark background)
+// ------------------------------------------------------------------
+.td-cover-block {
+  background: linear-gradient(160deg, #1a2b4a 0%, #326ce5 100%) !important;
+  margin-top: 0;
+
+  h1 {
+    font-weight: 700;
+    font-size: 3rem;
+    color: #fff;
+  }
+
+  .lead {
+    font-size: 1.25rem;
+    font-weight: 400;
+    color: rgba(255, 255, 255, 0.9);
+    max-width: 600px;
+    margin-left: auto;
+    margin-right: auto;
+  }
+
+  .btn-primary {
+    background: #2ae0d9;
+    border-color: #2ae0d9;
+    color: #0d1b2a;
+    font-weight: 600;
+
+    &:hover {
+      background: #5eeae4;
+      border-color: #5eeae4;
+      color: #0d1b2a;
+    }
+  }
+
+  .btn-secondary {
+    background: transparent;
+    border: 2px solid rgba(255, 255, 255, 0.7);
+    color: #fff;
+    font-weight: 600;
+
+    &:hover {
+      background: rgba(255, 255, 255, 0.15);
+      border-color: #fff;
+    }
+  }
+}
+
+// ------------------------------------------------------------------
+// Lead section (always blue background)
+// ------------------------------------------------------------------
+.td-box--primary {
+  background: #326ce5 !important;
+  color: #fff;
+
+  a {
+    color: #b3d4ff;
+    text-decoration: underline;
+    &:hover { color: #fff; }
+  }
+}
+
+// ------------------------------------------------------------------
+// Feature blocks
+// ------------------------------------------------------------------
+.td-box .fas,
+.td-box .fab {
+  font-size: 2.25rem;
+  margin-bottom: 0.75rem;
+  color: #326ce5;
+}
+
+.td-box--white .td-block h4 {
+  color: #1f2937;
+  font-weight: 600;
+}
+
+.td-box--info {
+  background: #f0f5ff;
+  color: #1f2937;
+
+  h4 { color: #1f2937; }
+  .fas, .fab { color: #326ce5; }
+  a {
+    color: #326ce5;
+    &:hover { color: #1a4fb8; }
+  }
+}
+
+// ------------------------------------------------------------------
+// Content area
+// ------------------------------------------------------------------
+.td-content {
+  h1, h2, h3, h4, h5, h6 {
+    color: #1f2937;
+  }
+
+  h2 {
+    border-bottom: 1px solid #e5e7eb;
+    padding-bottom: 0.4rem;
+    margin-top: 1.75rem;
+  }
+
+  code:not(pre code) {
+    background: #f3f4f6;
+    color: #326ce5;
+    padding: 0.15rem 0.35rem;
+    border-radius: 0.25rem;
+    font-size: 0.875em;
+  }
+
+  pre {
+    border-radius: 0.375rem;
+    overflow-x: auto;
+  }
+
+  table thead th {
+    background: #f9fafb;
+    color: #1f2937;
+    font-weight: 600;
+    border-bottom: 2px solid #e5e7eb;
+  }
+}
+
+// ------------------------------------------------------------------
+// Light mode syntax highlighting (Chroma "tango")
+// Generated with: hugo gen chromastyles --style=tango
+// Regenerate with: make docs.chroma
+// ------------------------------------------------------------------
+.bg { background-color: #f8f8f8; }
+.chroma { background-color: #f8f8f8; }
+.chroma .x { color: #000; }
+.chroma .err { color: #a40000; }
+.chroma .lnlinks { outline: none; text-decoration: none; color: inherit; }
+.chroma .lntd { vertical-align: top; padding: 0; margin: 0; border: 0; }
+.chroma .lntable { border-spacing: 0; padding: 0; margin: 0; border: 0; }
+.chroma .hl { background-color: #dfdfdf; }
+.chroma .lnt { white-space: pre; user-select: none; margin-right: 0.4em; padding: 0 0.4em; color: #7f7f7f; }
+.chroma .ln { white-space: pre; user-select: none; margin-right: 0.4em; padding: 0 0.4em; color: #7f7f7f; }
+.chroma .line { display: flex; }
+.chroma .k { color: #204a87; font-weight: bold; }
+.chroma .kc { color: #204a87; font-weight: bold; }
+.chroma .kd { color: #204a87; font-weight: bold; }
+.chroma .kn { color: #204a87; font-weight: bold; }
+.chroma .kp { color: #204a87; font-weight: bold; }
+.chroma .kr { color: #204a87; font-weight: bold; }
+.chroma .kt { color: #204a87; font-weight: bold; }
+.chroma .n { color: #000; }
+.chroma .na { color: #c4a000; }
+.chroma .nb { color: #204a87; }
+.chroma .bp { color: #3465a4; }
+.chroma .nc { color: #000; }
+.chroma .no { color: #000; }
+.chroma .nd { color: #5c35cc; font-weight: bold; }
+.chroma .ne { color: #c00; font-weight: bold; }
+.chroma .ni { color: #ce5c00; }
+.chroma .nl { color: #f57900; }
+.chroma .nn { color: #000; }
+.chroma .nx { color: #000; }
+.chroma .py { color: #000; }
+.chroma .nt { color: #204a87; font-weight: bold; }
+.chroma .nf { color: #000; }
+.chroma .fm { color: #000; }
+.chroma .nv { color: #000; }
+.chroma .vc { color: #000; }
+.chroma .vg { color: #000; }
+.chroma .vi { color: #000; }
+.chroma .vm { color: #000; }
+.chroma .l { color: #000; }
+.chroma .ld { color: #000; }
+.chroma .s { color: #4e9a06; }
+.chroma .sa { color: #4e9a06; }
+.chroma .sb { color: #4e9a06; }
+.chroma .sc { color: #4e9a06; }
+.chroma .dl { color: #4e9a06; }
+.chroma .sd { color: #8f5902; font-style: italic; }
+.chroma .s2 { color: #4e9a06; }
+.chroma .se { color: #4e9a06; }
+.chroma .sh { color: #4e9a06; }
+.chroma .si { color: #4e9a06; }
+.chroma .sx { color: #4e9a06; }
+.chroma .sr { color: #4e9a06; }
+.chroma .s1 { color: #4e9a06; }
+.chroma .ss { color: #4e9a06; }
+.chroma .m { color: #0000cf; font-weight: bold; }
+.chroma .mb { color: #0000cf; font-weight: bold; }
+.chroma .mf { color: #0000cf; font-weight: bold; }
+.chroma .mh { color: #0000cf; font-weight: bold; }
+.chroma .mi { color: #0000cf; font-weight: bold; }
+.chroma .il { color: #0000cf; font-weight: bold; }
+.chroma .mo { color: #0000cf; font-weight: bold; }
+.chroma .o { color: #ce5c00; font-weight: bold; }
+.chroma .ow { color: #204a87; font-weight: bold; }
+.chroma .p { color: #000; font-weight: bold; }
+.chroma .c { color: #8f5902; font-style: italic; }
+.chroma .ch { color: #8f5902; font-style: italic; }
+.chroma .cm { color: #8f5902; font-style: italic; }
+.chroma .c1 { color: #8f5902; font-style: italic; }
+.chroma .cs { color: #8f5902; font-style: italic; }
+.chroma .cp { color: #8f5902; font-style: italic; }
+.chroma .cpf { color: #8f5902; font-style: italic; }
+.chroma .g { color: #000; }
+.chroma .gd { color: #a40000; }
+.chroma .ge { color: #000; font-style: italic; }
+.chroma .gr { color: #ef2929; }
+.chroma .gh { color: #000080; font-weight: bold; }
+.chroma .gi { color: #00a000; }
+.chroma .go { color: #000; font-style: italic; }
+.chroma .gp { color: #8f5902; }
+.chroma .gs { color: #000; font-weight: bold; }
+.chroma .gu { color: #800080; font-weight: bold; }
+.chroma .gt { color: #a40000; font-weight: bold; }
+.chroma .gl { color: #000; text-decoration: underline; }
+.chroma .w { color: #f8f8f8; }
+
+// ------------------------------------------------------------------
+// Left sidebar
+// ------------------------------------------------------------------
+.td-sidebar-nav {
+  .td-sidebar-link {
+    transition: color 0.15s ease;
+
+    &.active {
+      color: #326ce5;
+      font-weight: 600;
+    }
+
+    &:hover {
+      color: #326ce5;
+    }
+  }
+}
+
+// ------------------------------------------------------------------
+// Footer (same in both modes — always dark)
+// ------------------------------------------------------------------
+footer.td-footer {
+  background: #1a2b4a !important;
+  color: rgba(255, 255, 255, 0.75);
+
+  a {
+    color: #2ae0d9;
+    &:hover { color: #5eeae4; }
+  }
+}
+
+// ==================================================================
+// DARK MODE
+// ==================================================================
+[data-bs-theme="dark"] {
+  // Navbar
+  .td-navbar {
+    background: #1a1a2e;
+    border-bottom: 1px solid #2d2d44;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+
+    .navbar-brand {
+      color: #e5e7eb;
+    }
+
+    .navbar-toggler {
+      border-color: rgba(255, 255, 255, 0.2);
+    }
+
+    .navbar-toggler-icon {
+      filter: invert(1);
+    }
+
+    .nav-link {
+      color: #d1d5db;
+      &:hover, &:focus { color: #5b9aff; }
+    }
+
+    &.td-navbar-cover {
+      background: #1a1a2e;
+
+      .nav-link {
+        color: #d1d5db;
+        &:hover { color: #5b9aff; }
+      }
+
+      .navbar-brand {
+        color: #e5e7eb;
+      }
+    }
+  }
+
+  // Feature blocks
+  .td-box--white {
+    background: #1a1a2e;
+    color: #d1d5db;
+
+    .td-block h4 {
+      color: #e5e7eb;
+    }
+  }
+
+  .td-box--info {
+    background: #12122a;
+    color: #d1d5db;
+
+    h4 { color: #e5e7eb; }
+    .fas, .fab { color: #5b9aff; }
+    a {
+      color: #5b9aff;
+      &:hover { color: #93bbff; }
+    }
+  }
+
+  .td-box .fas,
+  .td-box .fab {
+    color: #5b9aff;
+  }
+
+  // Content area
+  .td-content {
+    h1, h2, h3, h4, h5, h6 {
+      color: #e5e7eb;
+    }
+
+    h2 {
+      border-bottom-color: #2d2d44;
+    }
+
+    code:not(pre code) {
+      background: #2d2d44;
+      color: #5b9aff;
+    }
+
+    pre {
+      background: #282a36;
+      border: 1px solid #3d3f4a;
+      border-radius: 0.375rem;
+
+      code {
+        color: #f8f8f2;
+        background: transparent;
+      }
+    }
+
+    table thead th {
+      background: #2d2d44;
+      color: #e5e7eb;
+      border-bottom-color: #3d3d5c;
+    }
+
+    table tbody td {
+      border-color: #2d2d44;
+    }
+  }
+
+  // ------------------------------------------------------------------
+  // Dark mode syntax highlighting (Chroma "dracula")
+  // Generated with: hugo gen chromastyles --style=dracula
+  // Regenerate with: make docs.chroma
+  // ------------------------------------------------------------------
+  .bg { color: #f8f8f2; background-color: #282a36; }
+  .chroma { color: #f8f8f2; background-color: #282a36; }
+  .chroma .lnlinks { outline: none; text-decoration: none; color: inherit; }
+  .chroma .lntd { vertical-align: top; padding: 0; margin: 0; border: 0; }
+  .chroma .lntable { border-spacing: 0; padding: 0; margin: 0; border: 0; }
+  .chroma .hl { background-color: #3d3f4a; }
+  .chroma .lnt { white-space: pre; user-select: none; margin-right: 0.4em; padding: 0 0.4em; color: #7f7f7f; }
+  .chroma .ln { white-space: pre; user-select: none; margin-right: 0.4em; padding: 0 0.4em; color: #7f7f7f; }
+  .chroma .line { display: flex; }
+  .chroma .k { color: #ff79c6; }
+  .chroma .kc { color: #ff79c6; }
+  .chroma .kd { color: #8be9fd; font-style: italic; }
+  .chroma .kn { color: #ff79c6; }
+  .chroma .kp { color: #ff79c6; }
+  .chroma .kr { color: #ff79c6; }
+  .chroma .kt { color: #8be9fd; }
+  .chroma .na { color: #50fa7b; }
+  .chroma .nc { color: #50fa7b; }
+  .chroma .nl { color: #8be9fd; font-style: italic; }
+  .chroma .nt { color: #ff79c6; }
+  .chroma .nb { color: #8be9fd; font-style: italic; }
+  .chroma .bp { font-style: italic; }
+  .chroma .nv { color: #8be9fd; font-style: italic; }
+  .chroma .vc { color: #8be9fd; font-style: italic; }
+  .chroma .vg { color: #8be9fd; font-style: italic; }
+  .chroma .vi { color: #8be9fd; font-style: italic; }
+  .chroma .vm { color: #8be9fd; font-style: italic; }
+  .chroma .nf { color: #50fa7b; }
+  .chroma .fm { color: #50fa7b; }
+  .chroma .s { color: #f1fa8c; }
+  .chroma .sa { color: #f1fa8c; }
+  .chroma .sb { color: #f1fa8c; }
+  .chroma .sc { color: #f1fa8c; }
+  .chroma .dl { color: #f1fa8c; }
+  .chroma .sd { color: #f1fa8c; }
+  .chroma .s2 { color: #f1fa8c; }
+  .chroma .se { color: #f1fa8c; }
+  .chroma .sh { color: #f1fa8c; }
+  .chroma .si { color: #f1fa8c; }
+  .chroma .sx { color: #f1fa8c; }
+  .chroma .sr { color: #f1fa8c; }
+  .chroma .s1 { color: #f1fa8c; }
+  .chroma .ss { color: #f1fa8c; }
+  .chroma .m { color: #bd93f9; }
+  .chroma .mb { color: #bd93f9; }
+  .chroma .mf { color: #bd93f9; }
+  .chroma .mh { color: #bd93f9; }
+  .chroma .mi { color: #bd93f9; }
+  .chroma .il { color: #bd93f9; }
+  .chroma .mo { color: #bd93f9; }
+  .chroma .o { color: #ff79c6; }
+  .chroma .ow { color: #ff79c6; }
+  .chroma .p { color: #f8f8f2; }
+  .chroma .c { color: #6272a4; }
+  .chroma .ch { color: #6272a4; }
+  .chroma .cm { color: #6272a4; }
+  .chroma .c1 { color: #6272a4; }
+  .chroma .cs { color: #6272a4; }
+  .chroma .cp { color: #ff79c6; }
+  .chroma .cpf { color: #ff79c6; }
+  .chroma .gd { color: #f55; }
+  .chroma .ge { text-decoration: underline; }
+  .chroma .gh { font-weight: bold; }
+  .chroma .gi { color: #50fa7b; font-weight: bold; }
+  .chroma .go { color: #44475a; }
+  .chroma .gu { font-weight: bold; }
+  .chroma .gl { text-decoration: underline; }
+  // Default text color for tokens Dracula doesn't explicitly style
+  .chroma .x,
+  .chroma .err,
+  .chroma .n,
+  .chroma .nn,
+  .chroma .nx,
+  .chroma .no,
+  .chroma .nd,
+  .chroma .ne,
+  .chroma .ni,
+  .chroma .py,
+  .chroma .g,
+  .chroma .gr,
+  .chroma .gs,
+  .chroma .gt,
+  .chroma .w,
+  .chroma .l,
+  .chroma .ld { color: #f8f8f2; }
+
+  // Sidebar
+  .td-sidebar-nav {
+    .td-sidebar-link {
+      &.active {
+        color: #5b9aff;
+      }
+
+      &:hover {
+        color: #5b9aff;
+      }
+    }
+  }
+
+  .td-sidebar {
+    background: #12122a;
+    border-right-color: #2d2d44;
+  }
+
+  .td-toc {
+    a {
+      color: #9ca3af;
+      &:hover { color: #5b9aff; }
+    }
+  }
+}
+
+// ------------------------------------------------------------------
+// Responsive
+// ------------------------------------------------------------------
+@media (max-width: 768px) {
+  .td-cover-block h1 {
+    font-size: 2rem;
+  }
+
+  .td-cover-block .lead {
+    font-size: 1.05rem;
+  }
+}

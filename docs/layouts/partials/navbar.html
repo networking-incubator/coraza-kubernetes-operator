@@ -1,0 +1,69 @@
+{{/* Custom navbar override: adds Bootstrap collapse (hamburger) for narrow
+     screens and left-aligns the brand. Based on Docsy v0.14.3 navbar.html. */}}
+{{ $cover := and
+    (.HasShortcode "blocks/cover")
+    (not .Site.Params.ui.navbar_translucent_over_cover_disable)
+-}}
+{{ $baseURL := urls.Parse $.Site.Params.Baseurl -}}
+
+<nav class="td-navbar js-navbar-scroll navbar-expand-lg
+      {{- if $cover }} td-navbar-cover td-navbar-transparent {{- end }}"
+      {{- if eq (.Param "ui.navbar_theme") "dark" }} data-bs-theme="dark" {{- end }}>
+<div class="container-fluid">
+  <a class="navbar-brand" href="{{ .Site.Home.RelPermalink }}">
+    {{- /**/ -}}
+    <span class="navbar-brand__name">
+      {{- .Site.Title -}}
+    </span>
+    {{- /**/ -}}
+  </a>
+  <button class="navbar-toggler" type="button" data-bs-toggle="collapse"
+          data-bs-target="#navbarMain" aria-controls="navbarMain"
+          aria-expanded="false" aria-label="Toggle navigation">
+    <span class="navbar-toggler-icon"></span>
+  </button>
+  <div class="collapse navbar-collapse" id="navbarMain">
+    <ul class="navbar-nav ms-auto">
+      {{ $p := . -}}
+      {{ range .Site.Menus.main -}}
+      <li class="nav-item">
+        {{ $active := or ($p.IsMenuCurrent "main" .) ($p.HasMenuCurrent "main" .) -}}
+        {{ $href := "" -}}
+        {{ with .Page -}}
+          {{ $active = or $active ( $.IsDescendant .) -}}
+          {{ $href = .RelPermalink -}}
+        {{ else -}}
+          {{ $href = .URL | relLangURL -}}
+        {{ end -}}
+        {{ $isExternal := ne $baseURL.Host (urls.Parse .URL).Host -}}
+        <a {{/**/ -}}
+          class="nav-link {{- if $active }} active {{- end }}" {{/**/ -}}
+          href="{{ $href }}"
+          {{- if $isExternal }} target="_blank" rel="noopener" {{- end -}}
+        >
+            {{- .Pre -}}
+            <span>{{ .Name }}</span>
+            {{- .Post -}}
+        </a>
+      </li>
+      {{ end -}}
+      {{ if .Site.Params.versions -}}
+      <li class="nav-item dropdown d-none d-lg-block td-navbar__version-menu">
+        {{ partial "navbar-version-selector.html" . -}}
+      </li>
+      {{ end -}}
+      {{ if (gt (len .Site.Home.Translations) 0) -}}
+      <li class="nav-item td-navbar__lang-menu">
+        {{ partial "navbar-lang-selector.html" . -}}
+      </li>
+      {{ end -}}
+      {{- $darkMode := partialCached "dark-mode-config.html" "dark-mode-global" -}}
+      {{ if $darkMode.showMenu -}}
+      <li class="nav-item td-navbar__light-dark-menu">
+        {{ partial "theme-toggler" . }}
+      </li>
+      {{ end -}}
+    </ul>
+  </div>
+</div>
+</nav>

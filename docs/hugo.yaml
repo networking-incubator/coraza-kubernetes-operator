@@ -1,0 +1,81 @@
+baseURL: "https://networking-incubator.github.io/coraza-kubernetes-operator/"
+title: "Coraza Kubernetes Operator"
+defaultContentLanguage: "en"
+defaultContentLanguageInSubdir: false
+
+languages:
+  en:
+    languageCode: "en-us"
+    languageName: "English"
+
+module:
+  hugoVersion:
+    extended: true
+    min: "0.145.0"
+  imports:
+    - path: "github.com/google/docsy"
+      disable: false
+
+markup:
+  goldmark:
+    parser:
+      attribute:
+        block: true
+    renderer:
+      # Allow raw HTML inside markdown files. Required because content pages
+      # (e.g. the landing page) embed HTML tags directly for layout purposes.
+      # This is safe as long as all content is maintainer-authored, not user-submitted.
+      unsafe: true
+  highlight:
+    # Use CSS classes instead of inline styles so dark mode can override colors.
+    noClasses: false
+    lineNos: false
+
+outputs:
+  home:
+    - HTML
+    - RSS
+
+taxonomies: {}
+
+params:
+  description: "Declarative Web Application Firewall management for Kubernetes Gateways using Coraza."
+  github_repo: "https://github.com/networking-incubator/coraza-kubernetes-operator"
+  github_project_repo: "https://github.com/networking-incubator/coraza-kubernetes-operator"
+  github_branch: "main"
+
+  ui:
+    navbar_logo: false
+    navbar_translucent_over_cover_disable: false
+    sidebar_menu_compact: true
+    sidebar_menu_foldable: true
+    sidebar_search_disable: false
+    breadcrumb_disable: false
+    footer_about_enable: false
+    readingtime:
+      enable: false
+    showLightDarkModeMenu: true
+    feedback:
+      enable: false
+
+  links:
+    user:
+      - name: "GitHub"
+        url: "https://github.com/networking-incubator/coraza-kubernetes-operator"
+        icon: "fab fa-github"
+        desc: "Source code and issue tracker"
+
+menu:
+  main:
+    - name: "Tutorials"
+      url: "/tutorials/"
+      weight: 10
+    - name: "How-to Guides"
+      url: "/howto/"
+      weight: 20
+    - name: "Reference"
+      url: "/reference/"
+      weight: 30
+    - name: "Explanation"
+      url: "/explanation/"
+      weight: 40
