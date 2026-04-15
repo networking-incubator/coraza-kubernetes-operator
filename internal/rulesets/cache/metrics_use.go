@@ -97,8 +97,7 @@ func (c *cacheEntriesCollector) Describe(ch chan<- *prometheus.Desc) {
 
 // Collect implements prometheus.Collector.
 func (c *cacheEntriesCollector) Collect(ch chan<- prometheus.Metric) {
-	for _, key := range c.cache.ListKeys() {
-		count := c.cache.CountEntries(key)
+	for key, count := range c.cache.EntryCountsSnapshot() {
 		ch <- prometheus.MustNewConstMetric(c.desc, prometheus.GaugeValue, float64(count), key)
 	}
 }
