@@ -146,17 +146,18 @@ func RegisterUSEMetrics(reg prometheus.Registerer, c *RuleSetCache, gc GarbageCo
 
 	if r, ok := reg.(*prometheus.Registry); ok {
 		registerMu.Lock()
+		defer registerMu.Unlock()
+
 		if prev, exists := registeredUSEMetricsByPromRegistry[r]; exists {
 			match := prev.cache == c && prev.gc == gc
-			registerMu.Unlock()
 			if match {
 				return nil
 			}
 			return fmt.Errorf("%w", ErrUSEMetricsRegistryConflict)
 		}
+
 		registerCollectors()
 		registeredUSEMetricsByPromRegistry[r] = useMetricsRegistration{cache: c, gc: gc}
-		registerMu.Unlock()
 		return nil
 	}
 
