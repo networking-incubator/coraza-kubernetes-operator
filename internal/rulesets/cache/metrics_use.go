@@ -109,8 +109,8 @@ func (c *cacheEntriesCollector) Collect(ch chan<- prometheus.Metric) {
 // For a *prometheus.Registry, a second call with the same RuleSetCache pointer
 // and equal GarbageCollectionConfig returns nil (idempotent). A second call with
 // the same registry but a different cache or GC config returns
-// ErrUSEMetricsRegistryConflict. The process uses one shared set of GC counter
-// collectors; they are bound to the first registry they are registered with.
+// ErrUSEMetricsRegistryConflict. The GC counters are shared collector instances
+// and are registered with each Registerer passed to this function.
 //
 // Registerers that are not *prometheus.Registry are not tracked; each call runs
 // MustRegister (typically only once — duplicate metric names panic).
