@@ -182,6 +182,21 @@ func (c *RuleSetCache) CountEntries(instance string) int {
 	return 0
 }
 
+// EntryCountsSnapshot returns a copy of entry revision counts per cache key
+// (instance). Used for metrics collection without holding the cache lock during
+// scrape.
+func (c *RuleSetCache) EntryCountsSnapshot() map[string]int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	out := make(map[string]int, len(c.entries))
+	for k, v := range c.entries {
+		if v != nil {
+			out[k] = len(v.Entries)
+		}
+	}
+	return out
+}
+
 // -----------------------------------------------------------------------------
 // RuleSetCache - Cleanup
 // -----------------------------------------------------------------------------
