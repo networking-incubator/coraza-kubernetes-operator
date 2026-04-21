@@ -320,12 +320,31 @@ func BuildHTTPRoute(namespace, name, gatewayName, backendName string) *unstructu
 // Scenario - Resource Creation Methods
 // -----------------------------------------------------------------------------
 
+// createDynamicResource creates an unstructured resource via the dynamic client
+// and registers a cleanup delete.
+func (s *Scenario) createDynamicResource(gvr schema.GroupVersionResource, kind string, namespace, name string, obj runtime.Object) {
+	s.T.Helper()
+	ctx := s.T.Context()
+	u := toUnstructured(obj)
+	_, err := s.F.DynamicClient.Resource(gvr).Namespace(namespace).Create(
+		ctx, u, metav1.CreateOptions{},
+	)
+	require.NoError(s.T, err, "create %s %s/%s", kind, namespace, name)
+	s.T.Logf("Created %s: %s/%s", kind, namespace, name)
+	s.OnCleanup(func() {
+		if err := s.F.DynamicClient.Resource(gvr).Namespace(namespace).Delete(
+			context.Background(), name, metav1.DeleteOptions{},
+		); err != nil {
+			s.T.Logf("cleanup: failed to delete %s %s/%s: %v", kind, namespace, name, err)
+		}
+	})
+}
+
 // CreateRuleSource creates a RuleSource with the given SecLang text and
 // registers cleanup.
 func (s *Scenario) CreateRuleSource(namespace, name, rules string) {
 	s.T.Helper()
-	ctx := s.T.Context()
-	rs := &wafv1alpha1.RuleSource{
+	s.createDynamicResource(RuleSourceGVR, "RuleSource", namespace, name, &wafv1alpha1.RuleSource{
 		TypeMeta: metav1.TypeMeta{
 			APIVersion: wafv1alpha1.GroupVersion.String(),
 			Kind:       "RuleSource",
@@ -337,27 +356,13 @@ func (s *Scenario) CreateRuleSource(namespace, name, rules string) {
 		Spec: wafv1alpha1.RuleSourceSpec{
 			Rules: rules,
 		},
-	}
-	obj := toUnstructured(rs)
-	_, err := s.F.DynamicClient.Resource(RuleSourceGVR).Namespace(namespace).Create(
-		ctx, obj, metav1.CreateOptions{},
-	)
-	require.NoError(s.T, err, "create RuleSource %s/%s", namespace, name)
-	s.T.Logf("Created RuleSource: %s/%s", namespace, name)
-	s.OnCleanup(func() {
-		if err := s.F.DynamicClient.Resource(RuleSourceGVR).Namespace(namespace).Delete(
-			context.Background(), name, metav1.DeleteOptions{},
-		); err != nil {
-			s.T.Logf("cleanup: failed to delete RuleSource %s/%s: %v", namespace, name, err)
-		}
 	})
 }
 
 // CreateRuleData creates a RuleData with the given file map and registers cleanup.
 func (s *Scenario) CreateRuleData(namespace, name string, files map[string]string) {
 	s.T.Helper()
-	ctx := s.T.Context()
-	rd := &wafv1alpha1.RuleData{
+	s.createDynamicResource(RuleDataGVR, "RuleData", namespace, name, &wafv1alpha1.RuleData{
 		TypeMeta: metav1.TypeMeta{
 			APIVersion: wafv1alpha1.GroupVersion.String(),
 			Kind:       "RuleData",
@@ -369,19 +374,6 @@ func (s *Scenario) CreateRuleData(namespace, name string, files map[string]strin
 		Spec: wafv1alpha1.RuleDataSpec{
 			Files: files,
 		},
-	}
-	obj := toUnstructured(rd)
-	_, err := s.F.DynamicClient.Resource(RuleDataGVR).Namespace(namespace).Create(
-		ctx, obj, metav1.CreateOptions{},
-	)
-	require.NoError(s.T, err, "create RuleData %s/%s", namespace, name)
-	s.T.Logf("Created RuleData: %s/%s", namespace, name)
-	s.OnCleanup(func() {
-		if err := s.F.DynamicClient.Resource(RuleDataGVR).Namespace(namespace).Delete(
-			context.Background(), name, metav1.DeleteOptions{},
-		); err != nil {
-			s.T.Logf("cleanup: failed to delete RuleData %s/%s: %v", namespace, name, err)
-		}
 	})
 }
 
