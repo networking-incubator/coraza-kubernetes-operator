@@ -47,6 +47,7 @@ spec:
               rules:
                 description: rules contains SecLang rule text.
                 maxLength: 1572864
+                minLength: 1
                 type: string
             required:
             - rules
