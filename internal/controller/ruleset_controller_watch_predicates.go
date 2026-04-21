@@ -30,42 +30,31 @@ import (
 // RuleSet Controller - Watch Predicates
 // -----------------------------------------------------------------------------
 
-// findRuleSetsForRuleSource maps a RuleSource to the RuleSets that reference it (if any).
+// findRuleSetsForRuleSource maps a RuleSource to the RuleSets that reference it
+// using the spec.sources.name field index registered in SetupWithManager.
 func (r *RuleSetReconciler) findRuleSetsForRuleSource(ctx context.Context, ruleSource client.Object) []reconcile.Request {
-	log := logf.FromContext(ctx)
-
-	var ruleSetList wafv1alpha1.RuleSetList
-	if err := r.List(ctx, &ruleSetList, client.InNamespace(ruleSource.GetNamespace())); err != nil {
-		log.Error(err, "RuleSet: Failed to list RuleSets", "namespace", ruleSource.GetNamespace())
-		return nil
-	}
-
-	return collectRequests(ruleSetList.Items, func(rs *wafv1alpha1.RuleSet) bool {
-		for _, src := range rs.Spec.Sources {
-			if src.Name == ruleSource.GetName() {
-				return true
-			}
-		}
-		return false
-	})
+	return r.findRuleSetsBy(ctx, ruleSource.GetNamespace(), "spec.sources.name", ruleSource.GetName())
 }
 
-// findRuleSetsForRuleData maps a RuleData to the RuleSets that reference it (if any).
+// findRuleSetsForRuleData maps a RuleData to the RuleSets that reference it
+// using the spec.data.name field index registered in SetupWithManager.
 func (r *RuleSetReconciler) findRuleSetsForRuleData(ctx context.Context, ruleData client.Object) []reconcile.Request {
+	return r.findRuleSetsBy(ctx, ruleData.GetNamespace(), "spec.data.name", ruleData.GetName())
+}
+
+// findRuleSetsBy lists RuleSets matching a field index value and returns
+// reconcile requests for each.
+func (r *RuleSetReconciler) findRuleSetsBy(ctx context.Context, namespace, indexKey, indexValue string) []reconcile.Request {
 	log := logf.FromContext(ctx)
 
 	var ruleSetList wafv1alpha1.RuleSetList
-	if err := r.List(ctx, &ruleSetList, client.InNamespace(ruleData.GetNamespace())); err != nil {
-		log.Error(err, "RuleSet: Failed to list RuleSets", "namespace", ruleData.GetNamespace())
+	if err := r.List(ctx, &ruleSetList,
+		client.InNamespace(namespace),
+		client.MatchingFields{indexKey: indexValue},
+	); err != nil {
+		log.Error(err, "RuleSet: Failed to list RuleSets", "namespace", namespace, "index", indexKey, "value", indexValue)
 		return nil
 	}
 
-	return collectRequests(ruleSetList.Items, func(rs *wafv1alpha1.RuleSet) bool {
-		for _, d := range rs.Spec.Data {
-			if d.Name == ruleData.GetName() {
-				return true
-			}
-		}
-		return false
-	})
+	return collectRequests(ruleSetList.Items, func(_ *wafv1alpha1.RuleSet) bool { return true })
 }
