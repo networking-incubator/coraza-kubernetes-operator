@@ -46,12 +46,33 @@ spec:
           spec:
             description: spec defines the desired state of RuleSet.
             properties:
+              data:
+                description: |-
+                  data is an optional list of references to RuleData objects in the same
+                  namespace as the RuleSet. Data entries are merged to provide the
+                  filesystem for @pmFromFile directives (last-listed wins on duplicate keys).
+                items:
+                  description: |-
+                    DataReference is a reference to a RuleData object in the same namespace
+                    as the RuleSet.
+                  properties:
+                    name:
+                      description: name is the name of the RuleData in the same namespace
+                        as the RuleSet.
+                      maxLength: 253
+                      minLength: 1
+                      type: string
+                  required:
+                  - name
+                  type: object
+                maxItems: 256
+                type: array
+                x-kubernetes-list-type: atomic
               sources:
                 description: |-
                   sources is an ordered list of references to RuleSource objects in the
-                  same namespace as the RuleSet. Rule-type sources are concatenated in
-                  list order to form the aggregated SecLang string. Data-type sources
-                  are merged to provide the filesystem for @pmFromFile directives.
+                  same namespace as the RuleSet. Sources are concatenated in list order
+                  to form the aggregated SecLang string.
                 items:
                   description: |-
                     SourceReference is a reference to a RuleSource object in the same namespace
@@ -60,6 +81,7 @@ spec:
                     name:
                       description: name is the name of the RuleSource in the same
                         namespace as the RuleSet.
+                      maxLength: 253
                       minLength: 1
                       type: string
                   required:

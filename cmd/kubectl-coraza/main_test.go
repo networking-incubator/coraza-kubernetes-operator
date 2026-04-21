@@ -180,7 +180,7 @@ func TestGenCRS_withDataSource(t *testing.T) {
 	err := cmd.Execute()
 	require.NoError(t, err)
 
-	assert.Contains(t, stdout.String(), "type: Data")
+	assert.Contains(t, stdout.String(), "kind: RuleData")
 	assert.Contains(t, stdout.String(), "kind: RuleSet")
 }
 
@@ -280,7 +280,7 @@ func TestGenCRS_generatedManifestsParseAsYAML(t *testing.T) {
 		version string
 	}{
 		{"minimal", "minimal", "4.24.1"},
-		{"withDataRuleSource", "withdata", "4.0.0"},
+		{"withRuleData", "withdata", "4.0.0"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

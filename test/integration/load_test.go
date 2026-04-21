@@ -49,7 +49,7 @@ func TestHighThroughput(t *testing.T) {
 	s.Step("deploy rules")
 	s.CreateRuleSource(ns, "base-rules", `SecRuleEngine On`)
 	s.CreateRuleSource(ns, "block-rules", framework.SimpleBlockRule(12001, "blocked"))
-	s.CreateRuleSet(ns, "ruleset", []string{"base-rules", "block-rules"})
+	s.CreateRuleSet(ns, "ruleset", []string{"base-rules", "block-rules"}, nil)
 
 	s.CreateEngine(ns, "engine", framework.EngineOpts{
 		RuleSetName: "ruleset",
@@ -133,7 +133,7 @@ SecRule ARGS:attack "@contains sqli" "id:12101,phase:2,deny,status:403,msg:'SQL 
 SecRule ARGS:attack "@contains xss" "id:12102,phase:2,deny,status:403,msg:'XSS'"
 SecRule ARGS:attack "@contains rce" "id:12103,phase:2,deny,status:403,msg:'RCE'"
 `)
-	s.CreateRuleSet(ns, "ruleset", []string{"base-rules", "block-rules"})
+	s.CreateRuleSet(ns, "ruleset", []string{"base-rules", "block-rules"}, nil)
 
 	s.CreateEngine(ns, "engine", framework.EngineOpts{
 		RuleSetName: "ruleset",
@@ -239,7 +239,7 @@ func TestSustainedLoad(t *testing.T) {
 	s.Step("deploy rules")
 	s.CreateRuleSource(ns, "base-rules", `SecRuleEngine On`)
 	s.CreateRuleSource(ns, "block-rules", framework.SimpleBlockRule(12201, "blocked"))
-	s.CreateRuleSet(ns, "ruleset", []string{"base-rules", "block-rules"})
+	s.CreateRuleSet(ns, "ruleset", []string{"base-rules", "block-rules"}, nil)
 
 	s.CreateEngine(ns, "engine", framework.EngineOpts{
 		RuleSetName: "ruleset",

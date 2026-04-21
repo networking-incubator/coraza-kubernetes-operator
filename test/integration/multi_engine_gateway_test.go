@@ -52,7 +52,7 @@ func TestMultiEngineMultiGateway(t *testing.T) {
 		s.CreateRuleSource(ns, "block-rules",
 			framework.SimpleBlockRule(1001, "evil"),
 		)
-		s.CreateRuleSet(ns, "shared-rules", []string{"base-rules", "block-rules"})
+		s.CreateRuleSet(ns, "shared-rules", []string{"base-rules", "block-rules"}, nil)
 
 		s.Step("deploy shared echo backend")
 		s.CreateEchoBackend(ns, "echo")
@@ -106,8 +106,8 @@ func TestMultiEngineMultiGateway(t *testing.T) {
 		s.CreateRuleSource(ns, "rules-b",
 			framework.SimpleBlockRule(2002, "attackB"),
 		)
-		s.CreateRuleSet(ns, "ruleset-a", []string{"base-rules", "rules-a"})
-		s.CreateRuleSet(ns, "ruleset-b", []string{"base-rules", "rules-b"})
+		s.CreateRuleSet(ns, "ruleset-a", []string{"base-rules", "rules-a"}, nil)
+		s.CreateRuleSet(ns, "ruleset-b", []string{"base-rules", "rules-b"}, nil)
 
 		s.Step("deploy echo backend")
 		s.CreateEchoBackend(ns, "echo")
@@ -150,7 +150,7 @@ func TestMultiEngineMultiGateway(t *testing.T) {
 
 		s.Step("create rules and engine targeting non-existent gateway")
 		s.CreateRuleSource(ns, "base-rules", `SecRuleEngine On`)
-		s.CreateRuleSet(ns, "ruleset", []string{"base-rules"})
+		s.CreateRuleSet(ns, "ruleset", []string{"base-rules"}, nil)
 		s.CreateEngine(ns, "orphan-engine", framework.EngineOpts{
 			RuleSetName: "ruleset",
 			GatewayName: "nonexistent-gateway",

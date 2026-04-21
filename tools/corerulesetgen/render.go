@@ -101,7 +101,7 @@ func baseRulesYAML(normalizedVersion, crsSetupVersion string, includeTest bool) 
 `, normalizedVersion, normalizedVersion, crsSetupVersion)
 	inner = strings.TrimRight(inner, "\n")
 
-	body := "apiVersion: waf.k8s.coraza.io/v1alpha1\nkind: RuleSource\nmetadata:\n  name: base-rules\nspec:\n  type: Rule\n  rules: |\n" + inner
+	body := "apiVersion: waf.k8s.coraza.io/v1alpha1\nkind: RuleSource\nmetadata:\n  name: base-rules\nspec:\n  rules: |\n" + inner
 	s := strings.TrimRight(body, "\n")
 	if includeTest {
 		s += "\n" + xCRSTestBlock
@@ -161,7 +161,7 @@ func indentMultiline(processed string, indent int) string {
 	return strings.TrimSuffix(b.String(), "\n")
 }
 
-func buildDataRuleSourceYAML(dataFiles []string, opts Options) (string, error) {
+func buildRuleDataYAML(dataFiles []string, opts Options) (string, error) {
 	entries := make(map[string]string, len(dataFiles))
 	for _, p := range dataFiles {
 		key := filepath.Base(p)
@@ -174,10 +174,10 @@ func buildDataRuleSourceYAML(dataFiles []string, opts Options) (string, error) {
 		}
 		entries[key] = strings.ToValidUTF8(string(raw), "")
 	}
-	if err := checkRuleSourceDataSize(opts.DataSourceName, entries, opts); err != nil {
+	if err := checkRuleDataSize(opts.DataSourceName, entries, opts); err != nil {
 		return "", err
 	}
-	return formatDataRuleSourceYAML(opts.DataSourceName, opts.Namespace, entries), nil
+	return formatRuleDataYAML(opts.DataSourceName, opts.Namespace, entries), nil
 }
 
 func rulesetYAML(sourceNames []string, opts Options, includeData bool) string {
@@ -194,11 +194,11 @@ func formatRuleSourceYAML(name, namespace, indentedRules string) string {
 	if namespace != "" {
 		fmt.Fprintf(&b, "  namespace: %s\n", namespace)
 	}
-	fmt.Fprintf(&b, "  name: %s\nspec:\n  type: Rule\n  rules: |\n%s\n", name, indentedRules)
+	fmt.Fprintf(&b, "  name: %s\nspec:\n  rules: |\n%s\n", name, indentedRules)
 	return b.String()
 }
 
-func formatDataRuleSourceYAML(name, namespace string, files map[string]string) string {
+func formatRuleDataYAML(name, namespace string, files map[string]string) string {
 	keys := make([]string, 0, len(files))
 	for k := range files {
 		keys = append(keys, k)
@@ -206,13 +206,12 @@ func formatDataRuleSourceYAML(name, namespace string, files map[string]string) s
 	sort.Strings(keys)
 
 	var b strings.Builder
-	b.WriteString("apiVersion: waf.k8s.coraza.io/v1alpha1\nkind: RuleSource\nmetadata:\n")
+	b.WriteString("apiVersion: waf.k8s.coraza.io/v1alpha1\nkind: RuleData\nmetadata:\n")
 	if namespace != "" {
 		fmt.Fprintf(&b, "  namespace: %s\n", namespace)
 	}
-	fmt.Fprintf(&b, "  name: %s\nspec:\n  type: Data\n  files:\n", name)
+	fmt.Fprintf(&b, "  name: %s\nspec:\n  files:\n", name)
 	for _, k := range keys {
-		// Keys are under spec.files at 4 spaces; block lines must be indented deeper than the key.
 		indented := indentMultiline(files[k], 6)
 		fmt.Fprintf(&b, "    %s: |\n%s\n", k, indented)
 	}
@@ -226,12 +225,13 @@ func formatRuleSetYAML(rulesetName, namespace string, sourceNames []string, data
 		fmt.Fprintf(&b, "  namespace: %s\n", namespace)
 	}
 	fmt.Fprintf(&b, "  name: %s\nspec:\n  sources:\n", rulesetName)
-	if dataSourceName != "" {
-		fmt.Fprintf(&b, "    - name: %s\n", dataSourceName)
-	}
 	b.WriteString("    - name: base-rules\n")
 	for _, n := range sourceNames {
 		fmt.Fprintf(&b, "    - name: %s\n", n)
+	}
+	if dataSourceName != "" {
+		b.WriteString("  data:\n")
+		fmt.Fprintf(&b, "    - name: %s\n", dataSourceName)
 	}
 	return b.String()
 }

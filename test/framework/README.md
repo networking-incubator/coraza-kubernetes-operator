@@ -51,7 +51,7 @@ func TestMyScenario(t *testing.T) {
     s.Step("create WAF resources")
     s.CreateRuleSource(ns, "rules", `SecRuleEngine On
 SecRule ARGS "@contains attack" "id:1,phase:2,deny,status:403"`)
-    s.CreateRuleSet(ns, "ruleset", []string{"rules"})
+    s.CreateRuleSet(ns, "ruleset", []string{"rules"}, nil)
     s.CreateGateway(ns, "my-gateway")
     s.ExpectGatewayProgrammed(ns, "my-gateway")
 
@@ -80,10 +80,11 @@ SecRule ARGS "@contains attack" "id:1,phase:2,deny,status:403"`)
 | `GenerateNamespace(prefix)` | Create namespace with random suffix, returns generated name |
 | `CreateNamespace(name)` | Create namespace with exact name and cleanup |
 | `CreateRuleSource(ns, name, rules)` | Create RuleSource with WAF rules |
+| `CreateRuleData(ns, name, files)` | Create RuleData with data files |
 | `CreateGateway(ns, name)` | Create Istio Gateway with cleanup |
-| `CreateRuleSet(ns, name, sourceNames)` | Create RuleSet with cleanup |
+| `CreateRuleSet(ns, name, sourceNames, dataNames)` | Create RuleSet with cleanup |
 | `CreateEngine(ns, name, opts)` | Create Engine with cleanup |
-| `TryCreateRuleSet(ns, name, sourceNames)` | Create RuleSet, return error (for validation tests) |
+| `TryCreateRuleSet(ns, name, sourceNames, dataNames)` | Create RuleSet, return error (for validation tests) |
 | `TryCreateEngine(ns, name, opts)` | Create Engine, return error (for validation tests) |
 | `CreateHTTPRoute(ns, name, gw, backend)` | Create HTTPRoute with cleanup |
 | `CreateEchoBackend(ns, name)` | Deploy echo server (Deployment + Service), wait for Ready |
@@ -129,7 +130,7 @@ Exported builder functions for use outside scenarios:
 | Function | Purpose |
 |---|---|
 | `fw.BuildGateway(ns, name, class)` | Build unstructured Gateway (`ISTIO_GATEWAY_REVISION` sets `istio.io/rev` when non-empty) |
-| `BuildRuleSet(ns, name, rules)` | Build unstructured RuleSet |
+| `BuildRuleSet(ns, name, sources, data)` | Build unstructured RuleSet |
 | `BuildEngine(ns, name, opts)` | Build unstructured Engine |
 | `BuildHTTPRoute(ns, name, gw, backend)` | Build unstructured HTTPRoute |
 | `SimpleBlockRule(id, target)` | Generate a SecLang deny rule |

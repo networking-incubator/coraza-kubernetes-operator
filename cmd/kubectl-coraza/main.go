@@ -58,12 +58,12 @@ Validation and Coraza compilation happen in the operator after you apply resourc
 	}
 	coreruleset := &cobra.Command{
 		Use:   "coreruleset",
-		Short: "Emit RuleSource manifests and a RuleSet from CoreRuleSet .conf/.data files",
+		Short: "Emit RuleSource, RuleData, and RuleSet manifests from CoreRuleSet .conf/.data files",
 		Long: `Reads *.conf and *.data from a single directory (non-recursive), matching the behavior of the
 former Makefile Python generator. Output is a multi-document YAML stream on stdout.
 
-RuleSet references RuleSource objects in the same namespace as the RuleSet; set --namespace when you
-need metadata.namespace on every object.`,
+RuleSet references RuleSource objects (for rules) and RuleData objects (for data files) in the same
+namespace as the RuleSet; set --namespace when you need metadata.namespace on every object.`,
 		RunE: genCRS,
 	}
 
@@ -77,7 +77,7 @@ need metadata.namespace on every object.`,
 	flags.Bool("include-test-rule", false, "append X-CRS-Test block to the bundled base-rules RuleSource")
 	flags.String("ruleset-name", "default-ruleset", "metadata.name of the RuleSet")
 	flags.StringP("namespace", "n", "", "if set, metadata.namespace on all generated objects")
-	flags.String("data-source-name", "coreruleset-data", "RuleSource name for *.data files (type Data)")
+	flags.String("data-source-name", "coreruleset-data", "RuleData name for *.data files")
 	flags.String("name-prefix", "", "optional prefix for RuleSource names derived from *.conf filenames (not base-rules)")
 	flags.String("name-suffix", "", "optional suffix for RuleSource names derived from *.conf filenames")
 	flags.String("dry-run", "", "if set to client, print the same manifests and annotate stderr (no cluster access is performed either way)")

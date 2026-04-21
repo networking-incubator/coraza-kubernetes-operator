@@ -331,25 +331,26 @@ func TestRuleSetReconciler_UpdateCache(t *testing.T) {
 	assert.NotEqual(t, uuid1, entry2.UUID, "UUID should change when rules are updated")
 }
 
-func TestRuleSetReconciler_DataOnlyRuleSetRejected(t *testing.T) {
+func TestRuleSetReconciler_MissingRuleData(t *testing.T) {
 	ctx := context.Background()
 	ruleSetCache := cache.NewRuleSetCache()
 
-	dataSrc := utils.NewTestRuleSourceData("data-only-src", testNamespace, map[string]string{
-		"test.data": "some-content",
-	})
-	require.NoError(t, k8sClient.Create(ctx, dataSrc))
+	ruleSrc := utils.NewTestRuleSource("missing-data-rule", testNamespace, "SecCollectionTimeout 1")
+	require.NoError(t, k8sClient.Create(ctx, ruleSrc))
 	t.Cleanup(func() {
-		if err := k8sClient.Delete(ctx, dataSrc); err != nil {
-			t.Logf("failed to delete %s: %v", dataSrc.Name, err)
+		if err := k8sClient.Delete(ctx, ruleSrc); err != nil {
+			t.Logf("failed to delete %s: %v", ruleSrc.Name, err)
 		}
 	})
 
 	ruleSet := utils.NewTestRuleSet(utils.RuleSetOptions{
-		Name:      "data-only-ruleset",
+		Name:      "missing-data-ruleset",
 		Namespace: testNamespace,
 		Sources: []wafv1alpha1.SourceReference{
-			{Name: "data-only-src"},
+			{Name: "missing-data-rule"},
+		},
+		Data: []wafv1alpha1.DataReference{
+			{Name: "non-existent-data"},
 		},
 	})
 	require.NoError(t, k8sClient.Create(ctx, ruleSet))
@@ -372,52 +373,63 @@ func TestRuleSetReconciler_DataOnlyRuleSetRejected(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, reconcile.Result{}, result)
 
-	cacheKey := testNamespace + "/data-only-ruleset"
+	cacheKey := testNamespace + "/missing-data-ruleset"
 	_, ok := ruleSetCache.Get(cacheKey)
-	assert.False(t, ok, "cache should be empty for data-only RuleSet")
+	assert.False(t, ok, "cache should be empty when RuleData is missing")
 
 	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: ruleSet.Name, Namespace: ruleSet.Namespace}, ruleSet))
 	ready := apimeta.FindStatusCondition(ruleSet.Status.Conditions, "Ready")
 	require.NotNil(t, ready)
 	assert.Equal(t, metav1.ConditionFalse, ready.Status)
-	assert.Equal(t, "NoRuleSources", ready.Reason)
-	assert.Contains(t, ready.Message, "at least one RuleSource of type Rule")
+	assert.Equal(t, "RuleDataNotFound", ready.Reason)
+	assert.Contains(t, ready.Message, "non-existent-data")
 
-	assert.True(t, recorder.HasEvent("Warning", "NoRuleSources"),
-		"expected Warning/NoRuleSources event; got: %v", recorder.Events)
+	assert.True(t, recorder.HasEvent("Warning", "RuleDataNotFound"),
+		"expected Warning/RuleDataNotFound event; got: %v", recorder.Events)
 }
 
 func TestRuleSetReconciler_DataSourcesDuplicateFileKeysLastListedWins(t *testing.T) {
 	ctx := context.Background()
 	ruleSetCache := cache.NewRuleSetCache()
 
-	dataFirst := utils.NewTestRuleSourceData("dup-data-first", testNamespace, map[string]string{
+	dataFirst := utils.NewTestRuleData("dup-data-first", testNamespace, map[string]string{
 		"overlap.data": "alpha",
 	})
-	dataSecond := utils.NewTestRuleSourceData("dup-data-second", testNamespace, map[string]string{
+	dataSecond := utils.NewTestRuleData("dup-data-second", testNamespace, map[string]string{
 		"overlap.data": "bravo",
 	})
 	ruleSrc := utils.NewTestRuleSource("dup-rule", testNamespace,
 		`SecRule ARGS "@pmFromFile overlap.data" "id:77777,phase:1,pass,nolog"`,
 	)
 
-	for _, obj := range []*wafv1alpha1.RuleSource{dataFirst, dataSecond, ruleSrc} {
-		rs := obj
-		require.NoError(t, k8sClient.Create(ctx, rs))
-		t.Cleanup(func() {
-			if err := k8sClient.Delete(ctx, rs); err != nil {
-				t.Logf("failed to delete %s: %v", rs.Name, err)
-			}
-		})
-	}
+	require.NoError(t, k8sClient.Create(ctx, dataFirst))
+	t.Cleanup(func() {
+		if err := k8sClient.Delete(ctx, dataFirst); err != nil {
+			t.Logf("failed to delete %s: %v", dataFirst.Name, err)
+		}
+	})
+	require.NoError(t, k8sClient.Create(ctx, dataSecond))
+	t.Cleanup(func() {
+		if err := k8sClient.Delete(ctx, dataSecond); err != nil {
+			t.Logf("failed to delete %s: %v", dataSecond.Name, err)
+		}
+	})
+	require.NoError(t, k8sClient.Create(ctx, ruleSrc))
+	t.Cleanup(func() {
+		if err := k8sClient.Delete(ctx, ruleSrc); err != nil {
+			t.Logf("failed to delete %s: %v", ruleSrc.Name, err)
+		}
+	})
 
 	ruleSet := utils.NewTestRuleSet(utils.RuleSetOptions{
 		Name:      "dup-key-ruleset",
 		Namespace: testNamespace,
 		Sources: []wafv1alpha1.SourceReference{
+			{Name: "dup-rule"},
+		},
+		Data: []wafv1alpha1.DataReference{
 			{Name: "dup-data-first"},
 			{Name: "dup-data-second"},
-			{Name: "dup-rule"},
 		},
 	})
 	require.NoError(t, k8sClient.Create(ctx, ruleSet))
@@ -443,7 +455,7 @@ func TestRuleSetReconciler_DataSourcesDuplicateFileKeysLastListedWins(t *testing
 	require.True(t, ok)
 	require.Contains(t, entry.DataFiles, "overlap.data")
 	assert.Equal(t, []byte("bravo"), entry.DataFiles["overlap.data"],
-		"later-listed Data RuleSource should overwrite the same files map key")
+		"later-listed RuleData should overwrite the same files map key")
 }
 
 func TestRuleSetReconciler_ValidateRules(t *testing.T) {
@@ -493,13 +505,13 @@ func TestRuleSetReconciler_ValidateRules(t *testing.T) {
 		})
 	}
 
-	ruleData := utils.NewTestRuleSourceData("ruledata-src", "default", map[string]string{
+	ruleData := utils.NewTestRuleData("ruledata-src", "default", map[string]string{
 		"rule1.data": "something\nanotherthing",
 	})
 	require.NoError(t, k8sClient.Create(ctx, ruleData))
 	t.Cleanup(func() {
 		if err := k8sClient.Delete(ctx, ruleData); err != nil {
-			t.Logf("Failed to delete RuleSource: %v", err)
+			t.Logf("Failed to delete RuleData: %v", err)
 		}
 	})
 
@@ -606,8 +618,10 @@ func TestRuleSetReconciler_ValidateRules(t *testing.T) {
 			Name:      "ruleset-validdata",
 			Namespace: testNamespace,
 			Sources: []wafv1alpha1.SourceReference{
-				{Name: "ruledata-src"},
 				{Name: "withdata-src"},
+			},
+			Data: []wafv1alpha1.DataReference{
+				{Name: "ruledata-src"},
 			},
 		})
 		err := k8sClient.Create(ctx, ruleSet)
@@ -708,9 +722,9 @@ func TestRuleSetReconciler_UnsupportedRules(t *testing.T) {
 	t.Run("ruleset with unsupported rule should be rejected", func(t *testing.T) {
 		ruleSetCache := cache.NewRuleSetCache()
 
-		t.Log("Creating RuleSource with an unsupported response body inspection rule")
+		t.Log("Creating RuleSource with an unsupported multipart charset detection rule")
 		rs := utils.NewTestRuleSource("unsupported-rules-src", testNamespace,
-			`SecRule RESPONSE_BODY "@rx error" "id:950150,phase:4,deny,status:403,msg:'Data leakage'"`)
+			`SecRule ARGS "@rx test" "id:922110,phase:2,deny,status:403,msg:'Multipart charset'"`)
 		require.NoError(t, k8sClient.Create(ctx, rs))
 		t.Cleanup(func() {
 			if err := k8sClient.Delete(ctx, rs); err != nil {
@@ -855,7 +869,7 @@ func TestRuleSetReconciler_UnsupportedRules(t *testing.T) {
 		})
 
 		rsUnsupported := utils.NewTestRuleSource("mix-unsupported-src", testNamespace,
-			`SecRule RESPONSE_BODY "@rx leak" "id:956100,phase:4,deny,status:403"`)
+			`SecRule ARGS "@rx leak" "id:922110,phase:2,deny,status:403"`)
 		require.NoError(t, k8sClient.Create(ctx, rsUnsupported))
 		t.Cleanup(func() {
 			if err := k8sClient.Delete(ctx, rsUnsupported); err != nil {
@@ -917,7 +931,7 @@ func TestRuleSetReconciler_UnsupportedRules(t *testing.T) {
 
 		t.Log("Creating RuleSource with unsupported rules (simulating a bad update)")
 		rs := utils.NewTestRuleSource("update-to-unsupported-rules-src", testNamespace,
-			`SecRule RESPONSE_BODY "@rx error" "id:950150,phase:4,deny,status:403,msg:'Bad update'"`)
+			`SecRule ARGS "@rx error" "id:922110,phase:2,deny,status:403,msg:'Bad update'"`)
 		require.NoError(t, k8sClient.Create(ctx, rs))
 		t.Cleanup(func() {
 			if err := k8sClient.Delete(ctx, rs); err != nil {
@@ -962,7 +976,7 @@ func TestRuleSetReconciler_UnsupportedRules(t *testing.T) {
 		ruleSetCache := cache.NewRuleSetCache()
 
 		t.Log("Creating RuleSource with an unsupported response body inspection rule")
-		const unsupportedRule = `SecRule RESPONSE_BODY "@rx error" "id:950150,phase:4,deny,status:403,msg:'Data leakage'"`
+		const unsupportedRule = `SecRule ARGS "@rx error" "id:922110,phase:2,deny,status:403,msg:'Multipart charset'"`
 		rs := utils.NewTestRuleSource("skip-annotation-rules-src", testNamespace, unsupportedRule)
 		require.NoError(t, k8sClient.Create(ctx, rs))
 		t.Cleanup(func() {

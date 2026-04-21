@@ -64,7 +64,7 @@ SecRule ARGS "@rx (?i:%27|%22|%3B|%2D%2D)" "id:13005,phase:2,deny,status:403,msg
 # Time-based blind SQLi
 SecRule ARGS "@rx (?i:(sleep|benchmark|waitfor)\s*\()" "id:13006,phase:2,deny,status:403,msg:'Time-based SQLi',log,auditlog"
 `)
-	s.CreateRuleSet(ns, "ruleset", []string{"base-rules", "sqli-rules"})
+	s.CreateRuleSet(ns, "ruleset", []string{"base-rules", "sqli-rules"}, nil)
 
 	s.CreateEngine(ns, "engine", framework.EngineOpts{
 		RuleSetName: "ruleset",
@@ -148,7 +148,7 @@ SecRule ARGS "@rx (?i:<img[^>]*onerror)" "id:13106,phase:2,deny,status:403,msg:'
 # Iframe injection
 SecRule ARGS "@rx (?i:<iframe[^>]*>)" "id:13107,phase:2,deny,status:403,msg:'Iframe XSS',log,auditlog"
 `)
-	s.CreateRuleSet(ns, "ruleset", []string{"base-rules", "xss-rules"})
+	s.CreateRuleSet(ns, "ruleset", []string{"base-rules", "xss-rules"}, nil)
 
 	s.CreateEngine(ns, "engine", framework.EngineOpts{
 		RuleSetName: "ruleset",
@@ -218,7 +218,7 @@ SecRule REQUEST_URI|ARGS "@rx %00" "id:13203,phase:1,deny,status:403,msg:'Null b
 # Sensitive file access
 SecRule REQUEST_URI "@rx (?i:(etc/passwd|etc/shadow|\.htaccess|web\.config|wp-config))" "id:13204,phase:1,deny,status:403,msg:'Sensitive file access',log,auditlog"
 `)
-	s.CreateRuleSet(ns, "ruleset", []string{"base-rules", "traversal-rules"})
+	s.CreateRuleSet(ns, "ruleset", []string{"base-rules", "traversal-rules"}, nil)
 
 	s.CreateEngine(ns, "engine", framework.EngineOpts{
 		RuleSetName: "ruleset",
@@ -285,7 +285,7 @@ SecRule ARGS "@rx (?i:(cat|ls|id|whoami|uname|pwd|wget|curl|nc|netcat)\s)" "id:1
 # Reverse shell patterns
 SecRule ARGS "@rx (?i:(/bin/(ba)?sh|/dev/tcp|mkfifo))" "id:13304,phase:2,deny,status:403,msg:'Reverse shell',log,auditlog"
 `)
-	s.CreateRuleSet(ns, "ruleset", []string{"base-rules", "cmdi-rules"})
+	s.CreateRuleSet(ns, "ruleset", []string{"base-rules", "cmdi-rules"}, nil)
 
 	s.CreateEngine(ns, "engine", framework.EngineOpts{
 		RuleSetName: "ruleset",
@@ -357,7 +357,7 @@ SecRule ARGS "@rx (?i:(127\.0\.0\.1|localhost|0\.0\.0\.0|169\.254\.))" "id:13404
 # File inclusion
 SecRule ARGS "@rx (?i:(file://|php://|expect://|data://text))" "id:13405,phase:2,deny,status:403,msg:'File inclusion',log,auditlog"
 `)
-	s.CreateRuleSet(ns, "ruleset", []string{"base-rules", "protocol-rules"})
+	s.CreateRuleSet(ns, "ruleset", []string{"base-rules", "protocol-rules"}, nil)
 
 	s.CreateEngine(ns, "engine", framework.EngineOpts{
 		RuleSetName: "ruleset",

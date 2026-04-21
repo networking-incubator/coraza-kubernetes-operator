@@ -60,7 +60,7 @@ func TestBlockByStatusCode(t *testing.T) {
 				`SecRule ARGS|REQUEST_URI "@contains %s" "id:%d,phase:2,deny,status:%d,msg:'Custom status'"`,
 				tc.target, tc.ruleID, tc.statusCode,
 			))
-			s.CreateRuleSet(ns, "ruleset", []string{"base-rules", "status-rules"})
+			s.CreateRuleSet(ns, "ruleset", []string{"base-rules", "status-rules"}, nil)
 
 			s.Step("create engine")
 			s.CreateEngine(ns, "engine", framework.EngineOpts{
@@ -146,7 +146,7 @@ SecRule ARGS|REQUEST_BODY "@contains DROP TABLE" "id:6001,phase:2,deny,status:40
 SecRule ARGS|REQUEST_BODY "@contains <script>" "id:6002,phase:2,deny,status:403,msg:'XSS in body',log,auditlog"
 SecRule ARGS|REQUEST_BODY "@contains malicious_payload" "id:6003,phase:2,deny,status:403,msg:'Malicious payload',log,auditlog"
 `)
-	s.CreateRuleSet(ns, "ruleset", []string{"base-rules", "body-rules"})
+	s.CreateRuleSet(ns, "ruleset", []string{"base-rules", "body-rules"}, nil)
 
 	s.Step("create engine")
 	s.CreateEngine(ns, "engine", framework.EngineOpts{
@@ -197,7 +197,7 @@ SecRule REQUEST_HEADERS:Cookie "@contains <script>" "id:7003,phase:1,deny,status
 SecRule REQUEST_HEADERS:X-Custom-Header "@contains attack" "id:7004,phase:1,deny,status:403,msg:'Attack in custom header',log,auditlog"
 SecRule REQUEST_HEADERS:Referer "@contains evil.com" "id:7005,phase:1,deny,status:403,msg:'Evil referer',log,auditlog"
 `)
-	s.CreateRuleSet(ns, "ruleset", []string{"base-rules", "header-rules"})
+	s.CreateRuleSet(ns, "ruleset", []string{"base-rules", "header-rules"}, nil)
 
 	s.Step("create engine")
 	s.CreateEngine(ns, "engine", framework.EngineOpts{

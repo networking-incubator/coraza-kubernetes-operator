@@ -43,7 +43,7 @@ func TestRuleSetDeletion(t *testing.T) {
 	s.Step("deploy initial rules")
 	s.CreateRuleSource(ns, "base-rules", `SecRuleEngine On`)
 	s.CreateRuleSource(ns, "block-rules", framework.SimpleBlockRule(9001, "blocked"))
-	s.CreateRuleSet(ns, "ruleset", []string{"base-rules", "block-rules"})
+	s.CreateRuleSet(ns, "ruleset", []string{"base-rules", "block-rules"}, nil)
 	s.ExpectRuleSetReady(ns, "ruleset")
 
 	s.Step("create engine")
@@ -90,7 +90,7 @@ func TestEngineDeleteRecreate(t *testing.T) {
 	s.Step("deploy rules")
 	s.CreateRuleSource(ns, "base-rules", `SecRuleEngine On`)
 	s.CreateRuleSource(ns, "block-rules", framework.SimpleBlockRule(9101, "firstblock"))
-	s.CreateRuleSet(ns, "ruleset", []string{"base-rules", "block-rules"})
+	s.CreateRuleSet(ns, "ruleset", []string{"base-rules", "block-rules"}, nil)
 
 	s.Step("create first engine")
 	s.CreateEngine(ns, "engine", framework.EngineOpts{
@@ -149,7 +149,7 @@ func TestRuleSourceDeletion(t *testing.T) {
 	s.Step("deploy rules")
 	s.CreateRuleSource(ns, "base-rules", `SecRuleEngine On`)
 	s.CreateRuleSource(ns, "block-rules", framework.SimpleBlockRule(9201, "blocked"))
-	s.CreateRuleSet(ns, "ruleset", []string{"base-rules", "block-rules"})
+	s.CreateRuleSet(ns, "ruleset", []string{"base-rules", "block-rules"}, nil)
 	s.ExpectRuleSetReady(ns, "ruleset")
 
 	s.Step("create engine")
@@ -200,7 +200,7 @@ SecRule REQUEST_URI "@beginsWith /safe" "id:9301,phase:1,pass,nolog"`)
 	// Third rule: specific override - block even safe paths with "override"
 	s.CreateRuleSource(ns, "override-rules", `SecRule REQUEST_URI "@contains override" "id:9303,phase:1,deny,status:403"`)
 
-	s.CreateRuleSet(ns, "ruleset", []string{"allow-rules", "block-rules", "override-rules"})
+	s.CreateRuleSet(ns, "ruleset", []string{"allow-rules", "block-rules", "override-rules"}, nil)
 
 	s.Step("create engine")
 	s.CreateEngine(ns, "engine", framework.EngineOpts{
@@ -235,7 +235,7 @@ func TestEmptyRuleSet(t *testing.T) {
 
 	s.Step("deploy rules with engine disabled")
 	s.CreateRuleSource(ns, "disabled-rules", `SecRuleEngine Off`)
-	s.CreateRuleSet(ns, "ruleset", []string{"disabled-rules"})
+	s.CreateRuleSet(ns, "ruleset", []string{"disabled-rules"}, nil)
 
 	s.Step("create engine")
 	s.CreateEngine(ns, "engine", framework.EngineOpts{

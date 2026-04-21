@@ -21,34 +21,25 @@ import (
 )
 
 // -----------------------------------------------------------------------------
-// RuleSource - Schema Registration
+// RuleData - Schema Registration
 // -----------------------------------------------------------------------------
 
 func init() {
-	SchemeBuilder.Register(&RuleSource{}, &RuleSourceList{})
+	SchemeBuilder.Register(&RuleData{}, &RuleDataList{})
 }
 
 // -----------------------------------------------------------------------------
-// RuleSource - Constants
+// RuleData
 // -----------------------------------------------------------------------------
 
-const (
-	// AnnotationSkipValidation controls per-fragment Coraza rule validation on
-	// a RuleSource. When set to "false", per-source validation is skipped
-	// (the aggregated RuleSet validation still runs).
-	AnnotationSkipValidation = "coraza.io/validation"
-)
-
-// -----------------------------------------------------------------------------
-// RuleSource
-// -----------------------------------------------------------------------------
-
-// RuleSource holds SecLang WAF rule text for consumption by RuleSet resources.
+// RuleData holds data file content (e.g. for @pmFromFile) for consumption by
+// RuleSet resources. Each entry in spec.files maps a filename to its content.
 //
 // +kubebuilder:object:root=true
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
-// +kubebuilder:validation:XValidation:rule="has(self.spec.rules) && self.spec.rules != \"\"",message="rules must be set and non-empty"
-type RuleSource struct {
+// +kubebuilder:validation:XValidation:rule="has(self.spec.files) && size(self.spec.files) > 0",message="files must be non-empty"
+// +kubebuilder:validation:XValidation:rule="has(self.spec.files) ? self.spec.files.all(k, k.matches('^[-._a-zA-Z0-9]+$') && size(k) <= 253) : true",message="files keys must be valid data file names (alphanumeric, '-', '_', '.'; max 253 chars)"
+type RuleData struct {
 	metav1.TypeMeta `json:",inline"`
 
 	// metadata is a standard object metadata.
@@ -56,16 +47,16 @@ type RuleSource struct {
 	// +optional
 	metav1.ObjectMeta `json:"metadata,omitzero"`
 
-	// spec defines the rule content.
+	// spec defines the data file content.
 	//
 	// +required
-	Spec RuleSourceSpec `json:"spec,omitzero"`
+	Spec RuleDataSpec `json:"spec,omitzero"`
 }
 
-// RuleSourceList contains a list of RuleSource resources.
+// RuleDataList contains a list of RuleData resources.
 //
 // +kubebuilder:object:root=true
-type RuleSourceList struct {
+type RuleDataList struct {
 	metav1.TypeMeta `json:",inline"`
 
 	// ListMeta is standard list metadata.
@@ -73,20 +64,20 @@ type RuleSourceList struct {
 	// +optional
 	metav1.ListMeta `json:"metadata,omitzero"`
 
-	// Items is the list of RuleSources.
+	// Items is the list of RuleData.
 	//
 	// +required
-	Items []RuleSource `json:"items"`
+	Items []RuleData `json:"items"`
 }
 
 // -----------------------------------------------------------------------------
-// RuleSource - Spec
+// RuleData - Spec
 // -----------------------------------------------------------------------------
 
-// RuleSourceSpec defines the content of a RuleSource.
-type RuleSourceSpec struct {
-	// rules contains SecLang rule text.
+// RuleDataSpec defines the content of a RuleData resource.
+type RuleDataSpec struct {
+	// files maps filenames to file content, used for @pmFromFile data.
 	//
 	// +required
-	Rules *string `json:"rules,omitempty"`
+	Files map[string]string `json:"files,omitempty"`
 }

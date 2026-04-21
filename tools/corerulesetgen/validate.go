@@ -56,7 +56,7 @@ func checkPayloadSize(rulesBlock string, objectName string, opts Options) error 
 	return nil
 }
 
-func checkRuleSourceDataSize(sourceName string, entries map[string]string, opts Options) error {
+func checkRuleDataSize(sourceName string, entries map[string]string, opts Options) error {
 	if opts.SkipSizeCheck {
 		return nil
 	}
@@ -64,13 +64,13 @@ func checkRuleSourceDataSize(sourceName string, entries map[string]string, opts 
 	for k, v := range entries {
 		n := len(v)
 		if n > maxRulesPayloadBytes {
-			return fmt.Errorf("RuleSource %q file %q is about %d bytes (limit %d per value): trim data files or pass --skip-size-check to override (not recommended)",
+			return fmt.Errorf("RuleData %q file %q is about %d bytes (limit %d per value): trim data files or pass --skip-size-check to override (not recommended)",
 				sourceName, k, n, maxRulesPayloadBytes)
 		}
 		total += n
 	}
 	if total > maxDataFilesTotalBytes {
-		return fmt.Errorf("RuleSource %q files total is about %d bytes (limit %d): split data across RuleSources or pass --skip-size-check to override (not recommended)",
+		return fmt.Errorf("RuleData %q files total is about %d bytes (limit %d): split data across RuleData resources or pass --skip-size-check to override (not recommended)",
 			sourceName, total, maxDataFilesTotalBytes)
 	}
 	return nil
@@ -89,7 +89,7 @@ func validateRuleSourceObjectName(name string) error {
 // valid for the apiserver.
 func validateDataFileKey(key string) error {
 	if errs := validation.IsConfigMapKey(key); len(errs) > 0 {
-		return fmt.Errorf("invalid RuleSource files key %q (from data filename): %s", key, strings.Join(errs, "; "))
+		return fmt.Errorf("invalid RuleData files key %q (from data filename): %s", key, strings.Join(errs, "; "))
 	}
 	return nil
 }

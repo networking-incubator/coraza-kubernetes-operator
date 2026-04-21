@@ -49,3 +49,23 @@ func (r *RuleSetReconciler) findRuleSetsForRuleSource(ctx context.Context, ruleS
 		return false
 	})
 }
+
+// findRuleSetsForRuleData maps a RuleData to the RuleSets that reference it (if any).
+func (r *RuleSetReconciler) findRuleSetsForRuleData(ctx context.Context, ruleData client.Object) []reconcile.Request {
+	log := logf.FromContext(ctx)
+
+	var ruleSetList wafv1alpha1.RuleSetList
+	if err := r.List(ctx, &ruleSetList, client.InNamespace(ruleData.GetNamespace())); err != nil {
+		log.Error(err, "RuleSet: Failed to list RuleSets", "namespace", ruleData.GetNamespace())
+		return nil
+	}
+
+	return collectRequests(ruleSetList.Items, func(rs *wafv1alpha1.RuleSet) bool {
+		for _, d := range rs.Spec.Data {
+			if d.Name == ruleData.GetName() {
+				return true
+			}
+		}
+		return false
+	})
+}

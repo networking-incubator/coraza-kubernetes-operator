@@ -91,15 +91,23 @@ type RuleSetList struct {
 // RuleSetSpec defines the desired state of RuleSet.
 type RuleSetSpec struct {
 	// sources is an ordered list of references to RuleSource objects in the
-	// same namespace as the RuleSet. Rule-type sources are concatenated in
-	// list order to form the aggregated SecLang string. Data-type sources
-	// are merged to provide the filesystem for @pmFromFile directives.
+	// same namespace as the RuleSet. Sources are concatenated in list order
+	// to form the aggregated SecLang string.
 	//
 	// +required
 	// +kubebuilder:validation:MinItems=1
 	// +kubebuilder:validation:MaxItems=2048
 	// +listType=atomic
 	Sources []SourceReference `json:"sources,omitempty"`
+
+	// data is an optional list of references to RuleData objects in the same
+	// namespace as the RuleSet. Data entries are merged to provide the
+	// filesystem for @pmFromFile directives (last-listed wins on duplicate keys).
+	//
+	// +optional
+	// +kubebuilder:validation:MaxItems=256
+	// +listType=atomic
+	Data []DataReference `json:"data,omitempty"`
 }
 
 // -----------------------------------------------------------------------------
@@ -131,6 +139,17 @@ type RuleSetCacheServerConfig struct {
 // as the RuleSet.
 type SourceReference struct {
 	// name is the name of the RuleSource in the same namespace as the RuleSet.
+	//
+	// +required
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	Name string `json:"name,omitempty"`
+}
+
+// DataReference is a reference to a RuleData object in the same namespace
+// as the RuleSet.
+type DataReference struct {
+	// name is the name of the RuleData in the same namespace as the RuleSet.
 	//
 	// +required
 	// +kubebuilder:validation:MinLength=1

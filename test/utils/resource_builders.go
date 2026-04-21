@@ -20,6 +20,7 @@ package utils
 
 import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/utils/ptr"
 
 	wafv1alpha1 "github.com/networking-incubator/coraza-kubernetes-operator/api/v1alpha1"
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/defaults"
@@ -29,7 +30,7 @@ import (
 // Test Resource Builders - RuleSource
 // -----------------------------------------------------------------------------
 
-// NewTestRuleSource creates a test RuleSource of type Rule with the given rules text.
+// NewTestRuleSource creates a test RuleSource with the given rules text.
 func NewTestRuleSource(name, namespace, rules string) *wafv1alpha1.RuleSource {
 	return &wafv1alpha1.RuleSource{
 		ObjectMeta: metav1.ObjectMeta{
@@ -37,21 +38,23 @@ func NewTestRuleSource(name, namespace, rules string) *wafv1alpha1.RuleSource {
 			Namespace: namespace,
 		},
 		Spec: wafv1alpha1.RuleSourceSpec{
-			Type:  wafv1alpha1.RuleSourceTypeRule,
 			Rules: ptr.To(rules),
 		},
 	}
 }
 
-// NewTestRuleSourceData creates a test RuleSource of type Data with the given files.
-func NewTestRuleSourceData(name, namespace string, files map[string]string) *wafv1alpha1.RuleSource {
-	return &wafv1alpha1.RuleSource{
+// -----------------------------------------------------------------------------
+// Test Resource Builders - RuleData
+// -----------------------------------------------------------------------------
+
+// NewTestRuleData creates a test RuleData with the given files.
+func NewTestRuleData(name, namespace string, files map[string]string) *wafv1alpha1.RuleData {
+	return &wafv1alpha1.RuleData{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
 			Namespace: namespace,
 		},
-		Spec: wafv1alpha1.RuleSourceSpec{
-			Type:  wafv1alpha1.RuleSourceTypeData,
+		Spec: wafv1alpha1.RuleDataSpec{
 			Files: files,
 		},
 	}
@@ -66,6 +69,7 @@ type RuleSetOptions struct {
 	Name      string
 	Namespace string
 	Sources   []wafv1alpha1.SourceReference
+	Data      []wafv1alpha1.DataReference
 }
 
 // NewTestRuleSet creates a test RuleSet resource with sensible defaults
@@ -89,6 +93,7 @@ func NewTestRuleSet(opts RuleSetOptions) *wafv1alpha1.RuleSet {
 		},
 		Spec: wafv1alpha1.RuleSetSpec{
 			Sources: opts.Sources,
+			Data:    opts.Data,
 		},
 	}
 

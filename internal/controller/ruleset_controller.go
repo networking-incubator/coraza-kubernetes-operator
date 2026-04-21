@@ -47,6 +47,7 @@ import (
 // +kubebuilder:rbac:groups=waf.k8s.coraza.io,resources=rulesets,verbs=get;list;watch;patch;update
 // +kubebuilder:rbac:groups=waf.k8s.coraza.io,resources=rulesets/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=waf.k8s.coraza.io,resources=rulesources,verbs=get;list;watch
+// +kubebuilder:rbac:groups=waf.k8s.coraza.io,resources=ruledata,verbs=get;list;watch
 
 // -----------------------------------------------------------------------------
 // RuleSetReconciler
@@ -62,25 +63,26 @@ type RuleSetReconciler struct {
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *RuleSetReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	if err := mgr.GetFieldIndexer().IndexField(context.Background(), &wafv1alpha1.RuleSet{}, "spec.rules.name", func(obj client.Object) []string {
+	if err := mgr.GetFieldIndexer().IndexField(context.Background(), &wafv1alpha1.RuleSet{}, "spec.sources.name", func(obj client.Object) []string {
 		rs := obj.(*wafv1alpha1.RuleSet)
-		names := make([]string, len(rs.Spec.Rules))
-		for i, rule := range rs.Spec.Rules {
-			names[i] = rule.Name
+		names := make([]string, len(rs.Spec.Sources))
+		for i, src := range rs.Spec.Sources {
+			names[i] = src.Name
 		}
 		return names
 	}); err != nil {
-		return fmt.Errorf("index spec.rules.name: %w", err)
+		return fmt.Errorf("index spec.sources.name: %w", err)
 	}
 
-	if err := mgr.GetFieldIndexer().IndexField(context.Background(), &wafv1alpha1.RuleSet{}, "spec.ruleData", func(obj client.Object) []string {
+	if err := mgr.GetFieldIndexer().IndexField(context.Background(), &wafv1alpha1.RuleSet{}, "spec.data.name", func(obj client.Object) []string {
 		rs := obj.(*wafv1alpha1.RuleSet)
-		if rs.Spec.RuleData != "" {
-			return []string{rs.Spec.RuleData}
+		names := make([]string, len(rs.Spec.Data))
+		for i, d := range rs.Spec.Data {
+			names[i] = d.Name
 		}
-		return nil
+		return names
 	}); err != nil {
-		return fmt.Errorf("index spec.ruleData: %w", err)
+		return fmt.Errorf("index spec.data.name: %w", err)
 	}
 
 	return ctrl.NewControllerManagedBy(mgr).
@@ -91,6 +93,10 @@ func (r *RuleSetReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(
 			&wafv1alpha1.RuleSource{},
 			handler.EnqueueRequestsFromMapFunc(r.findRuleSetsForRuleSource),
+		).
+		Watches(
+			&wafv1alpha1.RuleData{},
+			handler.EnqueueRequestsFromMapFunc(r.findRuleSetsForRuleData),
 		).
 		WithOptions(controller.Options{
 			RateLimiter: workqueue.NewTypedItemExponentialFailureRateLimiter[ctrl.Request](
@@ -126,8 +132,14 @@ func (r *RuleSetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, err
 	}
 
+	logDebug(log, req, "RuleSet", "Loading RuleData objects")
+	dataFiles, done, err := r.loadData(ctx, log, req, &ruleset)
+	if done || err != nil {
+		return ctrl.Result{}, err
+	}
+
 	logDebug(log, req, "RuleSet", "Loading RuleSource objects")
-	dataFiles, aggregatedRules, aggregatedErrors, done, err := r.loadSources(ctx, log, req, &ruleset)
+	aggregatedRules, aggregatedErrors, done, err := r.loadSources(ctx, log, req, &ruleset, dataFiles)
 	if done || err != nil {
 		return ctrl.Result{}, err
 	}

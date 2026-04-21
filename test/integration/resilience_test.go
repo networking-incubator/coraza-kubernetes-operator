@@ -44,7 +44,7 @@ func TestRapidRuleUpdates(t *testing.T) {
 	s.Step("deploy initial rules")
 	s.CreateRuleSource(ns, "base-rules", `SecRuleEngine On`)
 	s.CreateRuleSource(ns, "block-rules", framework.SimpleBlockRule(11001, "initial"))
-	s.CreateRuleSet(ns, "ruleset", []string{"base-rules", "block-rules"})
+	s.CreateRuleSet(ns, "ruleset", []string{"base-rules", "block-rules"}, nil)
 
 	s.CreateEngine(ns, "engine", framework.EngineOpts{
 		RuleSetName: "ruleset",
@@ -94,7 +94,7 @@ func TestGatewayPodRestart(t *testing.T) {
 	s.Step("deploy rules")
 	s.CreateRuleSource(ns, "base-rules", `SecRuleEngine On`)
 	s.CreateRuleSource(ns, "block-rules", framework.SimpleBlockRule(11201, "blocked"))
-	s.CreateRuleSet(ns, "ruleset", []string{"base-rules", "block-rules"})
+	s.CreateRuleSet(ns, "ruleset", []string{"base-rules", "block-rules"}, nil)
 
 	s.CreateEngine(ns, "engine", framework.EngineOpts{
 		RuleSetName: "ruleset",
@@ -151,7 +151,7 @@ func TestEngineRecreateAfterGateway(t *testing.T) {
 	s.Step("deploy rules")
 	s.CreateRuleSource(ns, "base-rules", `SecRuleEngine On`)
 	s.CreateRuleSource(ns, "block-rules", framework.SimpleBlockRule(11301, "blocked"))
-	s.CreateRuleSet(ns, "ruleset", []string{"base-rules", "block-rules"})
+	s.CreateRuleSet(ns, "ruleset", []string{"base-rules", "block-rules"}, nil)
 
 	s.Step("create engine before gateway exists")
 	s.CreateEngine(ns, "engine", framework.EngineOpts{
@@ -202,7 +202,7 @@ func TestConcurrentRuleSetUpdates(t *testing.T) {
 
 	for _, e := range engines {
 		s.CreateRuleSource(ns, fmt.Sprintf("rules-%s", e.name), framework.SimpleBlockRule(e.ruleID, e.pattern))
-		s.CreateRuleSet(ns, fmt.Sprintf("ruleset-%s", e.name), []string{"base-rules", fmt.Sprintf("rules-%s", e.name)})
+		s.CreateRuleSet(ns, fmt.Sprintf("ruleset-%s", e.name), []string{"base-rules", fmt.Sprintf("rules-%s", e.name)}, nil)
 		s.CreateEngine(ns, e.name, framework.EngineOpts{
 			RuleSetName: fmt.Sprintf("ruleset-%s", e.name),
 			GatewayName: "gw",

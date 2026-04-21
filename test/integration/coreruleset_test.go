@@ -87,7 +87,7 @@ SecRule ARGS "@rx (?i:<script[^>]*>)" \
   severity:'CRITICAL'"
 `)
 
-	s.CreateRuleSet(ns, "crs-ruleset", []string{"base-rules", "sqli-rules", "xss-rules"})
+	s.CreateRuleSet(ns, "crs-ruleset", []string{"base-rules", "sqli-rules", "xss-rules"}, nil)
 
 	// -------------------------------------------------------------------------
 	// Step 3: Create Engine targeting the gateway

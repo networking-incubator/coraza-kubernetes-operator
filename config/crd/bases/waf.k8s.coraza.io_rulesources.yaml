@@ -15,19 +15,14 @@ spec:
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
-    - jsonPath: .spec.type
-      name: Type
-      type: string
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
     name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: |-
-          RuleSource holds WAF rule text or data file content for consumption by
-          RuleSet resources. It replaces the previous use of ConfigMaps (for rules)
-          and Secrets (for @pmFromFile data) as storage for WAF rule material.
+        description: RuleSource holds SecLang WAF rule text for consumption by RuleSet
+          resources.
         properties:
           apiVersion:
             description: |-
@@ -47,49 +42,20 @@ spec:
           metadata:
             type: object
           spec:
-            description: spec defines the rule or data content.
+            description: spec defines the rule content.
             properties:
-              files:
-                additionalProperties:
-                  type: string
-                description: |-
-                  files maps filenames to file content, used for @pmFromFile data.
-                  Required when type is Data; must not be set when type is Rule.
-                type: object
               rules:
-                description: |-
-                  rules contains SecLang rule text. Required when type is Rule;
-                  must not be set when type is Data.
-                type: string
-              type:
-                description: type discriminates between Rule and Data fragments.
-                enum:
-                - Rule
-                - Data
+                description: rules contains SecLang rule text.
                 type: string
             required:
-            - type
+            - rules
             type: object
         required:
         - spec
         type: object
         x-kubernetes-validations:
-        - message: rules must be set and non-empty when type is Rule
-          rule: 'self.spec.type == ''Rule'' ? has(self.spec.rules) && self.spec.rules
-            != "" : true'
-        - message: files must not be set when type is Rule
-          rule: 'self.spec.type == ''Rule'' ? !has(self.spec.files) || size(self.spec.files)
-            == 0 : true'
-        - message: files must be non-empty when type is Data
-          rule: 'self.spec.type == ''Data'' ? has(self.spec.files) && size(self.spec.files)
-            > 0 : true'
-        - message: rules must not be set when type is Data
-          rule: 'self.spec.type == ''Data'' ? !has(self.spec.rules) || self.spec.rules
-            == "" : true'
-        - message: files keys must be valid data file names (alphanumeric, '-', '_',
-            '.'; max 253 chars)
-          rule: 'self.spec.type == ''Data'' && has(self.spec.files) ? self.spec.files.all(k,
-            k.matches(''^[-._a-zA-Z0-9]+$'') && size(k) <= 253) : true'
+        - message: rules must be set and non-empty
+          rule: has(self.spec.rules) && self.spec.rules != ""
     served: true
     storage: true
     subresources: {}

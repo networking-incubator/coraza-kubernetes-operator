@@ -128,7 +128,7 @@ func Generate(out io.Writer, opts Options) (*Result, error) {
 		stderrf(opts.Stderr, "\nProcessing %d data files...\n\n", len(scan.DataPaths))
 		for _, p := range scan.DataPaths {
 			stderrf(opts.Stderr, "Processing: %s\n", filepath.Base(p))
-			stderrf(opts.Stderr, "  [ok] Added to RuleSource (Data): %s\n", opts.DataSourceName)
+			stderrf(opts.Stderr, "  [ok] Added to RuleData: %s\n", opts.DataSourceName)
 		}
 	}
 
@@ -154,7 +154,7 @@ func Generate(out io.Writer, opts Options) (*Result, error) {
 
 func writeGenerateSummary(stderr io.Writer, pmFromFileRefs, noDataFiles bool, processed, skipped, ruleSourceCount, dataFileCount int, dataSourceName string) {
 	if pmFromFileRefs && noDataFiles {
-		stderrln(stderr, "warning: @pmFromFile references found under the rules directory but no .data files were emitted into a RuleSource; add matching .data files or use --ignore-pmFromFile if the operator should not load pmFromFile data.")
+		stderrln(stderr, "warning: @pmFromFile references found under the rules directory but no .data files were emitted into a RuleData; add matching .data files or use --ignore-pmFromFile if the operator should not load pmFromFile data.")
 	}
 	stderrf(stderr, "\n%s\n", strings.Repeat("=", 60))
 	stderrln(stderr, "Summary:")
@@ -164,7 +164,7 @@ func writeGenerateSummary(stderr io.Writer, pmFromFileRefs, noDataFiles bool, pr
 	stderrf(stderr, "  Total RuleSources: %d\n", ruleSourceCount+1)
 	stderrf(stderr, "  Data files: %d\n", dataFileCount)
 	if dataFileCount > 0 {
-		stderrf(stderr, "  Data RuleSource: %s\n", dataSourceName)
+		stderrf(stderr, "  RuleData: %s\n", dataSourceName)
 	}
 	stderrf(stderr, "%s\n\n", strings.Repeat("=", 60))
 }

@@ -33,7 +33,7 @@ type ConfFileResult struct {
 type ManifestBundle struct {
 	BaseRuleSourceYAML string
 	ExtraRuleSources   []NamedYAML
-	DataRuleSourceDoc  string
+	DataRuleDataDoc    string
 	RuleSetDoc         string
 	Stats              BuildStats
 	ConfFileResults    []ConfFileResult
@@ -79,7 +79,7 @@ func Build(opts Options, scan ScanResult, ver CRSVersion) (*ManifestBundle, erro
 	dataDoc := ""
 	if len(scan.DataPaths) > 0 {
 		var serr error
-		dataDoc, serr = buildDataRuleSourceYAML(scan.DataPaths, opts)
+		dataDoc, serr = buildRuleDataYAML(scan.DataPaths, opts)
 		if serr != nil {
 			return nil, serr
 		}
@@ -90,7 +90,7 @@ func Build(opts Options, scan ScanResult, ver CRSVersion) (*ManifestBundle, erro
 	return &ManifestBundle{
 		BaseRuleSourceYAML: baseYAML,
 		ExtraRuleSources:   extra,
-		DataRuleSourceDoc:  dataDoc,
+		DataRuleDataDoc:    dataDoc,
 		RuleSetDoc:         rs,
 		Stats:              BuildStats{Processed: processed, Skipped: skipped},
 		ConfFileResults:    confResults,

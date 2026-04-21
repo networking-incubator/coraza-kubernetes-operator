@@ -32,6 +32,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/utils/ptr"
 
 	wafv1alpha1 "github.com/networking-incubator/coraza-kubernetes-operator/api/v1alpha1"
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/defaults"
@@ -65,6 +66,11 @@ var (
 	// RuleSourceGVR is the GroupVersionResource for RuleSource resources.
 	RuleSourceGVR = schema.GroupVersionResource{
 		Group: "waf.k8s.coraza.io", Version: "v1alpha1", Resource: "rulesources",
+	}
+
+	// RuleDataGVR is the GroupVersionResource for RuleData resources.
+	RuleDataGVR = schema.GroupVersionResource{
+		Group: "waf.k8s.coraza.io", Version: "v1alpha1", Resource: "ruledata",
 	}
 
 	// GatewayGVR is the GroupVersionResource for Gateway resources.
@@ -202,12 +208,17 @@ func (f *Framework) BuildGateway(namespace, name, gatewayClassName string) *unst
 }
 
 // BuildRuleSet builds an unstructured RuleSet object.
-// Each entry in sourceNames refers to a RuleSource by name in the same
-// namespace as the RuleSet.
-func BuildRuleSet(namespace, name string, sourceNames []string) *unstructured.Unstructured {
+// sourceNames refers to RuleSource objects and dataNames refers to RuleData
+// objects, all in the same namespace as the RuleSet.
+func BuildRuleSet(namespace, name string, sourceNames, dataNames []string) *unstructured.Unstructured {
 	sources := make([]wafv1alpha1.SourceReference, len(sourceNames))
 	for i, n := range sourceNames {
 		sources[i] = wafv1alpha1.SourceReference{Name: n}
+	}
+
+	var data []wafv1alpha1.DataReference
+	for _, n := range dataNames {
+		data = append(data, wafv1alpha1.DataReference{Name: n})
 	}
 
 	rs := &wafv1alpha1.RuleSet{
@@ -221,6 +232,7 @@ func BuildRuleSet(namespace, name string, sourceNames []string) *unstructured.Un
 		},
 		Spec: wafv1alpha1.RuleSetSpec{
 			Sources: sources,
+			Data:    data,
 		},
 	}
 	return toUnstructured(rs)
@@ -309,31 +321,9 @@ func BuildHTTPRoute(namespace, name, gatewayName, backendName string) *unstructu
 // Scenario - Resource Creation Methods
 // -----------------------------------------------------------------------------
 
-// CreateRuleSource creates a RuleSource of type Rule with the given SecLang
-// text and registers cleanup.
+// CreateRuleSource creates a RuleSource with the given SecLang text and
+// registers cleanup.
 func (s *Scenario) CreateRuleSource(namespace, name, rules string) {
-	s.T.Helper()
-	s.createRuleSource(namespace, name, wafv1alpha1.RuleSourceSpec{
-		Type:  wafv1alpha1.RuleSourceTypeRule,
-		Rules: ptr.To(rules),
-	}, "create RuleSource", "Rule")
-}
-
-// CreateRuleSourceData creates a RuleSource of type Data with the given file
-// map and registers cleanup.
-func (s *Scenario) CreateRuleSourceData(namespace, name string, files map[string]string) {
-	s.T.Helper()
-	s.createRuleSource(namespace, name, wafv1alpha1.RuleSourceSpec{
-		Type:  wafv1alpha1.RuleSourceTypeData,
-		Files: files,
-	}, "create RuleSource (Data)", "Data")
-}
-
-func (s *Scenario) createRuleSource(
-	namespace, name string,
-	spec wafv1alpha1.RuleSourceSpec,
-	createErrPrefix, typeLogName string,
-) {
 	s.T.Helper()
 	ctx := s.T.Context()
 	rs := &wafv1alpha1.RuleSource{
@@ -345,20 +335,53 @@ func (s *Scenario) createRuleSource(
 			Name:      name,
 			Namespace: namespace,
 		},
-		Spec: spec,
+		Spec: wafv1alpha1.RuleSourceSpec{
+			Rules: ptr.To(rules),
+		},
 	}
 	obj := toUnstructured(rs)
 	_, err := s.F.DynamicClient.Resource(RuleSourceGVR).Namespace(namespace).Create(
 		ctx, obj, metav1.CreateOptions{},
 	)
-	require.NoError(s.T, err, "%s %s/%s", createErrPrefix, namespace, name)
-	s.T.Logf("Created RuleSource (%s): %s/%s", typeLogName, namespace, name)
+	require.NoError(s.T, err, "create RuleSource %s/%s", namespace, name)
+	s.T.Logf("Created RuleSource: %s/%s", namespace, name)
 	s.OnCleanup(func() {
-		// Background: test context may already be cancelled; cleanup must still run.
 		if err := s.F.DynamicClient.Resource(RuleSourceGVR).Namespace(namespace).Delete(
 			context.Background(), name, metav1.DeleteOptions{},
 		); err != nil {
 			s.T.Logf("cleanup: failed to delete RuleSource %s/%s: %v", namespace, name, err)
+		}
+	})
+}
+
+// CreateRuleData creates a RuleData with the given file map and registers cleanup.
+func (s *Scenario) CreateRuleData(namespace, name string, files map[string]string) {
+	s.T.Helper()
+	ctx := s.T.Context()
+	rd := &wafv1alpha1.RuleData{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: wafv1alpha1.GroupVersion.String(),
+			Kind:       "RuleData",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: namespace,
+		},
+		Spec: wafv1alpha1.RuleDataSpec{
+			Files: files,
+		},
+	}
+	obj := toUnstructured(rd)
+	_, err := s.F.DynamicClient.Resource(RuleDataGVR).Namespace(namespace).Create(
+		ctx, obj, metav1.CreateOptions{},
+	)
+	require.NoError(s.T, err, "create RuleData %s/%s", namespace, name)
+	s.T.Logf("Created RuleData: %s/%s", namespace, name)
+	s.OnCleanup(func() {
+		if err := s.F.DynamicClient.Resource(RuleDataGVR).Namespace(namespace).Delete(
+			context.Background(), name, metav1.DeleteOptions{},
+		); err != nil {
+			s.T.Logf("cleanup: failed to delete RuleData %s/%s: %v", namespace, name, err)
 		}
 	})
 }
@@ -391,6 +414,17 @@ func (s *Scenario) DeleteRuleSource(namespace, name string) {
 	)
 	require.NoError(s.T, err, "delete RuleSource %s/%s", namespace, name)
 	s.T.Logf("Deleted RuleSource %s/%s", namespace, name)
+}
+
+// DeleteRuleData deletes a RuleData in the namespace.
+func (s *Scenario) DeleteRuleData(namespace, name string) {
+	s.T.Helper()
+	ctx := s.T.Context()
+	err := s.F.DynamicClient.Resource(RuleDataGVR).Namespace(namespace).Delete(
+		ctx, name, metav1.DeleteOptions{},
+	)
+	require.NoError(s.T, err, "delete RuleData %s/%s", namespace, name)
+	s.T.Logf("Deleted RuleData %s/%s", namespace, name)
 }
 
 // CreateGateway creates a Gateway resource and registers cleanup.
@@ -454,14 +488,13 @@ func (s *Scenario) CreateGatewayWithClass(namespace, name, gatewayClassName stri
 
 // CreateRuleSet creates a RuleSet resource and registers cleanup. Fails the
 // test on error. Use TryCreateRuleSet to get the error instead.
-func (s *Scenario) CreateRuleSet(namespace, name string, sourceNames []string) {
+func (s *Scenario) CreateRuleSet(namespace, name string, sourceNames, dataNames []string) {
 	s.T.Helper()
-	err := s.TryCreateRuleSet(namespace, name, sourceNames)
+	err := s.TryCreateRuleSet(namespace, name, sourceNames, dataNames)
 	require.NoError(s.T, err, "create RuleSet %s/%s", namespace, name)
 
 	s.T.Logf("Created RuleSet: %s/%s", namespace, name)
 	s.OnCleanup(func() {
-		// Background: test context may already be cancelled; cleanup must still run.
 		if err := s.F.DynamicClient.Resource(RuleSetGVR).Namespace(namespace).Delete(
 			context.Background(), name, metav1.DeleteOptions{},
 		); err != nil {
@@ -472,8 +505,8 @@ func (s *Scenario) CreateRuleSet(namespace, name string, sourceNames []string) {
 
 // TryCreateRuleSet attempts to create a RuleSet and returns any error.
 // Use this when testing validation rejection.
-func (s *Scenario) TryCreateRuleSet(namespace, name string, sourceNames []string) error {
-	obj := BuildRuleSet(namespace, name, sourceNames)
+func (s *Scenario) TryCreateRuleSet(namespace, name string, sourceNames, dataNames []string) error {
+	obj := BuildRuleSet(namespace, name, sourceNames, dataNames)
 	_, err := s.F.DynamicClient.Resource(RuleSetGVR).Namespace(namespace).Create(
 		s.T.Context(), obj, metav1.CreateOptions{},
 	)

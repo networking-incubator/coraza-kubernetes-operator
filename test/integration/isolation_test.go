@@ -42,7 +42,7 @@ func TestCrossNamespaceIsolation(t *testing.T) {
 	s.Step("deploy strict blocking rules in namespace A")
 	s.CreateRuleSource(nsA, "base-rules", `SecRuleEngine On`)
 	s.CreateRuleSource(nsA, "strict-rules", framework.SimpleBlockRule(10001, "blocked"))
-	s.CreateRuleSet(nsA, "ruleset", []string{"base-rules", "strict-rules"})
+	s.CreateRuleSet(nsA, "ruleset", []string{"base-rules", "strict-rules"}, nil)
 
 	s.CreateEngine(nsA, "engine", framework.EngineOpts{
 		RuleSetName: "ruleset",
@@ -63,7 +63,7 @@ func TestCrossNamespaceIsolation(t *testing.T) {
 	s.CreateRuleSource(nsB, "base-rules", `SecRuleEngine On`)
 	// Different rule - only blocks "different-pattern"
 	s.CreateRuleSource(nsB, "permissive-rules", framework.SimpleBlockRule(10002, "different-pattern"))
-	s.CreateRuleSet(nsB, "ruleset", []string{"base-rules", "permissive-rules"})
+	s.CreateRuleSet(nsB, "ruleset", []string{"base-rules", "permissive-rules"}, nil)
 
 	s.CreateEngine(nsB, "engine", framework.EngineOpts{
 		RuleSetName: "ruleset",

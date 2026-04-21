@@ -27,7 +27,7 @@ func TestBuild_minimal_statsAndConfResults(t *testing.T) {
 	require.Equal(t, 1, bundle.Stats.Skipped)
 	require.Len(t, bundle.ExtraRuleSources, 1)
 	require.Equal(t, "simple", bundle.ExtraRuleSources[0].Name)
-	require.Empty(t, bundle.DataRuleSourceDoc)
+	require.Empty(t, bundle.DataRuleDataDoc)
 
 	require.Len(t, bundle.ConfFileResults, 2)
 	require.Equal(t, "empty.conf", bundle.ConfFileResults[0].BaseName)
@@ -63,7 +63,7 @@ func TestBuild_emptyRulesDirectory(t *testing.T) {
 	require.Empty(t, bundle.ConfFileResults)
 	require.Equal(t, 0, bundle.Stats.Processed)
 	require.Equal(t, 0, bundle.Stats.Skipped)
-	require.Empty(t, bundle.DataRuleSourceDoc)
+	require.Empty(t, bundle.DataRuleDataDoc)
 	require.Contains(t, bundle.RuleSetDoc, "name: only-base")
 	require.Contains(t, bundle.RuleSetDoc, "- name: base-rules")
 }
@@ -120,11 +120,10 @@ func TestBuild_withDataFiles_emitsDataRuleSource(t *testing.T) {
 	}, scan, ver)
 	require.NoError(t, err)
 
-	require.NotEmpty(t, bundle.DataRuleSourceDoc)
-	require.Contains(t, bundle.DataRuleSourceDoc, "kind: RuleSource")
-	require.Contains(t, bundle.DataRuleSourceDoc, "name: coreruleset-data")
-	require.Contains(t, bundle.DataRuleSourceDoc, "type: Data")
-	require.Contains(t, bundle.DataRuleSourceDoc, "foo.data:")
+	require.NotEmpty(t, bundle.DataRuleDataDoc)
+	require.Contains(t, bundle.DataRuleDataDoc, "kind: RuleData")
+	require.Contains(t, bundle.DataRuleDataDoc, "name: coreruleset-data")
+	require.Contains(t, bundle.DataRuleDataDoc, "foo.data:")
 	require.Contains(t, bundle.RuleSetDoc, "- name: coreruleset-data")
 }
 
@@ -142,7 +141,7 @@ func TestBuild_rejectsInvalidDataFileKeyFromFilename(t *testing.T) {
 		DataSourceName: "coreruleset-data",
 	}, scan, ver)
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "invalid RuleSource files key")
+	require.Contains(t, err.Error(), "invalid RuleData files key")
 }
 
 func TestBuild_ignoreRuleIDs_dropsRuleFromExtraRuleSource(t *testing.T) {
@@ -232,14 +231,14 @@ func TestBuild_excludesUnsupportedRulesWithWASMProfile(t *testing.T) {
 		RulesDir:               tmp,
 		Version:                "4.24.1",
 		RuleSetName:            "rs",
-		DataSecretName:         "ds",
+		DataSourceName:         "ds",
 		IgnoreUnsupportedRules: "wasm",
 	}, scan, ver)
 	require.NoError(t, err)
 
-	require.Len(t, bundle.ExtraConfigMaps, 1)
-	require.NotContains(t, bundle.ExtraConfigMaps[0].Doc, "id:922110,")
-	require.Contains(t, bundle.ExtraConfigMaps[0].Doc, "id:42,")
+	require.Len(t, bundle.ExtraRuleSources, 1)
+	require.NotContains(t, bundle.ExtraRuleSources[0].Doc, "id:922110,")
+	require.Contains(t, bundle.ExtraRuleSources[0].Doc, "id:42,")
 }
 
 func TestBuild_includesUnsupportedRulesWhenProfileNone(t *testing.T) {
@@ -258,14 +257,14 @@ func TestBuild_includesUnsupportedRulesWhenProfileNone(t *testing.T) {
 		RulesDir:               tmp,
 		Version:                "4.24.1",
 		RuleSetName:            "rs",
-		DataSecretName:         "ds",
+		DataSourceName:         "ds",
 		IgnoreUnsupportedRules: "none",
 	}, scan, ver)
 	require.NoError(t, err)
 
-	require.Len(t, bundle.ExtraConfigMaps, 1)
-	require.Contains(t, bundle.ExtraConfigMaps[0].Doc, "id:922110,")
-	require.Contains(t, bundle.ExtraConfigMaps[0].Doc, "id:42,")
+	require.Len(t, bundle.ExtraRuleSources, 1)
+	require.Contains(t, bundle.ExtraRuleSources[0].Doc, "id:922110,")
+	require.Contains(t, bundle.ExtraRuleSources[0].Doc, "id:42,")
 }
 
 func TestBuild_profileMergesWithUserIgnoreIDs(t *testing.T) {
@@ -285,16 +284,16 @@ func TestBuild_profileMergesWithUserIgnoreIDs(t *testing.T) {
 		RulesDir:               tmp,
 		Version:                "4.24.1",
 		RuleSetName:            "rs",
-		DataSecretName:         "ds",
+		DataSourceName:         "ds",
 		IgnoreRuleIDs:          map[string]struct{}{"42": {}},
 		IgnoreUnsupportedRules: "wasm",
 	}, scan, ver)
 	require.NoError(t, err)
 
-	require.Len(t, bundle.ExtraConfigMaps, 1)
-	require.NotContains(t, bundle.ExtraConfigMaps[0].Doc, "id:922110,")
-	require.NotContains(t, bundle.ExtraConfigMaps[0].Doc, "id:42,")
-	require.Contains(t, bundle.ExtraConfigMaps[0].Doc, "id:99,")
+	require.Len(t, bundle.ExtraRuleSources, 1)
+	require.NotContains(t, bundle.ExtraRuleSources[0].Doc, "id:922110,")
+	require.NotContains(t, bundle.ExtraRuleSources[0].Doc, "id:42,")
+	require.Contains(t, bundle.ExtraRuleSources[0].Doc, "id:99,")
 }
 
 func TestBuild_confResultWarnsWhenIgnoringPMFromFile(t *testing.T) {
@@ -343,13 +342,13 @@ func TestBuild_unknownProfileSkipsRegistryMerge(t *testing.T) {
 		RulesDir:               tmp,
 		Version:                "4.24.1",
 		RuleSetName:            "rs",
-		DataSecretName:         "ds",
+		DataSourceName:         "ds",
 		IgnoreUnsupportedRules: "ext_proc",
 	}, scan, ver)
 	require.NoError(t, err)
 
-	require.Len(t, bundle.ExtraConfigMaps, 1)
-	require.Contains(t, bundle.ExtraConfigMaps[0].Doc, "id:922110,", "unknown profile must not merge WASM registry IDs")
+	require.Len(t, bundle.ExtraRuleSources, 1)
+	require.Contains(t, bundle.ExtraRuleSources[0].Doc, "id:922110,", "unknown profile must not merge WASM registry IDs")
 }
 
 func TestBuild_emptyIgnoreUnsupportedRulesSkipsRegistryMerge(t *testing.T) {
@@ -366,12 +365,12 @@ func TestBuild_emptyIgnoreUnsupportedRulesSkipsRegistryMerge(t *testing.T) {
 		RulesDir:       tmp,
 		Version:        "4.24.1",
 		RuleSetName:    "rs",
-		DataSecretName: "ds",
+		DataSourceName: "ds",
 	}, scan, ver)
 	require.NoError(t, err)
 
-	require.Len(t, bundle.ExtraConfigMaps, 1)
-	require.Contains(t, bundle.ExtraConfigMaps[0].Doc, "id:922110,", "library zero Options must not imply wasm profile (embedders set IgnoreUnsupportedRules explicitly)")
+	require.Len(t, bundle.ExtraRuleSources, 1)
+	require.Contains(t, bundle.ExtraRuleSources[0].Doc, "id:922110,", "library zero Options must not imply wasm profile (embedders set IgnoreUnsupportedRules explicitly)")
 }
 
 func TestBuild_redundantTierWASMUnsupportedStripped(t *testing.T) {
@@ -389,14 +388,14 @@ func TestBuild_redundantTierWASMUnsupportedStripped(t *testing.T) {
 		RulesDir:               tmp,
 		Version:                "4.24.1",
 		RuleSetName:            "rs",
-		DataSecretName:         "ds",
+		DataSourceName:         "ds",
 		IgnoreUnsupportedRules: "wasm",
 	}, scan, ver)
 	require.NoError(t, err)
 
-	require.Len(t, bundle.ExtraConfigMaps, 1)
-	require.NotContains(t, bundle.ExtraConfigMaps[0].Doc, "id:920100,")
-	require.Contains(t, bundle.ExtraConfigMaps[0].Doc, "id:42,")
+	require.Len(t, bundle.ExtraRuleSources, 1)
+	require.NotContains(t, bundle.ExtraRuleSources[0].Doc, "id:920100,")
+	require.Contains(t, bundle.ExtraRuleSources[0].Doc, "id:42,")
 }
 
 func TestBuild_wasmProfileTrimmedAndCaseInsensitive(t *testing.T) {
@@ -414,12 +413,12 @@ func TestBuild_wasmProfileTrimmedAndCaseInsensitive(t *testing.T) {
 		RulesDir:               tmp,
 		Version:                "4.24.1",
 		RuleSetName:            "rs",
-		DataSecretName:         "ds",
+		DataSourceName:         "ds",
 		IgnoreUnsupportedRules: "  WaSm  ",
 	}, scan, ver)
 	require.NoError(t, err)
 
-	require.Len(t, bundle.ExtraConfigMaps, 1)
-	require.NotContains(t, bundle.ExtraConfigMaps[0].Doc, "id:922110,")
-	require.Contains(t, bundle.ExtraConfigMaps[0].Doc, "id:42,")
+	require.Len(t, bundle.ExtraRuleSources, 1)
+	require.NotContains(t, bundle.ExtraRuleSources[0].Doc, "id:922110,")
+	require.Contains(t, bundle.ExtraRuleSources[0].Doc, "id:42,")
 }

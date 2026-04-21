@@ -3,7 +3,6 @@ kind: RuleSource
 metadata:
   name: base-rules
 spec:
-  type: Rule
   rules: |
     SecRuleEngine On
     SecRequestBodyAccess On
@@ -17,7 +16,6 @@ kind: RuleSource
 metadata:
   name: sqli-rules
 spec:
-  type: Rule
   rules: |
     SecRule ARGS "@rx (?i:(\b(select|union|insert|update|delete|drop|create|alter|exec|execute)\b.*\b(from|into|where|table|database|procedure)\b)|(\b(or|and)\b\s*['\"]?\d+['\"]?\s*=\s*['\"]?\d+)|('.*or.*'.*=.*'))" \
       "id:1001,\
@@ -37,7 +35,6 @@ kind: RuleSource
 metadata:
   name: xss-rules
 spec:
-  type: Rule
   rules: |
     SecRule ARGS "@rx (?i:<script[^>]*>.*?</script>|javascript:|onerror\s*=|onload\s*=|<iframe)" \
       "id:2001,\
@@ -57,7 +54,6 @@ kind: RuleSource
 metadata:
   name: no-evil-monkeys
 spec:
-  type: Rule
   rules: |
     SecRule ARGS|REQUEST_URI|REQUEST_HEADERS "@contains evilmonkey" \
       "id:3001,\
@@ -78,7 +74,6 @@ kind: RuleSource
 metadata:
   name: no-evil-data
 spec:
-  type: Rule
   rules: |
     SecRule ARGS|REQUEST_URI|REQUEST_HEADERS "@pmFromFile some.data" \
       "id:3002,\
@@ -95,11 +90,10 @@ spec:
       severity:'CRITICAL'"
 ---
 apiVersion: waf.k8s.coraza.io/v1alpha1
-kind: RuleSource
+kind: RuleData
 metadata:
   name: datafile
 spec:
-  type: Data
   files:
     some.data: |
       evildata
@@ -111,9 +105,10 @@ metadata:
   name: default-ruleset
 spec:
   sources:
-    - name: datafile
     - name: base-rules
     - name: sqli-rules
     - name: xss-rules
     - name: no-evil-monkeys
     - name: no-evil-data
+  data:
+    - name: datafile

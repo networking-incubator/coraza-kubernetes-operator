@@ -3,7 +3,6 @@ kind: RuleSource
 metadata:
   name: base-rules
 spec:
-  type: Rule
   rules: |
     SecRuleEngine On
     SecRequestBodyAccess On
@@ -87,7 +86,6 @@ kind: RuleSource
 metadata:
   name: simple
 spec:
-  type: Rule
   rules: |
     SecRule ARGS "@rx a" "id:100,phase:2,pass,nolog"
 ---

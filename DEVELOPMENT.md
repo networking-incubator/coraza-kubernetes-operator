@@ -153,7 +153,7 @@ func TestExample(t *testing.T) {
     s.CreateNamespace("my-test")
     s.CreateRuleSource("my-test", "rules", `SecRuleEngine On
 SecRule ARGS "@contains attack" "id:1,phase:2,deny,status:403"`)
-    s.CreateRuleSet("my-test", "ruleset", []string{"rules"})
+    s.CreateRuleSet("my-test", "ruleset", []string{"rules"}, nil)
     s.CreateGateway("my-test", "gateway")
     s.ExpectGatewayProgrammed("my-test", "gateway")
 
@@ -209,9 +209,9 @@ make coraza.generaterules
 This runs `kubectl-coraza` (`go run ./cmd/kubectl-coraza generate coreruleset` via the Makefile) to:
 1. Download CoreRuleSet (if not already present)
 2. Process each `.conf` file in the rules directory (non-recursive, same as before)
-3. Generate a RuleSource (`type: Rule`) for each rule file
-4. Generate a RuleSource (`type: Data`) for `.data` files
-5. Create a RuleSet resource referencing all RuleSources via `spec.sources`
+3. Generate a RuleSource for each rule file
+4. Generate a RuleData for `.data` files
+5. Create a RuleSet resource referencing RuleSources via `spec.sources` and RuleData via `spec.data`
 6. Output everything to `tmp/rules/rules.yaml`
 
 Conformance CI runs `make coreruleset.verify-parity`, which regenerates that manifest (see the `coreruleset.verify-parity` target in the Makefile for the exact `kubectl-coraza` flags) and checks `sha256sum` against `tools/corerulesetgen/testdata/coreruleset_parity.sha256`. After bumping `CORERULESET_VERSION` or changing generator output, refresh the checksum with `make coreruleset.verify-parity` (it will fail until you run `sha256sum tmp/rules/rules.yaml` and replace the hash line in `tools/corerulesetgen/testdata/coreruleset_parity.sha256`).

@@ -4,14 +4,14 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.19.0
-  name: rulesources.waf.k8s.coraza.io
+  name: ruledata.waf.k8s.coraza.io
 spec:
   group: waf.k8s.coraza.io
   names:
-    kind: RuleSource
-    listKind: RuleSourceList
-    plural: rulesources
-    singular: rulesource
+    kind: RuleData
+    listKind: RuleDataList
+    plural: ruledata
+    singular: ruledata
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
@@ -21,8 +21,9 @@ spec:
     name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: RuleSource holds SecLang WAF rule text for consumption by RuleSet
-          resources.
+        description: |-
+          RuleData holds data file content (e.g. for @pmFromFile) for consumption by
+          RuleSet resources. Each entry in spec.files maps a filename to its content.
         properties:
           apiVersion:
             description: |-
@@ -42,20 +43,27 @@ spec:
           metadata:
             type: object
           spec:
-            description: spec defines the rule content.
+            description: spec defines the data file content.
             properties:
-              rules:
-                description: rules contains SecLang rule text.
-                type: string
+              files:
+                additionalProperties:
+                  type: string
+                description: files maps filenames to file content, used for @pmFromFile
+                  data.
+                type: object
             required:
-            - rules
+            - files
             type: object
         required:
         - spec
         type: object
         x-kubernetes-validations:
-        - message: rules must be set and non-empty
-          rule: has(self.spec.rules) && self.spec.rules != ""
+        - message: files must be non-empty
+          rule: has(self.spec.files) && size(self.spec.files) > 0
+        - message: files keys must be valid data file names (alphanumeric, '-', '_',
+            '.'; max 253 chars)
+          rule: 'has(self.spec.files) ? self.spec.files.all(k, k.matches(''^[-._a-zA-Z0-9]+$'')
+            && size(k) <= 253) : true'
     served: true
     storage: true
     subresources: {}

@@ -16,22 +16,70 @@ import (
 )
 
 // -----------------------------------------------------------------------------
+// RuleSetReconciler - Data Loading
+// -----------------------------------------------------------------------------
+
+// loadData fetches all RuleData objects referenced by the RuleSet and merges
+// their file maps. Last-listed wins on duplicate keys.
+func (r *RuleSetReconciler) loadData(
+	ctx context.Context,
+	log logr.Logger,
+	req ctrl.Request,
+	ruleset *wafv1alpha1.RuleSet,
+) (map[string][]byte, bool, error) {
+	if len(ruleset.Spec.Data) == 0 {
+		return nil, false, nil
+	}
+
+	logInfo(log, req, "RuleSet", "Loading data", "dataCount", len(ruleset.Spec.Data))
+
+	dataFiles := make(map[string][]byte)
+	for _, ref := range ruleset.Spec.Data {
+		var rd wafv1alpha1.RuleData
+		if err := r.Get(ctx, types.NamespacedName{
+			Name:      ref.Name,
+			Namespace: ruleset.Namespace,
+		}, &rd); err != nil {
+			if apierrors.IsNotFound(err) {
+				logInfo(log, req, "RuleSet", "Referenced RuleData not found; waiting for it to appear", "ruleDataName", ref.Name)
+				msg := fmt.Sprintf("Referenced RuleData %s does not exist", ref.Name)
+				if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "RuleSet", ruleset, &ruleset.Status.Conditions, ruleset.Generation, "RuleDataNotFound", msg); patchErr != nil {
+					return nil, true, patchErr
+				}
+				return nil, true, nil
+			}
+			logError(log, req, "RuleSet", err, "Failed to get RuleData", "ruleDataName", ref.Name)
+			msg := fmt.Sprintf("Failed to access RuleData %s: %v", ref.Name, err)
+			if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "RuleSet", ruleset, &ruleset.Status.Conditions, ruleset.Generation, "RuleDataAccessError", msg); patchErr != nil {
+				return nil, true, patchErr
+			}
+			return nil, true, err
+		}
+
+		for k, v := range rd.Spec.Files {
+			dataFiles[k] = []byte(v)
+		}
+	}
+
+	return dataFiles, false, nil
+}
+
+// -----------------------------------------------------------------------------
 // RuleSetReconciler - Source Loading
 // -----------------------------------------------------------------------------
 
-// loadSources fetches all RuleSource objects referenced by the RuleSet and
-// separates them into data files and aggregated rule text. Data sources are
-// merged first (last-listed wins on duplicate keys), then Rule sources are
-// concatenated in order and individually validated against the merged data.
+// loadSources fetches all RuleSource objects referenced by the RuleSet,
+// concatenates their rules in order, and individually validates each fragment
+// against the merged data files.
 func (r *RuleSetReconciler) loadSources(
 	ctx context.Context,
 	log logr.Logger,
 	req ctrl.Request,
 	ruleset *wafv1alpha1.RuleSet,
-) (map[string][]byte, string, []error, bool, error) {
+	dataFiles map[string][]byte,
+) (string, []error, bool, error) {
 	logInfo(log, req, "RuleSet", "Loading sources", "sourceCount", len(ruleset.Spec.Sources))
 
-	dataFiles := make(map[string][]byte)
 	type ruleFragment struct {
 		name           string
 		rules          string
@@ -49,45 +97,24 @@ func (r *RuleSetReconciler) loadSources(
 				logInfo(log, req, "RuleSet", "Referenced RuleSource not found; waiting for it to appear", "ruleSourceName", src.Name)
 				msg := fmt.Sprintf("Referenced RuleSource %s does not exist", src.Name)
 				if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "RuleSet", ruleset, &ruleset.Status.Conditions, ruleset.Generation, "RuleSourceNotFound", msg); patchErr != nil {
-					return nil, "", nil, true, patchErr
+					return "", nil, true, patchErr
 				}
-				return nil, "", nil, true, nil
+				return "", nil, true, nil
 			}
 			logError(log, req, "RuleSet", err, "Failed to get RuleSource", "ruleSourceName", src.Name)
 			msg := fmt.Sprintf("Failed to access RuleSource %s: %v", src.Name, err)
 			if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "RuleSet", ruleset, &ruleset.Status.Conditions, ruleset.Generation, "RuleSourceAccessError", msg); patchErr != nil {
-				return nil, "", nil, true, patchErr
+				return "", nil, true, patchErr
 			}
-			return nil, "", nil, true, err
+			return "", nil, true, err
 		}
 
-		switch rs.Spec.Type {
-		case wafv1alpha1.RuleSourceTypeData:
-			for k, v := range rs.Spec.Files {
-				dataFiles[k] = []byte(v)
-			}
-		case wafv1alpha1.RuleSourceTypeRule:
-			skipValidation := rs.Annotations[wafv1alpha1.AnnotationSkipValidation] == "false"
-			ruleFragments = append(ruleFragments, ruleFragment{
-				name:           src.Name,
-				rules:          ptr.Deref(rs.Spec.Rules, ""),
-				skipValidation: skipValidation,
-			})
-		default:
-			msg := fmt.Sprintf("RuleSource %s has unknown type %q", src.Name, rs.Spec.Type)
-			if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "RuleSet", ruleset, &ruleset.Status.Conditions, ruleset.Generation, "InvalidRuleSource", msg); patchErr != nil {
-				return nil, "", nil, true, patchErr
-			}
-			return nil, "", nil, true, fmt.Errorf("%s", msg)
-		}
-	}
-
-	if len(ruleFragments) == 0 {
-		msg := "RuleSet must reference at least one RuleSource of type Rule"
-		if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "RuleSet", ruleset, &ruleset.Status.Conditions, ruleset.Generation, "NoRuleSources", msg); patchErr != nil {
-			return nil, "", nil, true, patchErr
-		}
-		return nil, "", nil, true, nil
+		skipValidation := rs.Annotations[wafv1alpha1.AnnotationSkipValidation] == "false"
+		ruleFragments = append(ruleFragments, ruleFragment{
+			name:           src.Name,
+			rules:          ptr.Deref(rs.Spec.Rules, ""),
+			skipValidation: skipValidation,
+		})
 	}
 
 	var dataMap map[string][]byte
@@ -112,7 +139,7 @@ func (r *RuleSetReconciler) loadSources(
 		}
 	}
 
-	return dataMap, aggregatedRules.String(), aggregatedErrors, false, nil
+	return aggregatedRules.String(), aggregatedErrors, false, nil
 }
 
 // validateRuleSourceRules validates a single RuleSource's rules via Coraza.

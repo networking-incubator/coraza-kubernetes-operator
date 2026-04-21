@@ -57,7 +57,7 @@ func TestE2E_BasicTraffic(t *testing.T) {
 		framework.SimpleBlockRule(1234, "blocked"),
 	)
 
-	s.CreateRuleSet(ns, "ruleset", []string{"base-rules", "block-rules"})
+	s.CreateRuleSet(ns, "ruleset", []string{"base-rules", "block-rules"}, nil)
 
 	// -------------------------------------------------------------------------
 	// Step 3: Create Engine targeting the gateway

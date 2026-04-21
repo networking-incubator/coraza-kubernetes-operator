@@ -3,7 +3,6 @@ kind: RuleSource
 metadata:
   name: base-rules
 spec:
-  type: Rule
   rules: |
     SecRuleEngine On
     SecRequestBodyAccess On
@@ -87,16 +86,14 @@ kind: RuleSource
 metadata:
   name: rules
 spec:
-  type: Rule
   rules: |
     SecRule ARGS "@rx x" "id:200,phase:2,pass,nolog"
 ---
 apiVersion: waf.k8s.coraza.io/v1alpha1
-kind: RuleSource
+kind: RuleData
 metadata:
   name: coreruleset-data
 spec:
-  type: Data
   files:
     foo.data: |
       hello
@@ -108,7 +105,8 @@ metadata:
   name: default-ruleset
 spec:
   sources:
-    - name: coreruleset-data
     - name: base-rules
     - name: rules
+  data:
+    - name: coreruleset-data
 

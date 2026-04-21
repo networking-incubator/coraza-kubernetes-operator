@@ -44,7 +44,7 @@ func TestReconciliation(t *testing.T) {
 	s.CreateRuleSource(ns, "block-evil",
 		framework.SimpleBlockRule(3001, "evilmonkey"),
 	)
-	s.CreateRuleSet(ns, "ruleset", []string{"base-rules", "block-evil"})
+	s.CreateRuleSet(ns, "ruleset", []string{"base-rules", "block-evil"}, nil)
 
 	s.ExpectRuleSetReady(ns, "ruleset")
 

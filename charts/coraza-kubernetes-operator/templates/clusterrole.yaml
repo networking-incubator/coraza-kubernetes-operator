@@ -125,6 +125,7 @@ rules:
 - apiGroups:
   - waf.k8s.coraza.io
   resources:
+  - ruledata
   - rulesources
   verbs:
   - get
