@@ -50,6 +50,7 @@ spec:
                   type: string
                 description: files maps filenames to file content, used for @pmFromFile
                   data.
+                minProperties: 1
                 type: object
             required:
             - files

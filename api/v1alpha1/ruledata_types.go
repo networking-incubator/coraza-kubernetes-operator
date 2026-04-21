@@ -79,5 +79,6 @@ type RuleDataSpec struct {
 	// files maps filenames to file content, used for @pmFromFile data.
 	//
 	// +required
+	// +kubebuilder:validation:MinProperties=1
 	Files map[string]string `json:"files,omitempty"`
 }

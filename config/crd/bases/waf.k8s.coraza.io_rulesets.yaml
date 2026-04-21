@@ -66,6 +66,7 @@ spec:
                   - name
                   type: object
                 maxItems: 256
+                minItems: 1
                 type: array
                 x-kubernetes-list-type: atomic
               sources:

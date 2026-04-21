@@ -46,6 +46,7 @@ spec:
             properties:
               rules:
                 description: rules contains SecLang rule text.
+                maxLength: 1572864
                 type: string
             required:
             - rules
