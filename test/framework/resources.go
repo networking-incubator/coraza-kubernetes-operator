@@ -698,7 +698,7 @@ func (s *Scenario) AnnotateRuleSet(namespace, name, key, value string) {
 	require.NoError(s.T, err, "annotate RuleSet %s/%s (%s): %s", namespace, name, arg, string(out))
 }
 
-// UpdateRuleSource replaces spec.rules on an existing Rule-type RuleSource.
+// UpdateRuleSource replaces spec.rules on an existing RuleSource.
 func (s *Scenario) UpdateRuleSource(namespace, name, rules string) {
 	s.T.Helper()
 	ctx := s.T.Context()
