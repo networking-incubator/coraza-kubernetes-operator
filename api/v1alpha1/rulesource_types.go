@@ -88,6 +88,7 @@ type RuleSourceSpec struct {
 	// rules contains SecLang rule text.
 	//
 	// +required
+	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=1572864
 	Rules *string `json:"rules,omitempty"`
 }
