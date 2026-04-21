@@ -85,8 +85,8 @@ func validateRuleSourceObjectName(name string) error {
 	return nil
 }
 
-// validateDataFileKey ensures a RuleSource files key derived from a filename is
-// valid for the apiserver.
+// validateDataFileKey ensures a RuleData spec.files key derived from a filename
+// is valid for the apiserver.
 func validateDataFileKey(key string) error {
 	if errs := validation.IsConfigMapKey(key); len(errs) > 0 {
 		return fmt.Errorf("invalid RuleData files key %q (from data filename): %s", key, strings.Join(errs, "; "))

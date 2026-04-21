@@ -39,7 +39,7 @@ type ManifestBundle struct {
 	ConfFileResults    []ConfFileResult
 }
 
-// Build produces base RuleSource, per-.conf RuleSources, optional Data RuleSource,
+// Build produces base RuleSource, per-.conf RuleSources, optional RuleData,
 // and RuleSet from a parsed [CRSVersion]. It does not read stderr or write to stdout.
 func Build(opts Options, scan ScanResult, ver CRSVersion) (*ManifestBundle, error) {
 	opts = mergeUnsupportedIDs(opts)

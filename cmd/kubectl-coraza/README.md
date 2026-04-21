@@ -1,6 +1,6 @@
 # kubectl-coraza
 
-A [kubectl plugin](https://kubernetes.io/docs/tasks/extend-kubectl/kubectl-plugins/) that generates **RuleSource** manifests (rule text and data files) and a **RuleSet** (`spec.sources`) from OWASP CoreRuleSet files on disk.
+A [kubectl plugin](https://kubernetes.io/docs/tasks/extend-kubectl/kubectl-plugins/) that generates **RuleSource** (rule text), **RuleData** (data files), and **RuleSet** manifests from OWASP CoreRuleSet files on disk.
 
 > The operator validates and compiles rules after you apply them; this tool does not compile Coraza rules.
 
@@ -33,7 +33,7 @@ Reads `*.conf` and optional `*.data` from a single directory (non-recursive). Ou
 | `--version` | CRS version, e.g. `4.24.1` (required) |
 | `-n`, `--namespace` | Set `metadata.namespace` on every object |
 | `--ruleset-name` | RuleSet name (default `default-ruleset`) |
-| `--data-source-name` | `RuleSource` name for `*.data` files (`type: Data`; default `coreruleset-data`) |
+| `--data-source-name` | `RuleData` name for `*.data` files (default `coreruleset-data`) |
 | `--ignore-rules` | Comma-separated rule IDs to drop |
 | `--ignore-unsupported-rules` | Unsupported-rule profile to exclude (default `wasm`); set to `none` to emit full CRS (see `LIMITATIONS.md`) |
 | `--ignore-pmFromFile` | Strip `SecRule` lines using `@pmFromFile` |
