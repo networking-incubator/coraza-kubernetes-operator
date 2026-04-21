@@ -26,7 +26,6 @@ import (
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
@@ -312,7 +311,7 @@ func TestRuleSetReconciler_UpdateCache(t *testing.T) {
 	var updatedRS wafv1alpha1.RuleSource
 	err = k8sClient.Get(ctx, types.NamespacedName{Name: "update-rules", Namespace: testNamespace}, &updatedRS)
 	require.NoError(t, err)
-	updatedRS.Spec.Rules = ptr.To("SecDefaultAction \"phase:2,log,auditlog,pass\"")
+	updatedRS.Spec.Rules = "SecDefaultAction \"phase:2,log,auditlog,pass\""
 	err = k8sClient.Update(ctx, &updatedRS)
 	require.NoError(t, err)
 

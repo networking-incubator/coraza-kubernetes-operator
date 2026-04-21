@@ -32,7 +32,6 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/intstr"
-	"k8s.io/utils/ptr"
 
 	wafv1alpha1 "github.com/networking-incubator/coraza-kubernetes-operator/api/v1alpha1"
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/defaults"
@@ -336,7 +335,7 @@ func (s *Scenario) CreateRuleSource(namespace, name, rules string) {
 			Namespace: namespace,
 		},
 		Spec: wafv1alpha1.RuleSourceSpec{
-			Rules: ptr.To(rules),
+			Rules: rules,
 		},
 	}
 	obj := toUnstructured(rs)

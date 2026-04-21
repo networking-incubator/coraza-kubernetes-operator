@@ -20,7 +20,6 @@ package utils
 
 import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/utils/ptr"
 
 	wafv1alpha1 "github.com/networking-incubator/coraza-kubernetes-operator/api/v1alpha1"
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/defaults"
@@ -38,7 +37,7 @@ func NewTestRuleSource(name, namespace, rules string) *wafv1alpha1.RuleSource {
 			Namespace: namespace,
 		},
 		Spec: wafv1alpha1.RuleSourceSpec{
-			Rules: ptr.To(rules),
+			Rules: rules,
 		},
 	}
 }

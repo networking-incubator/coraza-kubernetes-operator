@@ -9,7 +9,6 @@ import (
 	"github.com/go-logr/logr"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 
 	wafv1alpha1 "github.com/networking-incubator/coraza-kubernetes-operator/api/v1alpha1"
@@ -112,7 +111,7 @@ func (r *RuleSetReconciler) loadSources(
 		skipValidation := rs.Annotations[wafv1alpha1.AnnotationSkipValidation] == "false"
 		ruleFragments = append(ruleFragments, ruleFragment{
 			name:           src.Name,
-			rules:          ptr.Deref(rs.Spec.Rules, ""),
+			rules:          rs.Spec.Rules,
 			skipValidation: skipValidation,
 		})
 	}
