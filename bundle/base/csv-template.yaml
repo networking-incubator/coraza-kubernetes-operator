@@ -24,10 +24,15 @@ spec:
         kind: RuleSet
         name: rulesets.waf.k8s.coraza.io
         version: v1alpha1
-      - description: RuleSource holds WAF rule text or data file content for consumption by RuleSets.
+      - description: RuleSource holds SecLang rule text for consumption by RuleSets.
         displayName: RuleSource
         kind: RuleSource
         name: rulesources.waf.k8s.coraza.io
+        version: v1alpha1
+      - description: RuleData holds data file content (e.g. for @pmFromFile) for consumption by RuleSets.
+        displayName: RuleData
+        kind: RuleData
+        name: ruledata.waf.k8s.coraza.io
         version: v1alpha1
   description: |
     The Coraza Kubernetes Operator provides Web Application Firewall (WAF)
