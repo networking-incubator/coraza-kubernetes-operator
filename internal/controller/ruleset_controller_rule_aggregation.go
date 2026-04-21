@@ -85,7 +85,7 @@ func (r *RuleSetReconciler) loadSources(
 		rules          string
 		skipValidation bool
 	}
-	var ruleFragments []ruleFragment
+	ruleFragments := make([]ruleFragment, 0, len(ruleset.Spec.Sources))
 
 	for _, src := range ruleset.Spec.Sources {
 		var rs wafv1alpha1.RuleSource

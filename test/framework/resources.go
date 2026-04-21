@@ -216,9 +216,9 @@ func BuildRuleSet(namespace, name string, sourceNames, dataNames []string) *unst
 		sources[i] = wafv1alpha1.SourceReference{Name: n}
 	}
 
-	var data []wafv1alpha1.DataReference
-	for _, n := range dataNames {
-		data = append(data, wafv1alpha1.DataReference{Name: n})
+	data := make([]wafv1alpha1.DataReference, len(dataNames))
+	for i, n := range dataNames {
+		data[i] = wafv1alpha1.DataReference{Name: n}
 	}
 
 	rs := &wafv1alpha1.RuleSet{

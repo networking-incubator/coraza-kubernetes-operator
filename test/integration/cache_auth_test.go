@@ -45,7 +45,7 @@ func TestCacheServerAuthentication(t *testing.T) {
 	s.ExpectGatewayProgrammed(ns, "auth-gateway")
 
 	s.Step("deploy rules and create ruleset")
-	s.CreateConfigMap(ns, "test-rules", `SecRuleEngine On`)
+	s.CreateRuleSource(ns, "test-rules", `SecRuleEngine On`)
 	s.CreateRuleSet(ns, "auth-test", []string{"test-rules"}, nil)
 	s.ExpectRuleSetReady(ns, "auth-test")
 
@@ -101,7 +101,7 @@ func TestCacheServerAuthentication(t *testing.T) {
 	assert.Equal(t, http.StatusForbidden, result.StatusCode)
 
 	s.Step("test: valid token for wrong ruleset returns 403")
-	s.CreateConfigMap(ns, "other-rules", `SecRuleEngine Off`)
+	s.CreateRuleSource(ns, "other-rules", `SecRuleEngine Off`)
 	s.CreateRuleSet(ns, "other-test", []string{"other-rules"}, nil)
 	s.ExpectRuleSetReady(ns, "other-test")
 
