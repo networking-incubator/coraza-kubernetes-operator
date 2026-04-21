@@ -90,5 +90,5 @@ type RuleSourceSpec struct {
 	// +required
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=1572864
-	Rules string `json:"rules"`
+	Rules string `json:"rules,omitempty"`
 }
