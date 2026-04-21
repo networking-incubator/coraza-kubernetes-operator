@@ -31,7 +31,76 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	wafv1alpha1 "github.com/networking-incubator/coraza-kubernetes-operator/api/v1alpha1"
+	"github.com/networking-incubator/coraza-kubernetes-operator/internal/rulesets/cache"
 )
+
+func TestCacheEntryPayloadSize(t *testing.T) {
+	tests := []struct {
+		name      string
+		rules     string
+		dataFiles map[string][]byte
+		expected  int
+	}{
+		{
+			name:      "empty rules, nil data",
+			rules:     "",
+			dataFiles: nil,
+			expected:  0,
+		},
+		{
+			name:      "rules only",
+			rules:     "SecRule REQUEST_URI",
+			dataFiles: nil,
+			expected:  len("SecRule REQUEST_URI"),
+		},
+		{
+			name:  "rules plus data files",
+			rules: "abc",
+			dataFiles: map[string][]byte{
+				"file.data": []byte("content"),
+			},
+			expected: len("abc") + len("file.data") + len("content"),
+		},
+		{
+			name:  "multiple data files",
+			rules: "",
+			dataFiles: map[string][]byte{
+				"a.data": []byte("x"),
+				"b.data": []byte("yy"),
+			},
+			expected: len("a.data") + 1 + len("b.data") + 2,
+		},
+		{
+			name:      "empty data map",
+			rules:     "r",
+			dataFiles: map[string][]byte{},
+			expected:  1,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := cacheEntryPayloadSize(tt.rules, tt.dataFiles)
+			assert.Equal(t, tt.expected, got)
+		})
+	}
+}
+
+func TestCacheEntryPayloadSize_matchesRuleSetCacheTotalSize(t *testing.T) {
+	c := cache.NewRuleSetCache()
+	rules := "SecRule"
+	data := map[string][]byte{"rule1.data": []byte("payload")}
+	want := cacheEntryPayloadSize(rules, data)
+	c.Put("test/instance", rules, data)
+	assert.Equal(t, want, c.TotalSize(), "payload accounting must match RuleSetCache.TotalSize for a single stored entry")
+}
+
+func TestOversizedAdmissionUsesStrictGreaterThanBudget(t *testing.T) {
+	budget := 1000
+	rules := strings.Repeat("a", 1000)
+	assert.Equal(t, 1000, cacheEntryPayloadSize(rules, nil))
+	assert.False(t, cacheEntryPayloadSize(rules, nil) > budget, "equal payload must be admitted (check uses > not >=)")
+	assert.True(t, cacheEntryPayloadSize(rules+"x", nil) > budget)
+}
 
 func TestBuildCacheReadyMessage(t *testing.T) {
 	t.Run("without unsupported message", func(t *testing.T) {

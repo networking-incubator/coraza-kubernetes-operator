@@ -17,6 +17,7 @@ limitations under the License.
 package controller
 
 import (
+	"bytes"
 	"context"
 	"sort"
 	"testing"
@@ -1015,5 +1016,313 @@ func TestRuleSetReconciler_UnsupportedRules(t *testing.T) {
 		t.Log("Verifying Warning/UnsupportedRules event was still emitted")
 		assert.True(t, recorder.HasEvent("Warning", "UnsupportedRules"),
 			"expected Warning/UnsupportedRules event even with annotation override; got: %v", recorder.Events)
+	})
+}
+
+func TestRuleSetReconciler_OversizedPayload(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("oversized ruleset is rejected with Degraded status", func(t *testing.T) {
+		ruleSetCache := cache.NewRuleSetCache()
+
+		t.Log("Creating ConfigMap with valid rules")
+		cm := utils.NewTestConfigMap("oversize-rules", testNamespace,
+			"SecRule REQUEST_URI \"@contains /admin\" \"id:1,deny\"")
+		require.NoError(t, k8sClient.Create(ctx, cm))
+		t.Cleanup(func() {
+			if err := k8sClient.Delete(ctx, cm); err != nil {
+				t.Logf("Failed to delete ConfigMap: %v", err)
+			}
+		})
+
+		ruleSet := utils.NewTestRuleSet(utils.RuleSetOptions{
+			Name:      "oversize-ruleset",
+			Namespace: testNamespace,
+			Rules: []wafv1alpha1.RuleSourceReference{
+				{Name: "oversize-rules"},
+			},
+		})
+		require.NoError(t, k8sClient.Create(ctx, ruleSet))
+		t.Cleanup(func() {
+			if err := k8sClient.Delete(ctx, ruleSet); err != nil {
+				t.Logf("Failed to delete RuleSet: %v", err)
+			}
+		})
+
+		recorder := utils.NewFakeRecorder()
+		reconciler := &RuleSetReconciler{
+			Client:         k8sClient,
+			Scheme:         scheme,
+			Recorder:       recorder,
+			Cache:          ruleSetCache,
+			MaxPayloadSize: 1, // 1 byte: any real payload will exceed this
+		}
+
+		result, err := reconciler.Reconcile(ctx, ctrl.Request{
+			NamespacedName: types.NamespacedName{
+				Name:      ruleSet.Name,
+				Namespace: ruleSet.Namespace,
+			},
+		})
+
+		require.NoError(t, err, "oversized rejection should not return an error")
+		assert.Equal(t, reconcile.Result{}, result)
+
+		t.Log("Verifying cache was NOT populated")
+		cacheKey := testNamespace + "/oversize-ruleset"
+		_, ok := ruleSetCache.Get(cacheKey)
+		assert.False(t, ok, "cache must not contain an entry for oversized ruleset")
+
+		t.Log("Verifying status conditions")
+		require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{
+			Name:      ruleSet.Name,
+			Namespace: ruleSet.Namespace,
+		}, ruleSet))
+		ready := apimeta.FindStatusCondition(ruleSet.Status.Conditions, "Ready")
+		require.NotNil(t, ready)
+		assert.Equal(t, metav1.ConditionFalse, ready.Status)
+		assert.Equal(t, "OversizedRules", ready.Reason)
+		assert.Contains(t, ready.Message, "exceeds maximum allowed size")
+
+		degraded := apimeta.FindStatusCondition(ruleSet.Status.Conditions, "Degraded")
+		require.NotNil(t, degraded)
+		assert.Equal(t, metav1.ConditionTrue, degraded.Status)
+		assert.Equal(t, "OversizedRules", degraded.Reason)
+
+		t.Log("Verifying Warning/OversizedRules event")
+		assert.True(t, recorder.HasEvent("Warning", "OversizedRules"),
+			"expected Warning/OversizedRules event; got: %v", recorder.Events)
+	})
+
+	t.Run("payload within budget is accepted normally", func(t *testing.T) {
+		ruleSetCache := cache.NewRuleSetCache()
+
+		cm := utils.NewTestConfigMap("within-budget-rules", testNamespace,
+			"SecRule REQUEST_URI \"@contains /test\" \"id:2,deny\"")
+		require.NoError(t, k8sClient.Create(ctx, cm))
+		t.Cleanup(func() {
+			if err := k8sClient.Delete(ctx, cm); err != nil {
+				t.Logf("Failed to delete ConfigMap: %v", err)
+			}
+		})
+
+		ruleSet := utils.NewTestRuleSet(utils.RuleSetOptions{
+			Name:      "within-budget-ruleset",
+			Namespace: testNamespace,
+			Rules: []wafv1alpha1.RuleSourceReference{
+				{Name: "within-budget-rules"},
+			},
+		})
+		require.NoError(t, k8sClient.Create(ctx, ruleSet))
+		t.Cleanup(func() {
+			if err := k8sClient.Delete(ctx, ruleSet); err != nil {
+				t.Logf("Failed to delete RuleSet: %v", err)
+			}
+		})
+
+		recorder := utils.NewFakeRecorder()
+		reconciler := &RuleSetReconciler{
+			Client:         k8sClient,
+			Scheme:         scheme,
+			Recorder:       recorder,
+			Cache:          ruleSetCache,
+			MaxPayloadSize: 100 * 1024 * 1024, // 100 MB — normal budget
+		}
+
+		result, err := reconciler.Reconcile(ctx, ctrl.Request{
+			NamespacedName: types.NamespacedName{
+				Name:      ruleSet.Name,
+				Namespace: ruleSet.Namespace,
+			},
+		})
+
+		require.NoError(t, err)
+		assert.Equal(t, reconcile.Result{}, result)
+
+		cacheKey := testNamespace + "/within-budget-ruleset"
+		entry, ok := ruleSetCache.Get(cacheKey)
+		assert.True(t, ok, "cache should contain entry for within-budget ruleset")
+		assert.NotEmpty(t, entry.UUID)
+
+		assert.True(t, recorder.HasEvent("Normal", "RulesCached"),
+			"expected Normal/RulesCached event; got: %v", recorder.Events)
+	})
+
+	t.Run("zero MaxPayloadSize disables admission check", func(t *testing.T) {
+		ruleSetCache := cache.NewRuleSetCache()
+
+		cm := utils.NewTestConfigMap("no-limit-rules", testNamespace,
+			"SecRule REQUEST_URI \"@contains /nolimit\" \"id:3,deny\"")
+		require.NoError(t, k8sClient.Create(ctx, cm))
+		t.Cleanup(func() {
+			if err := k8sClient.Delete(ctx, cm); err != nil {
+				t.Logf("Failed to delete ConfigMap: %v", err)
+			}
+		})
+
+		ruleSet := utils.NewTestRuleSet(utils.RuleSetOptions{
+			Name:      "no-limit-ruleset",
+			Namespace: testNamespace,
+			Rules: []wafv1alpha1.RuleSourceReference{
+				{Name: "no-limit-rules"},
+			},
+		})
+		require.NoError(t, k8sClient.Create(ctx, ruleSet))
+		t.Cleanup(func() {
+			if err := k8sClient.Delete(ctx, ruleSet); err != nil {
+				t.Logf("Failed to delete RuleSet: %v", err)
+			}
+		})
+
+		reconciler := &RuleSetReconciler{
+			Client:         k8sClient,
+			Scheme:         scheme,
+			Recorder:       utils.NewTestRecorder(),
+			Cache:          ruleSetCache,
+			MaxPayloadSize: 0, // disabled
+		}
+
+		result, err := reconciler.Reconcile(ctx, ctrl.Request{
+			NamespacedName: types.NamespacedName{
+				Name:      ruleSet.Name,
+				Namespace: ruleSet.Namespace,
+			},
+		})
+
+		require.NoError(t, err)
+		assert.Equal(t, reconcile.Result{}, result)
+
+		cacheKey := testNamespace + "/no-limit-ruleset"
+		_, ok := ruleSetCache.Get(cacheKey)
+		assert.True(t, ok, "cache should contain entry when MaxPayloadSize is 0 (disabled)")
+	})
+
+	t.Run("previously cached entry preserved when oversized update is rejected", func(t *testing.T) {
+		ruleSetCache := cache.NewRuleSetCache()
+		cacheKey := testNamespace + "/oversize-update"
+
+		t.Log("Pre-populating cache to simulate previous valid reconciliation")
+		const previousRules = "SecCollectionTimeout 1"
+		ruleSetCache.Put(cacheKey, previousRules, nil)
+		prior, ok := ruleSetCache.Get(cacheKey)
+		require.True(t, ok)
+		priorUUID := prior.UUID
+
+		cm := utils.NewTestConfigMap("oversize-update-rules", testNamespace,
+			"SecRule REQUEST_URI \"@contains /big\" \"id:4,deny\"")
+		require.NoError(t, k8sClient.Create(ctx, cm))
+		t.Cleanup(func() {
+			if err := k8sClient.Delete(ctx, cm); err != nil {
+				t.Logf("Failed to delete ConfigMap: %v", err)
+			}
+		})
+
+		ruleSet := utils.NewTestRuleSet(utils.RuleSetOptions{
+			Name:      "oversize-update",
+			Namespace: testNamespace,
+			Rules: []wafv1alpha1.RuleSourceReference{
+				{Name: "oversize-update-rules"},
+			},
+		})
+		require.NoError(t, k8sClient.Create(ctx, ruleSet))
+		t.Cleanup(func() {
+			if err := k8sClient.Delete(ctx, ruleSet); err != nil {
+				t.Logf("Failed to delete RuleSet: %v", err)
+			}
+		})
+
+		reconciler := &RuleSetReconciler{
+			Client:         k8sClient,
+			Scheme:         scheme,
+			Recorder:       utils.NewFakeRecorder(),
+			Cache:          ruleSetCache,
+			MaxPayloadSize: 1, // triggers rejection
+		}
+
+		result, err := reconciler.Reconcile(ctx, ctrl.Request{
+			NamespacedName: types.NamespacedName{
+				Name:      ruleSet.Name,
+				Namespace: ruleSet.Namespace,
+			},
+		})
+
+		require.NoError(t, err)
+		assert.Equal(t, reconcile.Result{}, result)
+
+		t.Log("Verifying the previously cached entry is preserved (last-known-good)")
+		entry, ok := ruleSetCache.Get(cacheKey)
+		require.True(t, ok, "prior cache entry must be preserved")
+		assert.Equal(t, priorUUID, entry.UUID, "cache UUID must not have changed")
+		assert.Equal(t, previousRules, entry.Rules)
+	})
+
+	t.Run("RuleData secret bytes count toward payload limit", func(t *testing.T) {
+		ruleSetCache := cache.NewRuleSetCache()
+
+		cm := utils.NewTestConfigMap("oversize-ruledata-cm", testNamespace,
+			`SecRule REQUEST_URI "@pmFromFile rule1.data" "id:55555,phase:1,deny,status:403,msg:'x'"`)
+		require.NoError(t, k8sClient.Create(ctx, cm))
+		t.Cleanup(func() {
+			if err := k8sClient.Delete(ctx, cm); err != nil {
+				t.Logf("Failed to delete ConfigMap: %v", err)
+			}
+		})
+
+		largeData := bytes.Repeat([]byte("x"), 10000)
+		sec := utils.NewTestRuleData("oversize-ruledata-secret", testNamespace, map[string][]byte{
+			"rule1.data": largeData,
+		})
+		require.NoError(t, k8sClient.Create(ctx, sec))
+		t.Cleanup(func() {
+			if err := k8sClient.Delete(ctx, sec); err != nil {
+				t.Logf("Failed to delete Secret: %v", err)
+			}
+		})
+
+		ruleSet := utils.NewTestRuleSet(utils.RuleSetOptions{
+			Name:      "oversize-ruledata-ruleset",
+			Namespace: testNamespace,
+			Rules: []wafv1alpha1.RuleSourceReference{
+				{Name: "oversize-ruledata-cm"},
+			},
+			RuleData: "oversize-ruledata-secret",
+		})
+		require.NoError(t, k8sClient.Create(ctx, ruleSet))
+		t.Cleanup(func() {
+			if err := k8sClient.Delete(ctx, ruleSet); err != nil {
+				t.Logf("Failed to delete RuleSet: %v", err)
+			}
+		})
+
+		reconciler := &RuleSetReconciler{
+			Client:         k8sClient,
+			Scheme:         scheme,
+			Recorder:       utils.NewFakeRecorder(),
+			Cache:          ruleSetCache,
+			MaxPayloadSize: 500, // tiny budget; payload dominated by RuleData file bytes
+		}
+
+		result, err := reconciler.Reconcile(ctx, ctrl.Request{
+			NamespacedName: types.NamespacedName{
+				Name:      ruleSet.Name,
+				Namespace: ruleSet.Namespace,
+			},
+		})
+
+		require.NoError(t, err)
+		assert.Equal(t, reconcile.Result{}, result)
+
+		cacheKey := testNamespace + "/oversize-ruledata-ruleset"
+		_, ok := ruleSetCache.Get(cacheKey)
+		assert.False(t, ok, "cache must not accept oversized RuleData payload")
+
+		require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{
+			Name:      ruleSet.Name,
+			Namespace: ruleSet.Namespace,
+		}, ruleSet))
+		ready := apimeta.FindStatusCondition(ruleSet.Status.Conditions, "Ready")
+		require.NotNil(t, ready)
+		assert.Equal(t, metav1.ConditionFalse, ready.Status)
+		assert.Equal(t, "OversizedRules", ready.Reason)
 	})
 }

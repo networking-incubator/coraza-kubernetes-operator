@@ -51,13 +51,50 @@ const DefaultRuleSetCacheServerPort = 18080
 // Manager - Setup
 // -----------------------------------------------------------------------------
 
-// SetupControllers initializes all controllers
-func SetupControllers(mgr ctrl.Manager, rulesetCache *cache.RuleSetCache, envoyClusterName, istioRevision string, defaultWasmImage, operatorNamespace string, kubeClient kubernetes.Interface) error {
+// RuleSetOpts holds configuration for the RuleSet reconciler.
+type RuleSetOpts struct {
+	// MaxPayloadSize is the per-RuleSet aggregated payload limit in bytes before
+	// the reconciler rejects caching and marks the RuleSet Degraded.
+	// Zero means use cache.CacheMaxSize (the same default as --cache-max-size).
+	// Negative values are invalid. SetupControllers applies this default; constructing
+	// RuleSetReconciler with MaxPayloadSize 0 disables the check (tests only).
+	MaxPayloadSize int
+}
+
+// EngineOpts holds configuration for the Engine reconciler.
+type EngineOpts struct {
+	EnvoyClusterName  string
+	IstioRevision     string
+	DefaultWasmImage  string
+	OperatorNamespace string
+}
+
+// resolveRuleSetMaxPayloadSize maps RuleSetOpts.MaxPayloadSize to the value stored
+// on RuleSetReconciler. Zero opts means the default admission budget (cache.CacheMaxSize).
+func resolveRuleSetMaxPayloadSize(opts RuleSetOpts) (int, error) {
+	n := opts.MaxPayloadSize
+	if n == 0 {
+		return cache.CacheMaxSize, nil
+	}
+	if n < 0 {
+		return 0, fmt.Errorf("invalid RuleSetOpts.MaxPayloadSize %d: must be >= 0 (0 uses default %d bytes)", n, cache.CacheMaxSize)
+	}
+	return n, nil
+}
+
+// SetupControllers initializes all controllers.
+func SetupControllers(mgr ctrl.Manager, kubeClient kubernetes.Interface, rulesetCache *cache.RuleSetCache, ruleSetOpts RuleSetOpts, engineOpts EngineOpts) error {
+	maxPayload, err := resolveRuleSetMaxPayloadSize(ruleSetOpts)
+	if err != nil {
+		return err
+	}
+
 	if err := (&RuleSetReconciler{
-		Client:   mgr.GetClient(),
-		Scheme:   mgr.GetScheme(),
-		Recorder: mgr.GetEventRecorder("ruleset-controller"),
-		Cache:    rulesetCache,
+		Client:         mgr.GetClient(),
+		Scheme:         mgr.GetScheme(),
+		Recorder:       mgr.GetEventRecorder("ruleset-controller"),
+		Cache:          rulesetCache,
+		MaxPayloadSize: maxPayload,
 	}).SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("unable to create controller RuleSet: %w", err)
 	}
@@ -67,10 +104,10 @@ func SetupControllers(mgr ctrl.Manager, rulesetCache *cache.RuleSetCache, envoyC
 		Scheme:                    mgr.GetScheme(),
 		Recorder:                  mgr.GetEventRecorder("engine-controller"),
 		kubeClient:                kubeClient,
-		ruleSetCacheServerCluster: envoyClusterName,
-		istioRevision:             istioRevision,
-		defaultWasmImage:          defaultWasmImage,
-		operatorNamespace:         operatorNamespace,
+		ruleSetCacheServerCluster: engineOpts.EnvoyClusterName,
+		istioRevision:             engineOpts.IstioRevision,
+		defaultWasmImage:          engineOpts.DefaultWasmImage,
+		operatorNamespace:         engineOpts.OperatorNamespace,
 	}).SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("unable to create controller Engine: %w", err)
 	}

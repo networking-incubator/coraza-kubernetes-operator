@@ -108,7 +108,15 @@ func main() {
 	rulesetCache := setupCacheServer(mgr, cfg, kubeClient)
 	setupIstioPrerequisites(mgr, cfg, podNamespace)
 
-	if err := controller.SetupControllers(mgr, rulesetCache, cfg.envoyClusterName, cfg.istioRevision, cfg.defaultWasmImage, podNamespace, kubeClient); err != nil {
+	if err := controller.SetupControllers(mgr, kubeClient, rulesetCache,
+		controller.RuleSetOpts{MaxPayloadSize: cfg.cacheMaxSize},
+		controller.EngineOpts{
+			EnvoyClusterName:  cfg.envoyClusterName,
+			IstioRevision:     cfg.istioRevision,
+			DefaultWasmImage:  cfg.defaultWasmImage,
+			OperatorNamespace: podNamespace,
+		},
+	); err != nil {
 		setupLog.Error(err, "unable to setup controllers")
 		os.Exit(1)
 	}
@@ -158,7 +166,7 @@ func parseFlags() config {
 	flag.StringVar(&cfg.metricsCertKey, "metrics-cert-key", "tls.key", "The name of the metrics server key file.")
 	flag.DurationVar(&cfg.cacheGCInterval, "cache-gc-interval", cache.CacheGCInterval, "How often to check for and remove stale cache entries in the RuleSet cache")
 	flag.DurationVar(&cfg.cacheMaxAge, "cache-max-age", cache.CacheMaxAge, "Maximum age of a cache entry before it's considered stale in the RuleSet cache")
-	flag.IntVar(&cfg.cacheMaxSize, "cache-max-size", cache.CacheMaxSize, fmt.Sprintf("Maximum total size of all cached rules in the RuleSet cache in bytes (default %dMB)", cache.CacheMaxSize/(1024*1024)))
+	flag.IntVar(&cfg.cacheMaxSize, "cache-max-size", cache.CacheMaxSize, fmt.Sprintf("Maximum total size of all cached rules in the RuleSet cache in bytes; must be > 0 (default %dMB)", cache.CacheMaxSize/(1024*1024)))
 	flag.IntVar(&cfg.cacheServerPort, "cache-server-port", controller.DefaultRuleSetCacheServerPort, fmt.Sprintf("Port number for the RuleSet cache server to listen on (default %d)", controller.DefaultRuleSetCacheServerPort))
 	flag.StringVar(&cfg.envoyClusterName, "envoy-cluster-name", "", "The Envoy cluster name pointing to the RuleSet cache server (required)")
 	flag.StringVar(&cfg.istioRevision, "istio-revision", "", "The Istio revision label value for managed Istio resources")
@@ -282,6 +290,13 @@ func setupHealthChecks(mgr ctrl.Manager) {
 // Validation
 // -----------------------------------------------------------------------------
 
+func validateCacheMaxSize(n int) error {
+	if n <= 0 {
+		return fmt.Errorf("must be greater than 0 (got %d)", n)
+	}
+	return nil
+}
+
 func validateDefaultWasmImage(ref string) error {
 	if ref == "" {
 		return errors.New("must be non-empty")
@@ -298,6 +313,10 @@ func validateDefaultWasmImage(ref string) error {
 func validateFlags(cfg config) {
 	if cfg.envoyClusterName == "" {
 		setupLog.Error(errors.New("missing required flag"), "envoy-cluster-name is required")
+		os.Exit(1)
+	}
+	if err := validateCacheMaxSize(cfg.cacheMaxSize); err != nil {
+		setupLog.Error(err, "invalid cache-max-size")
 		os.Exit(1)
 	}
 	if err := validateDefaultWasmImage(cfg.defaultWasmImage); err != nil {

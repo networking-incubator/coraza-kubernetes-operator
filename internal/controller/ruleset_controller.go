@@ -60,6 +60,10 @@ type RuleSetReconciler struct {
 	Scheme   *runtime.Scheme
 	Recorder events.EventRecorder
 	Cache    *cache.RuleSetCache
+	// MaxPayloadSize limits aggregated RuleSet payload size; zero disables the check
+	// (tests). Production wiring uses SetupControllers, which defaults a zero
+	// RuleSetOpts.MaxPayloadSize to cache.CacheMaxSize.
+	MaxPayloadSize int
 }
 
 // SetupWithManager sets up the controller with the Manager.

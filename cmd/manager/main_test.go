@@ -29,6 +29,29 @@ import (
 )
 
 // -----------------------------------------------------------------------------
+// validateCacheMaxSize Tests
+// -----------------------------------------------------------------------------
+
+func TestValidateCacheMaxSize(t *testing.T) {
+	t.Parallel()
+
+	t.Run("zero", func(t *testing.T) {
+		t.Parallel()
+		assert.Error(t, validateCacheMaxSize(0))
+	})
+
+	t.Run("negative", func(t *testing.T) {
+		t.Parallel()
+		assert.Error(t, validateCacheMaxSize(-1))
+	})
+
+	t.Run("positive", func(t *testing.T) {
+		t.Parallel()
+		assert.NoError(t, validateCacheMaxSize(1))
+	})
+}
+
+// -----------------------------------------------------------------------------
 // validateDefaultWasmImage Tests
 // -----------------------------------------------------------------------------
 
