@@ -44,6 +44,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	wafv1alpha1 "github.com/networking-incubator/coraza-kubernetes-operator/api/v1alpha1"
+	rcache "github.com/networking-incubator/coraza-kubernetes-operator/internal/rulesets/cache"
 )
 
 // -----------------------------------------------------------------------------
@@ -74,6 +75,7 @@ type EngineReconciler struct {
 	// Engine omits spec.driver.istio.wasm.image.
 	defaultWasmImage  string
 	operatorNamespace string
+	ruleSetCache      *rcache.RuleSetCache
 
 	// tokenStore is a thread-safe store for cache client tokens, keyed by
 	// "namespace/engineName/rulesetName". Uses sync.Map for simple concurrent access.
@@ -92,6 +94,13 @@ func (r *EngineReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Kind:    "WasmPlugin",
 	})
 
+	envoyFilter := &unstructured.Unstructured{}
+	envoyFilter.SetGroupVersionKind(schema.GroupVersionKind{
+		Group:   "networking.istio.io",
+		Version: "v1alpha3",
+		Kind:    "EnvoyFilter",
+	})
+
 	gateway := &unstructured.Unstructured{}
 	gateway.SetGroupVersionKind(schema.GroupVersionKind{
 		Group:   "gateway.networking.k8s.io",
@@ -102,6 +111,7 @@ func (r *EngineReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&wafv1alpha1.Engine{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		Owns(wasmPlugin).
+		Owns(envoyFilter).
 		Watches(gateway, handler.EnqueueRequestsFromMapFunc(r.findEnginesForGateway)).
 		Watches(&wafv1alpha1.RuleSet{}, handler.EnqueueRequestsFromMapFunc(r.findEnginesForRuleSet)).
 		Watches(&corev1.Pod{}, handler.EnqueueRequestsFromMapFunc(r.findEnginesForPod), builder.WithPredicates(
@@ -200,7 +210,7 @@ func (r *EngineReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 // handleInvalidDriverConfiguration marks the engine as degraded due to invalid
 // driver configuration. Currently, only Istio driver with Wasm mode is supported.
 func (r *EngineReconciler) handleInvalidDriverConfiguration(ctx context.Context, log logr.Logger, req ctrl.Request, engine *wafv1alpha1.Engine) error {
-	err := fmt.Errorf("invalid driver configuration: only Istio driver with Wasm mode is currently supported")
+	err := fmt.Errorf("invalid driver configuration: Istio driver with wasm or dynamicModule mode is required")
 	logError(log, req, "Engine", err, "Invalid driver configuration")
 
 	if engine.Status == nil {
@@ -224,6 +234,9 @@ func (r *EngineReconciler) selectDriver(ctx context.Context, log logr.Logger, re
 		case engine.Spec.Driver.Istio.Wasm != nil:
 			logDebug(log, req, "Engine", "Using Istio driver with WASM mode")
 			return r.provisionIstioEngineWithWasm(ctx, log, req, engine)
+		case engine.Spec.Driver.Istio.DynamicModule != nil:
+			logDebug(log, req, "Engine", "Using Istio driver with dynamic module mode")
+			return r.provisionIstioEngineWithDynamicModule(ctx, log, req, engine)
 		default:
 			return ctrl.Result{}, r.handleInvalidDriverConfiguration(ctx, log, req, &engine)
 		}

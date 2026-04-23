@@ -8,16 +8,27 @@ rules:
   - ""
   resources:
   - configmaps
-  - secrets
   verbs:
+  - create
+  - delete
   - get
   - list
+  - patch
+  - update
   - watch
 - apiGroups:
   - ""
   resources:
   - pods
   verbs:
+  - list
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - secrets
+  verbs:
+  - get
   - list
   - watch
 - apiGroups:
@@ -104,6 +115,18 @@ rules:
   - get
   - patch
   - update
+- apiGroups:
+  - networking.istio.io
+  resources:
+  - envoyfilters
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
 - apiGroups:
   - waf.k8s.coraza.io
   resources:

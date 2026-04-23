@@ -40,6 +40,7 @@ import (
 
 // +kubebuilder:rbac:groups=extensions.istio.io,resources=wasmplugins,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=networking.istio.io,resources=serviceentries;destinationrules,verbs=get;create;update;patch
+// +kubebuilder:rbac:groups=networking.istio.io,resources=envoyfilters,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get
 // +kubebuilder:rbac:groups="",resources=pods,verbs=list;watch
 
@@ -266,12 +267,13 @@ const gatewayNameLabel = "gateway.networking.k8s.io/gateway-name"
 // It lists pods matching the selector, then extracts unique Gateway names from
 // the well-known gateway-name label on each pod.
 func (r *EngineReconciler) matchedGateways(ctx context.Context, log logr.Logger, req ctrl.Request, engine *wafv1alpha1.Engine) ([]wafv1alpha1.GatewayReference, error) {
-	if engine.Spec.Driver.Istio.Wasm.WorkloadSelector == nil {
+	ws := workloadSelector(engine)
+	if ws == nil {
 		logDebug(log, req, "Engine", "Empty workload selector for engine")
 		return nil, nil
 	}
 
-	selector, err := metav1.LabelSelectorAsSelector(engine.Spec.Driver.Istio.Wasm.WorkloadSelector)
+	selector, err := metav1.LabelSelectorAsSelector(ws)
 	if err != nil {
 		return nil, fmt.Errorf("invalid workload selector: %w", err)
 	}

@@ -1,0 +1,33 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: coraza-gateway
+  labels:
+    # kind + integration tests: align with operator Helm istio.revision (often "coraza").
+    # OpenShift: use the revision your control plane expects (e.g. openshift-gateway) or omit for default istiod.
+    # Integration tests read ISTIO_GATEWAY_REVISION instead of this file when using test/framework.
+    istio.io/rev: "coraza"
+  ## Uncomment below if you do not want to use LoadBalancer service type
+  #annotations:
+  #  networking.istio.io/service-type: ClusterIP
+spec:
+  gatewayClassName: istio
+  # parametersRef tells Istio's gateway controller to apply the operator-managed
+  # ConfigMap as a Strategic Merge Patch on the generated Deployment. The
+  # ConfigMap injects an init container that copies the dynamic module .so into
+  # the gateway pod.
+  #
+  # The ConfigMap name follows the pattern: coraza-dm-<engine-name>
+  # It is created automatically by the operator when moduleImage is set.
+  infrastructure:
+    parametersRef:
+      group: ""
+      kind: ConfigMap
+      name: coraza-dm-coraza
+  listeners:
+    - name: http
+      port: 80
+      protocol: HTTP
+      allowedRoutes:
+        namespaces:
+          from: All

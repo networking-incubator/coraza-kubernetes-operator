@@ -1,0 +1,20 @@
+apiVersion: waf.k8s.coraza.io/v1alpha1
+kind: Engine
+metadata:
+  name: coraza
+spec:
+  ruleSet:
+    name: default-ruleset
+  failurePolicy: fail
+  driver:
+    istio:
+      dynamicModule:
+        mode: gateway
+        workloadSelector:
+          matchLabels:
+            gateway.networking.k8s.io/gateway-name: coraza-gateway
+        moduleName: composer
+        filterName: coraza-waf
+        filterMode: FULL
+        moduleImage: quay.io/jwendell/composer:0.6.0-dev-linux-amd64
+        proxyImage: gcr.io/istio-testing/proxyv2:1.31-dev

@@ -29,13 +29,21 @@ import (
 //
 // Exactly one mode must be specified.
 //
-// +kubebuilder:validation:XValidation:rule="[has(self.wasm)].filter(x, x).size() == 1",message="exactly one integration mechanism (Wasm, etc) must be specified"
+// +kubebuilder:validation:XValidation:rule="[has(self.wasm), has(self.dynamicModule)].filter(x, x).size() == 1",message="exactly one integration mechanism (wasm or dynamicModule) must be specified"
 // +kubebuilder:validation:MinProperties=0
 type IstioDriverConfig struct {
 	// wasm configures the Engine to be deployed as a WebAssembly plugin.
 	//
 	// +optional
 	Wasm *IstioWasmConfig `json:"wasm,omitempty,omitzero"`
+
+	// dynamicModule configures the Engine to be deployed as an Envoy dynamic
+	// module. This uses the Built On Envoy coraza-waf extension, which is a
+	// native shared library (.so) loaded by Envoy at runtime. Rules are
+	// embedded inline in an EnvoyFilter resource.
+	//
+	// +optional
+	DynamicModule *IstioDynamicModuleConfig `json:"dynamicModule,omitempty,omitzero"`
 }
 
 // -----------------------------------------------------------------------------
@@ -111,4 +119,103 @@ const (
 
 	// MaxImageLen must match the CEL size constraint on IstioWasmConfig.Image.
 	MaxImageLen = 1024
+)
+
+// -----------------------------------------------------------------------------
+// Engine Driver - Istio Dynamic Module Configuration
+// -----------------------------------------------------------------------------
+
+// IstioDynamicModuleConfig defines configuration for deploying the Engine as an
+// Envoy dynamic module with Istio. The operator creates an EnvoyFilter resource
+// that patches the Envoy config to load the dynamic module and passes WAF rules
+// inline in the filter configuration.
+//
+// +kubebuilder:validation:MinProperties=0
+// +kubebuilder:validation:XValidation:rule="self.mode == 'gateway' ? has(self.workloadSelector) : true",message="workloadSelector is required when mode is gateway"
+type IstioDynamicModuleConfig struct {
+	// mode specifies what mechanism will be used to integrate the WAF with
+	// Istio.
+	//
+	// Currently only supports "Gateway" mode, utilizing Gateway API resources.
+	//
+	// +optional
+	// +default="gateway"
+	Mode IstioIntegrationMode `json:"mode,omitempty"`
+
+	// workloadSelector specifies the selection criteria for attaching the WAF to
+	// Istio resources.
+	//
+	// Required when mode is "gateway".
+	//
+	// +optional
+	WorkloadSelector *metav1.LabelSelector `json:"workloadSelector,omitempty,omitzero"`
+
+	// moduleName is the Envoy dynamic module name used to identify the loaded
+	// shared library. This corresponds to the .so filename without the "lib"
+	// prefix and ".so" suffix (e.g., "composer" loads "libcomposer.so").
+	//
+	// +optional
+	// +default="composer"
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	ModuleName string `json:"moduleName,omitempty"`
+
+	// filterName is the HTTP filter name registered by the dynamic module.
+	//
+	// +optional
+	// +default="coraza-waf"
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	FilterName string `json:"filterName,omitempty"`
+
+	// filterMode controls whether the WAF inspects requests, responses, or both.
+	//
+	// +optional
+	// +default="FULL"
+	FilterMode DynamicModuleFilterMode `json:"filterMode,omitempty"`
+
+	// moduleImage is the OCI image that contains the dynamic module shared
+	// library (libcomposer.so). When set, the operator creates a ConfigMap
+	// with a Deployment overlay that injects an init container to copy the
+	// .so into the gateway pod. The user must reference this ConfigMap in
+	// the Gateway's spec.infrastructure.parametersRef field.
+	//
+	// This is a workaround until Istio provides a native CRD for dynamic
+	// modules (similar to WasmPlugin). The ConfigMap name is
+	// "coraza-dm-<engine-name>".
+	//
+	// +optional
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=1024
+	ModuleImage string `json:"moduleImage,omitempty"`
+
+	// proxyImage overrides the Envoy proxy image used by the gateway pod.
+	// The standard Istio proxy image does not include the dynamic modules
+	// HTTP filter extension. This field allows specifying an Envoy image
+	// that has it compiled in (e.g., "gcr.io/istio-testing/proxyv2:1.31-dev").
+	//
+	// When set and moduleImage is also set, the proxy image override is
+	// included in the operator-managed ConfigMap Deployment overlay.
+	//
+	// +optional
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=1024
+	ProxyImage string `json:"proxyImage,omitempty"`
+}
+
+// DynamicModuleFilterMode specifies the WAF inspection mode for the dynamic
+// module.
+//
+// +kubebuilder:validation:Enum=REQUEST_ONLY;RESPONSE_ONLY;FULL
+type DynamicModuleFilterMode string
+
+const (
+	// DynamicModuleFilterModeRequestOnly inspects request headers and body only.
+	DynamicModuleFilterModeRequestOnly DynamicModuleFilterMode = "REQUEST_ONLY"
+
+	// DynamicModuleFilterModeResponseOnly inspects response headers and body only.
+	DynamicModuleFilterModeResponseOnly DynamicModuleFilterMode = "RESPONSE_ONLY"
+
+	// DynamicModuleFilterModeFull inspects both request and response phases.
+	DynamicModuleFilterModeFull DynamicModuleFilterMode = "FULL"
 )

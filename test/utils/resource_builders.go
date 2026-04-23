@@ -26,6 +26,11 @@ import (
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/defaults"
 )
 
+const (
+	defaultTestRuleSetName = "test-ruleset"
+	defaultTestNamespace   = "default"
+)
+
 // -----------------------------------------------------------------------------
 // Test Resource Builders - RuleSet
 // -----------------------------------------------------------------------------
@@ -41,10 +46,10 @@ type RuleSetOptions struct {
 // NewTestRuleSet creates a test RuleSet resource with sensible defaults
 func NewTestRuleSet(opts RuleSetOptions) *wafv1alpha1.RuleSet {
 	if opts.Name == "" {
-		opts.Name = "test-ruleset"
+		opts.Name = defaultTestRuleSetName
 	}
 	if opts.Namespace == "" {
-		opts.Namespace = "default"
+		opts.Namespace = defaultTestNamespace
 	}
 	if opts.Rules == nil {
 		opts.Rules = []wafv1alpha1.RuleSourceReference{
@@ -117,10 +122,10 @@ func NewTestEngine(opts EngineOptions) *wafv1alpha1.Engine {
 		opts.Name = "test-engine"
 	}
 	if opts.Namespace == "" {
-		opts.Namespace = "default"
+		opts.Namespace = defaultTestNamespace
 	}
 	if opts.RuleSetName == "" {
-		opts.RuleSetName = "test-ruleset"
+		opts.RuleSetName = defaultTestRuleSetName
 	}
 	if opts.WasmImage == "" {
 		opts.WasmImage = defaults.DefaultCorazaWasmOCIReference
@@ -170,4 +175,84 @@ func NewTestEngine(opts EngineOptions) *wafv1alpha1.Engine {
 	}
 
 	return engine
+}
+
+// -----------------------------------------------------------------------------
+// Test Resource Builders - Engine (Dynamic Module)
+// -----------------------------------------------------------------------------
+
+// DynamicModuleEngineOptions provides options for creating test Engine resources
+// with the dynamic module driver.
+type DynamicModuleEngineOptions struct {
+	Name                 string
+	Namespace            string
+	RuleSetName          string
+	ModuleName           string
+	FilterName           string
+	FilterMode           wafv1alpha1.DynamicModuleFilterMode
+	ModuleImage          string
+	ProxyImage           string
+	WorkloadLabels       map[string]string
+	IstioIntegrationMode wafv1alpha1.IstioIntegrationMode
+	FailurePolicy        wafv1alpha1.FailurePolicy
+}
+
+// NewTestDynamicModuleEngine creates a test Engine resource configured with the
+// dynamic module driver.
+func NewTestDynamicModuleEngine(opts DynamicModuleEngineOptions) *wafv1alpha1.Engine {
+	if opts.Name == "" {
+		opts.Name = "test-engine"
+	}
+	if opts.Namespace == "" {
+		opts.Namespace = defaultTestNamespace
+	}
+	if opts.RuleSetName == "" {
+		opts.RuleSetName = defaultTestRuleSetName
+	}
+	if opts.ModuleName == "" {
+		opts.ModuleName = "composer"
+	}
+	if opts.FilterName == "" {
+		opts.FilterName = "coraza-waf"
+	}
+	if opts.FilterMode == "" {
+		opts.FilterMode = wafv1alpha1.DynamicModuleFilterModeFull
+	}
+	if opts.WorkloadLabels == nil {
+		opts.WorkloadLabels = map[string]string{"app": "gateway"}
+	}
+	if opts.IstioIntegrationMode == "" {
+		opts.IstioIntegrationMode = wafv1alpha1.IstioIntegrationModeGateway
+	}
+	if opts.FailurePolicy == "" {
+		opts.FailurePolicy = wafv1alpha1.FailurePolicyFail
+	}
+
+	return &wafv1alpha1.Engine{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      opts.Name,
+			Namespace: opts.Namespace,
+		},
+		Spec: wafv1alpha1.EngineSpec{
+			RuleSet: wafv1alpha1.RuleSetReference{
+				Name: opts.RuleSetName,
+			},
+			Driver: &wafv1alpha1.DriverConfig{
+				Istio: &wafv1alpha1.IstioDriverConfig{
+					DynamicModule: &wafv1alpha1.IstioDynamicModuleConfig{
+						Mode: opts.IstioIntegrationMode,
+						WorkloadSelector: &metav1.LabelSelector{
+							MatchLabels: opts.WorkloadLabels,
+						},
+						ModuleName:  opts.ModuleName,
+						FilterName:  opts.FilterName,
+						FilterMode:  opts.FilterMode,
+						ModuleImage: opts.ModuleImage,
+						ProxyImage:  opts.ProxyImage,
+					},
+				},
+			},
+			FailurePolicy: opts.FailurePolicy,
+		},
+	}
 }

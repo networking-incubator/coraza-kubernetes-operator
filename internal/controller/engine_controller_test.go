@@ -798,7 +798,7 @@ func TestEngineReconciler_ValidationRejection(t *testing.T) {
 				engine.Spec.Driver.Istio = &wafv1alpha1.IstioDriverConfig{}
 				return engine
 			},
-			expectedError: "exactly one integration mechanism (Wasm, etc) must be specified",
+			expectedError: "exactly one integration mechanism",
 		},
 		{
 			name: "image doesn't start with oci://",

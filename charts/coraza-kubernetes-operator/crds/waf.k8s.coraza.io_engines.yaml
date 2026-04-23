@@ -65,6 +65,130 @@ spec:
                       service mesh.
                     minProperties: 0
                     properties:
+                      dynamicModule:
+                        description: |-
+                          dynamicModule configures the Engine to be deployed as an Envoy dynamic
+                          module. This uses the Built On Envoy coraza-waf extension, which is a
+                          native shared library (.so) loaded by Envoy at runtime. Rules are
+                          embedded inline in an EnvoyFilter resource.
+                        minProperties: 0
+                        properties:
+                          filterMode:
+                            default: FULL
+                            description: filterMode controls whether the WAF inspects
+                              requests, responses, or both.
+                            enum:
+                            - REQUEST_ONLY
+                            - RESPONSE_ONLY
+                            - FULL
+                            type: string
+                          filterName:
+                            default: coraza-waf
+                            description: filterName is the HTTP filter name registered
+                              by the dynamic module.
+                            maxLength: 253
+                            minLength: 1
+                            type: string
+                          mode:
+                            default: gateway
+                            description: |-
+                              mode specifies what mechanism will be used to integrate the WAF with
+                              Istio.
+
+                              Currently only supports "Gateway" mode, utilizing Gateway API resources.
+                            enum:
+                            - gateway
+                            type: string
+                          moduleImage:
+                            description: |-
+                              moduleImage is the OCI image that contains the dynamic module shared
+                              library (libcomposer.so). When set, the operator creates a ConfigMap
+                              with a Deployment overlay that injects an init container to copy the
+                              .so into the gateway pod. The user must reference this ConfigMap in
+                              the Gateway's spec.infrastructure.parametersRef field.
+
+                              This is a workaround until Istio provides a native CRD for dynamic
+                              modules (similar to WasmPlugin). The ConfigMap name is
+                              "coraza-dm-<engine-name>".
+                            maxLength: 1024
+                            minLength: 1
+                            type: string
+                          moduleName:
+                            default: composer
+                            description: |-
+                              moduleName is the Envoy dynamic module name used to identify the loaded
+                              shared library. This corresponds to the .so filename without the "lib"
+                              prefix and ".so" suffix (e.g., "composer" loads "libcomposer.so").
+                            maxLength: 253
+                            minLength: 1
+                            type: string
+                          proxyImage:
+                            description: |-
+                              proxyImage overrides the Envoy proxy image used by the gateway pod.
+                              The standard Istio proxy image does not include the dynamic modules
+                              HTTP filter extension. This field allows specifying an Envoy image
+                              that has it compiled in (e.g., "gcr.io/istio-testing/proxyv2:1.31-dev").
+
+                              When set and moduleImage is also set, the proxy image override is
+                              included in the operator-managed ConfigMap Deployment overlay.
+                            maxLength: 1024
+                            minLength: 1
+                            type: string
+                          workloadSelector:
+                            description: |-
+                              workloadSelector specifies the selection criteria for attaching the WAF to
+                              Istio resources.
+
+                              Required when mode is "gateway".
+                            properties:
+                              matchExpressions:
+                                description: matchExpressions is a list of label selector
+                                  requirements. The requirements are ANDed.
+                                items:
+                                  description: |-
+                                    A label selector requirement is a selector that contains values, a key, and an operator that
+                                    relates the key and values.
+                                  properties:
+                                    key:
+                                      description: key is the label key that the selector
+                                        applies to.
+                                      type: string
+                                    operator:
+                                      description: |-
+                                        operator represents a key's relationship to a set of values.
+                                        Valid operators are In, NotIn, Exists and DoesNotExist.
+                                      type: string
+                                    values:
+                                      description: |-
+                                        values is an array of string values. If the operator is In or NotIn,
+                                        the values array must be non-empty. If the operator is Exists or DoesNotExist,
+                                        the values array must be empty. This array is replaced during a strategic
+                                        merge patch.
+                                      items:
+                                        type: string
+                                      type: array
+                                      x-kubernetes-list-type: atomic
+                                  required:
+                                  - key
+                                  - operator
+                                  type: object
+                                type: array
+                                x-kubernetes-list-type: atomic
+                              matchLabels:
+                                additionalProperties:
+                                  type: string
+                                description: |-
+                                  matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
+                                  map is equivalent to an element of matchExpressions, whose key field is "key", the
+                                  operator is "In", and the values array contains only "value". The requirements are ANDed.
+                                type: object
+                            type: object
+                            x-kubernetes-map-type: atomic
+                        type: object
+                        x-kubernetes-validations:
+                        - message: workloadSelector is required when mode is gateway
+                          rule: 'self.mode == ''gateway'' ? has(self.workloadSelector)
+                            : true'
                       wasm:
                         description: wasm configures the Engine to be deployed as
                           a WebAssembly plugin.
@@ -180,9 +304,10 @@ spec:
                           rule: '!has(self.image) || size(self.image) <= 1024'
                     type: object
                     x-kubernetes-validations:
-                    - message: exactly one integration mechanism (Wasm, etc) must
-                        be specified
-                      rule: '[has(self.wasm)].filter(x, x).size() == 1'
+                    - message: exactly one integration mechanism (wasm or dynamicModule)
+                        must be specified
+                      rule: '[has(self.wasm), has(self.dynamicModule)].filter(x, x).size()
+                        == 1'
                 type: object
                 x-kubernetes-validations:
                 - message: exactly one driver must be specified

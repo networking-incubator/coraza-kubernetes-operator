@@ -71,6 +71,7 @@ func SetupControllers(mgr ctrl.Manager, rulesetCache *cache.RuleSetCache, envoyC
 		istioRevision:             istioRevision,
 		defaultWasmImage:          defaultWasmImage,
 		operatorNamespace:         operatorNamespace,
+		ruleSetCache:              rulesetCache,
 	}).SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("unable to create controller Engine: %w", err)
 	}

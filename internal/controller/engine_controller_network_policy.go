@@ -217,11 +217,16 @@ func (r *EngineReconciler) cleanupNetworkPolicy(ctx context.Context, log logr.Lo
 // workloadSelector returns the Engine's workload selector, or nil if the
 // driver chain is not fully configured.
 func workloadSelector(engine *wafv1alpha1.Engine) *metav1.LabelSelector {
-	if engine.Spec.Driver == nil || engine.Spec.Driver.Istio == nil ||
-		engine.Spec.Driver.Istio.Wasm == nil {
+	if engine.Spec.Driver == nil || engine.Spec.Driver.Istio == nil {
 		return nil
 	}
-	return engine.Spec.Driver.Istio.Wasm.WorkloadSelector
+	if engine.Spec.Driver.Istio.Wasm != nil {
+		return engine.Spec.Driver.Istio.Wasm.WorkloadSelector
+	}
+	if engine.Spec.Driver.Istio.DynamicModule != nil {
+		return engine.Spec.Driver.Istio.DynamicModule.WorkloadSelector
+	}
+	return nil
 }
 
 func (r *EngineReconciler) buildNetworkPolicy(engine *wafv1alpha1.Engine) *networkingv1.NetworkPolicy {

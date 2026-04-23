@@ -15,3 +15,11 @@ func hasIstioWasmDriver(engine *wafv1alpha1.Engine) bool {
 		engine.Spec.Driver.Istio != nil &&
 		engine.Spec.Driver.Istio.Wasm != nil
 }
+
+// hasIstioDynamicModuleDriver reports whether the Engine has a fully-specified
+// Istio dynamic module driver configuration.
+func hasIstioDynamicModuleDriver(engine *wafv1alpha1.Engine) bool {
+	return engine.Spec.Driver != nil &&
+		engine.Spec.Driver.Istio != nil &&
+		engine.Spec.Driver.Istio.DynamicModule != nil
+}

@@ -41,7 +41,7 @@ func (r *EngineReconciler) findEnginesForGateway(ctx context.Context, gateway cl
 	}
 
 	return collectRequests(engineList.Items, func(e *wafv1alpha1.Engine) bool {
-		return hasIstioWasmDriver(e)
+		return hasIstioWasmDriver(e) || hasIstioDynamicModuleDriver(e)
 	})
 }
 
