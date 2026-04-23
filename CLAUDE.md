@@ -136,6 +136,37 @@ make manifests generate helm.sync
 ```
 For cluster tests, also redeploy: `make deploy`.
 
+## Cross-repo contract with coraza-proxy-wasm
+
+This operator is one half of a two-repo system. The other half is `coraza-proxy-wasm`, a WASM plugin running inside Envoy/Istio that polls the operator's cache server for rules.
+
+The contract between the two repos:
+- WasmPlugin config fields: `cache_server_instance`, `cache_server_cluster`, `rule_reload_interval_seconds`
+- Cache server HTTP API paths: `/rules/{key}`, `/rules/{key}/latest`
+
+Any change to these field names or API paths is a **critical cross-repo breaking change**.
+
+## Style and conventions
+
+- Error wrapping: `fmt.Errorf("context: %w", err)`, not `%v`.
+- Logging: structured logging via `logr`. No `fmt.Println` or `log.Printf`.
+- Test assertions: `testify` (`require` for fatal, `assert` for non-fatal).
+- Favor functional style: pure functions over methods with side effects, small composable functions, early returns, immutable-by-default.
+
+## Controller-runtime conventions
+
+- Every reconcile must be idempotent.
+- Return errors for retriable failures (controller-runtime auto-requeues with backoff). Use `ctrl.Result{RequeueAfter: duration}` only for explicit timed requeues. **Never use `Requeue: true` (deprecated).**
+- Finalizer cleanup must be bullet-proof — missing finalizer removal blocks resource deletion indefinitely.
+- Any resource the operator creates must have an owner reference for garbage collection.
+- Status updates must set all three condition types (`Ready`, `Progressing`, `Degraded`). Missing one leaves stale status.
+- Cache updates must be atomic — partial updates cause WASM plugins to load corrupt rules.
+
+## API stability
+
+- API is `v1alpha1`. New fields must be backward-compatible: optional with `omitempty` and/or safely defaulted. Removals or renames are breaking.
+- Cross-namespace references between Engine, RuleSet, and ConfigMap are explicitly prohibited (security boundary).
+
 ## Integration test framework
 
 ### Scenario pattern (mandatory)
