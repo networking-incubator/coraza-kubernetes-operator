@@ -105,7 +105,6 @@ type RuleSetSpec struct {
 	// filesystem for @pmFromFile directives (last-listed wins on duplicate keys).
 	//
 	// +optional
-	// +kubebuilder:validation:MinItems=1
 	// +kubebuilder:validation:MaxItems=256
 	// +listType=atomic
 	Data []DataReference `json:"data,omitempty"`
