@@ -5,9 +5,9 @@ weight: 35
 description: "Supply external data files for rules that use the @pmFromFile directive."
 ---
 
-Some SecLang rules use the `@pmFromFile` directive to match against patterns stored in external data files. The Coraza Kubernetes Operator supports this through Secrets of type `coraza/data`.
+Some SecLang rules use the `@pmFromFile` directive to match against patterns stored in external data files. The Coraza Kubernetes Operator provides these files from **RuleData** resources, referenced by the **RuleSet** `spec.data` list.
 
-## When to Use Data Files
+## When to use data files
 
 Use data files when your rules reference `@pmFromFile`. For example:
 
@@ -16,30 +16,30 @@ SecRule ARGS "@pmFromFile bad-patterns.data" \
   "id:3001,phase:2,deny,status:403,msg:'Blocked pattern detected'"
 ```
 
-This rule reads patterns from a file named `bad-patterns.data`. To make this file available to the operator, store it in a Secret.
+This rule reads patterns from a file named `bad-patterns.data`. Store that file in a **RuleData** `spec.files` map (filename → content).
 
-## Creating a Data Secret
+## Creating a RuleData object
 
-Create a Secret with type `coraza/data`. Each key in the Secret corresponds to a filename referenced by `@pmFromFile`:
+A **RuleData** holds one or more files in `spec.files`. Each key is a filename referenced in `@pmFromFile`; the value is the file body:
 
 ```yaml
-apiVersion: v1
-kind: Secret
+apiVersion: waf.k8s.coraza.io/v1alpha1
+kind: RuleData
 metadata:
   name: rule-data
-type: coraza/data
-stringData:
-  bad-patterns.data: |
-    malicious-pattern-one
-    malicious-pattern-two
-    malicious-pattern-three
+spec:
+  files:
+    bad-patterns.data: |
+      malicious-pattern-one
+      malicious-pattern-two
+      malicious-pattern-three
 ```
 
-Each line in the data file is treated as a separate pattern by the `@pm` operator.
+Each line in the data file is treated as a separate pattern by the `@pm` operator (see Coraza / SecLang semantics for your rule).
 
-## Referencing the Secret in a RuleSet
+## Referencing RuleData in a RuleSet
 
-Set the `ruleData` field on the RuleSet to the name of the Secret:
+List RuleData object names in `spec.data` (same namespace as the RuleSet):
 
 ```yaml
 apiVersion: waf.k8s.coraza.io/v1alpha1
@@ -47,31 +47,32 @@ kind: RuleSet
 metadata:
   name: my-ruleset
 spec:
-  rules:
+  sources:
     - name: base-rules
     - name: pattern-rules
-  ruleData: rule-data
+  data:
+    - name: rule-data
 ```
 
-The Secret must be in the same namespace as the RuleSet.
+If you reference **several** RuleData objects, their `spec.files` entries are **merged in list order; when the same filename appears in more than one object, a later list entry overwrites the earlier one** (last listed wins for duplicate keys).
 
-## Complete Example
+## Complete example
 
 ```yaml
-apiVersion: v1
-kind: ConfigMap
+apiVersion: waf.k8s.coraza.io/v1alpha1
+kind: RuleSource
 metadata:
   name: base-rules
-data:
+spec:
   rules: |
     SecRuleEngine On
     SecRequestBodyAccess On
 ---
-apiVersion: v1
-kind: ConfigMap
+apiVersion: waf.k8s.coraza.io/v1alpha1
+kind: RuleSource
 metadata:
   name: pattern-rules
-data:
+spec:
   rules: |
     SecRule ARGS "@pmFromFile bad-patterns.data" \
       "id:3001,\
@@ -80,31 +81,32 @@ data:
       status:403,\
       msg:'Blocked pattern detected'"
 ---
-apiVersion: v1
-kind: Secret
+apiVersion: waf.k8s.coraza.io/v1alpha1
+kind: RuleData
 metadata:
   name: rule-data
-type: coraza/data
-stringData:
-  bad-patterns.data: |
-    evildata
-    anotherevildata
+spec:
+  files:
+    bad-patterns.data: |
+      evildata
+      anotherevildata
 ---
 apiVersion: waf.k8s.coraza.io/v1alpha1
 kind: RuleSet
 metadata:
   name: my-ruleset
 spec:
-  rules:
+  sources:
     - name: base-rules
     - name: pattern-rules
-  ruleData: rule-data
+  data:
+    - name: rule-data
 ```
 
-## Updating Data Files
+## Updating data files
 
-When you update the Secret, the RuleSet controller re-compiles the rules with the new data and updates the cache. Engines pick up the changes at their next poll interval.
+When you change a **RuleData** (or a **RuleSet** that references it), the RuleSet controller re-compiles with the new data and updates the cache. Engines pick up changes at their next poll interval.
 
 {{% alert title="Note" color="info" %}}
-A RuleSet can reference at most one data Secret. If you need multiple data files, include all of them as separate keys in a single Secret.
+You can list **up to 256** `spec.data` entries. Put multiple named files in one RuleData, or split them across several RuleData objects; remember that duplicate filenames are resolved with **last-listed** RuleData winning.
 {{% /alert %}}

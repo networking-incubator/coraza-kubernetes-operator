@@ -32,8 +32,8 @@ Deploy and configure firewall engines through simple custom resources.
 {{% /blocks/feature %}}
 
 {{% blocks/feature icon="fa-file-code" title="RuleSet API" %}}
-Aggregate firewall rules from ConfigMaps. Rules are compiled,
-validated, and cached automatically before being served to engines.
+Aggregate **RuleSource** and optional **RuleData** objects into a **RuleSet**.
+Rules are compiled, validated, and cached before being served to engines.
 {{% /blocks/feature %}}
 
 {{% blocks/feature icon="fa-sync-alt" title="Live Rule Updates" %}}

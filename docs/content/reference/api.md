@@ -20,9 +20,30 @@ Package v1alpha1 contains API Schema definitions for the waf v1alpha1 API group.
 ### Resource Types
 - [Engine](#engine)
 - [EngineList](#enginelist)
+- [RuleData](#ruledata)
+- [RuleDataList](#ruledatalist)
 - [RuleSet](#ruleset)
 - [RuleSetList](#rulesetlist)
+- [RuleSource](#rulesource)
+- [RuleSourceList](#rulesourcelist)
 
+
+
+### DataReference
+
+
+
+DataReference is a reference to a RuleData object in the same namespace
+as the RuleSet.
+
+
+
+_Appears in:_
+- [RuleSetSpec](#rulesetspec)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `name` _string_ | name is the name of the RuleData in the same namespace as the RuleSet. |  | MaxLength: 253 <br />MinLength: 1 <br />Required: \{\} <br /> |
 
 
 ### DriverConfig
@@ -213,6 +234,60 @@ _Appears in:_
 | `ruleSetCacheServer` _[RuleSetCacheServerConfig](#rulesetcacheserverconfig)_ | ruleSetCacheServer contains configuration for the ruleset cache server.<br />When omitted, no cache server will be used and no rulesets will be<br />dynamically loaded. This implies that your Engine will be deployed with<br />all rules statically embedded. |  | MinProperties: 0 <br />Optional: \{\} <br /> |
 
 
+### RuleData
+
+
+
+RuleData holds data file content (e.g. for @pmFromFile) for consumption by
+RuleSet resources. Each entry in spec.files maps a filename to its content.
+
+
+
+_Appears in:_
+- [RuleDataList](#ruledatalist)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `apiVersion` _string_ | `waf.k8s.coraza.io/v1alpha1` | | |
+| `kind` _string_ | `RuleData` | | |
+| `metadata` _[ObjectMeta](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.32/#objectmeta-v1-meta)_ | Refer to Kubernetes API documentation for fields of `metadata`. |  | Optional: \{\} <br /> |
+| `spec` _[RuleDataSpec](#ruledataspec)_ | spec defines the data file content. |  | Required: \{\} <br /> |
+
+
+### RuleDataList
+
+
+
+RuleDataList contains a list of RuleData resources.
+
+
+
+
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `apiVersion` _string_ | `waf.k8s.coraza.io/v1alpha1` | | |
+| `kind` _string_ | `RuleDataList` | | |
+| `metadata` _[ListMeta](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.32/#listmeta-v1-meta)_ | Refer to Kubernetes API documentation for fields of `metadata`. |  | Optional: \{\} <br /> |
+| `items` _[RuleData](#ruledata) array_ | Items is the list of RuleData. |  | Required: \{\} <br /> |
+
+
+### RuleDataSpec
+
+
+
+RuleDataSpec defines the content of a RuleData resource.
+
+
+
+_Appears in:_
+- [RuleData](#ruledata)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `files` _object (keys:string, values:string)_ | files maps filenames to file content, used for @pmFromFile data. |  | MinProperties: 1 <br />Required: \{\} <br /> |
+
+
 ### RuleSet
 
 
@@ -297,8 +372,8 @@ _Appears in:_
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `rules` _[RuleSourceReference](#rulesourcereference) array_ | rules is an ordered list of references to ConfigMaps that contain the<br />firewall rules to be compiled into a complete set.<br />Each entry refers to a ConfigMap by name in the same namespace as<br />the RuleSet. The ConfigMap must contain a "rules" key. |  | MaxItems: 2048 <br />MinItems: 1 <br />Required: \{\} <br /> |
-| `ruleData` _string_ | ruleData contains the name of a secret with the required data for rules.<br />Usually rules that contain the directive '@pmFromFile'.<br />This secret must be created containing the type coraza/data otherwise it will<br />not be watched.<br />Additionally, the secret must contain the name of each file as the key, and the content<br />of the file as the value |  | MaxLength: 253 <br />MinLength: 1 <br />Optional: \{\} <br /> |
+| `sources` _[SourceReference](#sourcereference) array_ | sources is an ordered list of references to RuleSource objects in the<br />same namespace as the RuleSet. Sources are concatenated in list order<br />to form the aggregated SecLang string. |  | MaxItems: 2048 <br />MinItems: 1 <br />Required: \{\} <br /> |
+| `data` _[DataReference](#datareference) array_ | data is an optional list of references to RuleData objects in the same<br />namespace as the RuleSet. Data entries are merged to provide the<br />filesystem for @pmFromFile directives (last-listed wins on duplicate keys). |  | MaxItems: 256 <br />MinItems: 1 <br />Optional: \{\} <br /> |
 
 
 ### RuleSetStatus
@@ -318,11 +393,65 @@ _Appears in:_
 | `conditions` _[Condition](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.32/#condition-v1-meta) array_ | conditions represent the current state of the RuleSet resource.<br />Each condition has a unique type and reflects the status of a specific aspect of the resource.<br />Standard condition types include:<br />- "Ready": the RuleSet has been processed and the rules have been cached<br />- "Progressing": the resource is being created or updated<br />- "Degraded": the resource failed to reach or maintain its desired state<br />The status of each condition is one of True, False, or Unknown. |  | MaxItems: 16 <br />MinItems: 1 <br />Optional: \{\} <br /> |
 
 
-### RuleSourceReference
+### RuleSource
 
 
 
-RuleSourceReference is a reference to a ConfigMap that contains WAF rules.
+RuleSource holds SecLang WAF rule text for consumption by RuleSet resources.
+
+
+
+_Appears in:_
+- [RuleSourceList](#rulesourcelist)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `apiVersion` _string_ | `waf.k8s.coraza.io/v1alpha1` | | |
+| `kind` _string_ | `RuleSource` | | |
+| `metadata` _[ObjectMeta](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.32/#objectmeta-v1-meta)_ | Refer to Kubernetes API documentation for fields of `metadata`. |  | Optional: \{\} <br /> |
+| `spec` _[RuleSourceSpec](#rulesourcespec)_ | spec defines the rule content. |  | Required: \{\} <br /> |
+
+
+### RuleSourceList
+
+
+
+RuleSourceList contains a list of RuleSource resources.
+
+
+
+
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `apiVersion` _string_ | `waf.k8s.coraza.io/v1alpha1` | | |
+| `kind` _string_ | `RuleSourceList` | | |
+| `metadata` _[ListMeta](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.32/#listmeta-v1-meta)_ | Refer to Kubernetes API documentation for fields of `metadata`. |  | Optional: \{\} <br /> |
+| `items` _[RuleSource](#rulesource) array_ | Items is the list of RuleSources. |  | Required: \{\} <br /> |
+
+
+### RuleSourceSpec
+
+
+
+RuleSourceSpec defines the content of a RuleSource.
+
+
+
+_Appears in:_
+- [RuleSource](#rulesource)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `rules` _string_ | rules contains SecLang rule text. |  | MaxLength: 1572864 <br />MinLength: 1 <br />Required: \{\} <br /> |
+
+
+### SourceReference
+
+
+
+SourceReference is a reference to a RuleSource object in the same namespace
+as the RuleSet.
 
 
 
@@ -331,6 +460,6 @@ _Appears in:_
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `name` _string_ | name is the name of the ConfigMap in the same namespace as the RuleSet. |  | MaxLength: 253 <br />MinLength: 1 <br />Required: \{\} <br /> |
+| `name` _string_ | name is the name of the RuleSource in the same namespace as the RuleSet. |  | MaxLength: 253 <br />MinLength: 1 <br />Required: \{\} <br /> |
 
 

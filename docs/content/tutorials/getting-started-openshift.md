@@ -161,25 +161,25 @@ oc wait -n waf-tutorial gateway/waf-gateway \
 
 ## Step 4: Define Firewall Rules
 
-Create ConfigMaps containing SecLang firewall rules:
+Create **RuleSource** resources with SecLang. The first sets the base Coraza configuration; the second blocks requests whose query string contains the word "attack":
 
 ```bash
 oc apply -n waf-tutorial -f - <<EOF
-apiVersion: v1
-kind: ConfigMap
+apiVersion: waf.k8s.coraza.io/v1alpha1
+kind: RuleSource
 metadata:
   name: base-rules
-data:
+spec:
   rules: |
     SecRuleEngine On
     SecRequestBodyAccess On
     SecResponseBodyAccess Off
 ---
-apiVersion: v1
-kind: ConfigMap
+apiVersion: waf.k8s.coraza.io/v1alpha1
+kind: RuleSource
 metadata:
   name: block-attack
-data:
+spec:
   rules: |
     SecRule ARGS "@contains attack" \
       "id:1001,\
@@ -192,6 +192,8 @@ EOF
 
 ## Step 5: Create a RuleSet
 
+Create a **RuleSet** that lists those RuleSource names in order:
+
 ```bash
 oc apply -n waf-tutorial -f - <<EOF
 apiVersion: waf.k8s.coraza.io/v1alpha1
@@ -199,7 +201,7 @@ kind: RuleSet
 metadata:
   name: tutorial-ruleset
 spec:
-  rules:
+  sources:
     - name: base-rules
     - name: block-attack
 EOF

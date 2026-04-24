@@ -2,23 +2,23 @@
 title: "Creating Firewall Rules"
 linkTitle: "Creating Firewall Rules"
 weight: 20
-description: "Write SecLang rules in ConfigMaps and aggregate them into a RuleSet."
+description: "Write SecLang rules in RuleSource objects and aggregate them in a RuleSet."
 ---
 
-Firewall rules in the Coraza Kubernetes Operator are written using [ModSecurity SecLang](https://github.com/owasp-modsecurity/ModSecurity/wiki/Reference-Manual-(v3.x)) syntax, stored in ConfigMaps, and aggregated by a RuleSet resource.
+Firewall rules in the Coraza Kubernetes Operator are written using [ModSecurity SecLang](https://github.com/owasp-modsecurity/ModSecurity/wiki/Reference-Manual-(v3.x)) syntax. Rule text is stored in **RuleSource** resources; a **RuleSet** lists RuleSource (and optional RuleData) names in order and drives compilation and caching.
 
-## Writing Rules in ConfigMaps
+## Writing rules in RuleSources
 
-Each ConfigMap must contain a key named `rules` with SecLang directives as its value.
+Each **RuleSource** has `spec.rules`: a string containing SecLang directives (use a `|` block scalar in YAML for multiline text).
 
-A basic ConfigMap with Coraza engine configuration:
+A basic RuleSource with Coraza engine configuration:
 
 ```yaml
-apiVersion: v1
-kind: ConfigMap
+apiVersion: waf.k8s.coraza.io/v1alpha1
+kind: RuleSource
 metadata:
   name: base-rules
-data:
+spec:
   rules: |
     SecRuleEngine On
     SecRequestBodyAccess On
@@ -28,14 +28,14 @@ data:
     SecAuditEngine RelevantOnly
 ```
 
-A ConfigMap with a SQL injection detection rule:
+A RuleSource with a SQL injection detection rule:
 
 ```yaml
-apiVersion: v1
-kind: ConfigMap
+apiVersion: waf.k8s.coraza.io/v1alpha1
+kind: RuleSource
 metadata:
   name: sqli-rules
-data:
+spec:
   rules: |
     SecRule ARGS "@rx (?i:select.*from|union.*select|insert.*into)" \
       "id:1001,\
@@ -47,7 +47,7 @@ data:
 
 ## Creating a RuleSet
 
-A RuleSet references one or more ConfigMaps. The ConfigMaps are processed in the order they are listed:
+A **RuleSet** lists RuleSource names in `spec.sources`. The operator fetches and concatenates them in list order:
 
 ```yaml
 apiVersion: waf.k8s.coraza.io/v1alpha1
@@ -55,55 +55,55 @@ kind: RuleSet
 metadata:
   name: my-ruleset
 spec:
-  rules:
+  sources:
     - name: base-rules
     - name: sqli-rules
 ```
 
 {{% alert title="Important" color="warning" %}}
-All ConfigMaps must be in the same namespace as the RuleSet.
+All referenced RuleSource and RuleData objects must be in the **same namespace** as the RuleSet.
 {{% /alert %}}
 
-## Rule Ordering
+## Rule ordering
 
-The order of ConfigMaps in the `rules` list matters. Rules are loaded sequentially. Place engine configuration (such as `SecRuleEngine On`) in the first ConfigMap, followed by detection rules.
+The order of entries in `spec.sources` matters. Rules are concatenated in that order. Place engine configuration (such as `SecRuleEngine On`) in the first RuleSource, followed by detection rules.
 
-## Live Rule Updates
+## Live rule updates
 
-When you update a ConfigMap, the RuleSet controller automatically detects the change, re-compiles the rules, and updates the cache. Engines polling the cache will pick up the new rules at their configured poll interval.
+When you change a **RuleSource** the RuleSet controller reconciles, re-compiles, and updates the cache. Engines polling the cache pick up the new rules at their configured poll interval.
 
 ```bash
-kubectl edit configmap sqli-rules -n my-namespace
+kubectl edit rulesource sqli-rules -n my-namespace
 ```
 
 No restart of the operator or Engine is required.
 
-## Rule Validation
+## Rule validation
 
-The operator compiles and validates all rules when a RuleSet is reconciled. If a rule has a syntax error, the RuleSet will enter a `Degraded` state and the invalid revision will not be cached. Any previously cached valid revision continues to be served.
+The operator compiles and validates rules when a RuleSet is reconciled. If a rule has a syntax error, the RuleSet can enter a `Degraded` state and the invalid revision is not cached. A previously cached valid revision continues to be served.
 
-Check the RuleSet status for validation errors:
+Check the RuleSet status for errors:
 
 ```bash
 kubectl describe ruleset my-ruleset -n my-namespace
 ```
 
-## Skipping Validation for ConfigMaps
+## Skipping validation for a RuleSource
 
-To skip per-ConfigMap rule validation (for example, if a ConfigMap contains rules that depend on directives from another ConfigMap), add the following annotation:
+To skip per-fragment Coraza validation on a **RuleSource** (for example, if its rules only make sense in the full aggregated context), set:
 
 ```yaml
-apiVersion: v1
-kind: ConfigMap
+apiVersion: waf.k8s.coraza.io/v1alpha1
+kind: RuleSource
 metadata:
   name: dependent-rules
   annotations:
     coraza.io/validation: "false"
-data:
+spec:
   rules: |
     SecRule TX:BLOCKING_PARANOIA_LEVEL "@ge 1" ...
 ```
 
-## Maximum Rules
+## Maximum references
 
-A RuleSet supports up to **2048** ConfigMap references.
+A RuleSet supports up to **2048** entries in `spec.sources` and up to **256** in `spec.data` (for RuleData objects; see [Using data files]({{< relref "/howto/using-data-files" >}})).

@@ -15,7 +15,7 @@ The operator requires two sets of RBAC permissions:
 
 | Resource | Verbs | Purpose |
 |----------|-------|---------|
-| ConfigMaps, Secrets | get, list, watch | Read firewall rules and data files. |
+| `waf.k8s.coraza.io` **rulesources**, **ruledata** | get, list, watch | Read SecLang and data file content for RuleSet reconciliation. |
 | Pods | list, watch | Discover Gateway pods matching Engine workload selectors. |
 | ServiceAccounts | create, get, list, patch, update, watch | Manage service accounts for cache authentication. |
 | ServiceAccounts/token | create | Issue tokens for WASM plugin authentication. |
@@ -37,7 +37,7 @@ The operator follows the principle of least privilege. It does not request permi
 
 ## Namespace Scoping
 
-All RuleSets, ConfigMaps, Secrets, and Engines must reside in the same namespace. Cross-namespace references are not supported. This ensures that tenants in a multi-tenant cluster cannot reference each other's firewall rules.
+All **RuleSet**, **RuleSource**, **RuleData**, and **Engine** resources involved in a deployment must reside in the **same namespace** as each other. Cross-namespace references are not supported. This ensures that tenants in a multi-tenant cluster cannot reference each other's firewall rules.
 
 ## TLS Configuration
 

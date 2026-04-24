@@ -5,7 +5,7 @@ weight: 30
 description: "Generate and deploy OWASP CoreRuleSet rules using the kubectl-coraza plugin."
 ---
 
-The [OWASP CoreRuleSet (CRS)](https://coreruleset.org/) is a widely used set of attack detection rules for ModSecurity-compatible WAFs. The `kubectl-coraza` plugin can generate Kubernetes ConfigMaps and RuleSet resources from CRS rule files.
+The [OWASP CoreRuleSet (CRS)](https://coreruleset.org/) is a widely used set of attack detection rules for ModSecurity-compatible WAFs. The `kubectl-coraza` plugin can generate **RuleSource**, **RuleData**, and **RuleSet** manifests from CRS rule files.
 
 {{% alert title="Important" color="warning" %}}
 This project does not provide, maintain, or support CoreRuleSet rules. Users must supply their own rules. The tools described here are provided for convenience.
@@ -45,9 +45,9 @@ curl -fsSL "https://github.com/coreruleset/coreruleset/archive/refs/tags/v${CRS_
 
 The rule files are in `coreruleset-${CRS_VERSION}/rules/`.
 
-## Generate ConfigMaps
+## Generate manifests
 
-Use `kubectl-coraza` to generate Kubernetes manifests from the rule files:
+Use `kubectl coraza generate coreruleset` to emit a multi-document YAML stream (stdout) from the rule files:
 
 ```bash
 kubectl coraza generate coreruleset \
@@ -57,11 +57,11 @@ kubectl coraza generate coreruleset \
   > coreruleset-manifests.yaml
 ```
 
-This produces:
+This typically produces:
 
-- One ConfigMap per `.conf` rule file.
-- A Secret (type `coraza/data`) for any `.data` files.
-- A RuleSet resource referencing all generated ConfigMaps.
+- One **RuleSource** per `*.conf` file (`spec.rules` holds the file text).
+- At most one **RuleData** (`spec.files` maps each data filename to content) if the directory contains `*.data` files. Its name is controlled by `--data-source-name` (default `coreruleset-data`).
+- A **RuleSet** with `spec.sources` (and `spec.data` when RuleData is emitted) wired to those names in order.
 
 ## Apply the Generated Rules
 

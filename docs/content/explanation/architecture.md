@@ -11,13 +11,13 @@ The Coraza Kubernetes Operator uses a two-controller architecture with a shared 
 
 The operator manages two custom resources:
 
-- **RuleSet** -- Aggregates SecLang rules from ConfigMaps and compiles them into a cached, validated ruleset.
+- **RuleSet** -- Aggregates SecLang from **RuleSource** resources (and optional **RuleData** for `@pmFromFile` files) and compiles them into a cached, validated ruleset.
 - **Engine** -- Attaches a RuleSet to one or more Gateways by deploying a Coraza WASM plugin into Envoy.
 
 The data flows through these components:
 
 ```
-ConfigMaps/Secrets
+RuleSource / RuleData
        |
        v
 RuleSetReconciler  --compile and validate-->  RuleSetCache (HTTP server)
@@ -33,10 +33,10 @@ RuleSetReconciler  --compile and validate-->  RuleSetCache (HTTP server)
 
 ### RuleSetReconciler
 
-The RuleSet controller watches RuleSet resources and their referenced ConfigMaps and Secrets. When any of these change, it:
+The RuleSet controller watches **RuleSet** resources and the **RuleSource** and **RuleData** objects they reference (via field indexes in the watched namespace). When any of these change, it:
 
-1. Reads the rules from each referenced ConfigMap in order.
-2. If a data Secret is referenced, loads the data files.
+1. Loads each **RuleSource** in `spec.sources` order and concatenates `spec.rules`.
+2. If `spec.data` is set, loads each **RuleData** and merges `spec.files` (later objects override duplicate filenames).
 3. Compiles and validates the rules using the Coraza engine.
 4. Checks for rules that are unsupported in the current execution environment (such as WASM mode).
 5. On success, stores the compiled ruleset in the shared cache.

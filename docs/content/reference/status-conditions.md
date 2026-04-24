@@ -55,11 +55,11 @@ The Engine could not reach its desired state. Common reasons:
 
 ### Ready
 
-The rules have been compiled, validated, and cached.
+The rules have been compiled, validated, and cached. When the `Ready` condition is `True`, the **reason** is typically `RulesCached`.
 
 ### Progressing
 
-The RuleSet is being processed. This happens when ConfigMaps or Secrets are updated.
+The RuleSet is being processed. This happens when the **RuleSet** or a referenced **RuleSource** or **RuleData** changes.
 
 ### Degraded
 
@@ -68,13 +68,11 @@ The RuleSet could not be compiled or cached. Common reasons:
 | Reason | Description | Resolution |
 |--------|-------------|------------|
 | `UnsupportedRules` | The RuleSet contains rules not supported in the current execution environment. | Remove the unsupported rules, or add the annotation `waf.k8s.coraza.io/skip-unsupported-rules-check: "true"` to the RuleSet. |
-| `InvalidRuleSet` | Rule compilation failed due to syntax errors. | Check the condition message for the specific error. Fix the rule syntax in the ConfigMap. |
-| `ConfigMapNotFound` | A referenced ConfigMap does not exist. | Verify the ConfigMap name and namespace. |
-| `ConfigMapAccessError` | The operator could not read a referenced ConfigMap. | Check RBAC permissions for the operator ServiceAccount. |
-| `InvalidConfigMap` | A referenced ConfigMap is missing the `rules` key. | Ensure each ConfigMap has a `rules` key containing SecLang directives. |
-| `SecretNotFound` | A referenced Secret does not exist. | Verify the Secret name and namespace. |
-| `SecretAccessError` | The operator could not read a referenced Secret. | Check RBAC permissions for the operator ServiceAccount. |
-| `RuleDataSecretTypeMismatch` | A referenced Secret has an unexpected type. | Ensure the Secret type matches what the RuleSet expects. |
+| `InvalidRuleSet` | Rule validation or compilation failed (e.g. syntax or validation error in a RuleSource or in the aggregate). | Check the condition message. Fix the SecLang in the **RuleSource** (or the RuleSet’s ordering / references) as indicated. |
+| `RuleSourceNotFound` | A RuleSource named in `spec.sources` does not exist. | Create the RuleSource or correct the name; it must be in the same namespace as the RuleSet. |
+| `RuleSourceAccessError` | The operator could not read a referenced RuleSource. | Check RBAC and API errors in operator logs. |
+| `RuleDataNotFound` | A RuleData named in `spec.data` does not exist. | Create the RuleData or correct the name. |
+| `RuleDataAccessError` | The operator could not read a referenced RuleData. | Check RBAC and API errors in operator logs. |
 
 ## Troubleshooting
 
@@ -110,10 +108,10 @@ logging:
 
 **RuleSet stays in Progressing state**
 
-The operator may be waiting for ConfigMaps to become available. Verify all referenced ConfigMaps exist:
+The operator may be waiting for referenced **RuleSource** or **RuleData** objects. Verify they exist in the same namespace as the RuleSet:
 
 ```bash
-kubectl get configmap -n my-namespace
+kubectl get rulesource,ruledata -n my-namespace
 ```
 
 **Engine is Ready but traffic is not filtered**
