@@ -84,6 +84,7 @@ rules:
   resources:
   - gateways
   verbs:
+  - get
   - list
   - watch
 - apiGroups:

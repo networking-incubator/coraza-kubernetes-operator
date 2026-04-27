@@ -39,6 +39,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
@@ -55,7 +56,7 @@ import (
 // +kubebuilder:rbac:groups=waf.k8s.coraza.io,resources=engines/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=waf.k8s.coraza.io,resources=rulesets,verbs=get;list;watch
 // +kubebuilder:rbac:groups=waf.k8s.coraza.io,resources=rulesets/status,verbs=get
-// +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gateways,verbs=list;watch
+// +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gateways,verbs=get;list;watch
 
 // -----------------------------------------------------------------------------
 // EngineReconciler
@@ -104,6 +105,14 @@ func (r *EngineReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(wasmPlugin).
 		Watches(gateway, handler.EnqueueRequestsFromMapFunc(r.findEnginesForGateway)).
 		Watches(&wafv1alpha1.RuleSet{}, handler.EnqueueRequestsFromMapFunc(r.findEnginesForRuleSet)).
+		Watches(&wafv1alpha1.Engine{}, handler.EnqueueRequestsFromMapFunc(r.findCompetingEngines), builder.WithPredicates(
+			predicate.Funcs{
+				CreateFunc:  func(event.CreateEvent) bool { return true },
+				DeleteFunc:  func(event.DeleteEvent) bool { return true },
+				UpdateFunc:  func(event.UpdateEvent) bool { return false },
+				GenericFunc: func(event.GenericEvent) bool { return false },
+			},
+		)).
 		Watches(&corev1.Pod{}, handler.EnqueueRequestsFromMapFunc(r.findEnginesForPod), builder.WithPredicates(
 			predicate.NewPredicateFuncs(func(object client.Object) bool {
 				_, hasGWAPI := object.GetLabels()[gatewayNameLabel]
@@ -177,6 +186,33 @@ func (r *EngineReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		applyStatusProgressing(&engine.Status.Conditions, engine.Generation, "Reconciling", "Starting reconciliation")
 		if err := r.Status().Patch(ctx, &engine, patch); err != nil {
 			logAPIError(log, req, "Engine", err, "Failed to patch initial status", &engine)
+			return ctrl.Result{}, err
+		}
+		logConditionTransitions(log, req, "Engine", before, engine.Status.Conditions)
+	}
+
+	logDebug(log, req, "Engine", "Checking target availability")
+	if notFound, err := r.isTargetNotFound(ctx, log, req, &engine); err != nil {
+		return ctrl.Result{}, err
+	} else if notFound {
+		return ctrl.Result{}, nil
+	}
+
+	logDebug(log, req, "Engine", "Checking target conflict")
+	if conflict, err := r.hasTargetConflict(ctx, log, req, &engine); err != nil {
+		return ctrl.Result{}, err
+	} else if conflict {
+		return ctrl.Result{}, nil
+	}
+
+	// Target is valid and uncontested — ensure Accepted=True. This clears any
+	// stale Accepted=False from a prior TargetNotFound or TargetConflict state.
+	if needsAcceptedUpdate(engine.Status.Conditions, engine.Generation) {
+		patch := client.MergeFrom(engine.DeepCopy())
+		before := snapshotConditions(engine.Status.Conditions)
+		setConditionTrue(&engine.Status.Conditions, engine.Generation, conditionAccepted, "Accepted", "Target is available and not conflicting")
+		if err := r.Status().Patch(ctx, &engine, patch); err != nil {
+			logAPIError(log, req, "Engine", err, "Failed to patch Accepted status", &engine)
 			return ctrl.Result{}, err
 		}
 		logConditionTransitions(log, req, "Engine", before, engine.Status.Conditions)

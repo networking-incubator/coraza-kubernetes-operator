@@ -25,6 +25,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	appsv1 "k8s.io/api/apps/v1"
@@ -67,6 +68,17 @@ func TestMain(m *testing.M) {
 		}
 	}()
 
+	gatewayAPICRDDir, err := downloadGatewayAPICRDs()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to download Gateway API CRDs: %v\n", err)
+		os.Exit(1)
+	}
+	defer func() {
+		if rmErr := os.RemoveAll(gatewayAPICRDDir); rmErr != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to cleanup Gateway API CRD dir: %v\n", rmErr)
+		}
+	}()
+
 	scheme = runtime.NewScheme()
 	if err := wafv1alpha1.AddToScheme(scheme); err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to add waf scheme: %v\n", err)
@@ -95,6 +107,7 @@ func TestMain(m *testing.M) {
 			Paths: []string{
 				filepath.Join("..", "..", "config", "crd", "bases"),
 				istioCRDDir,
+				gatewayAPICRDDir,
 			},
 			CleanUpAfterUse: true,
 		},
@@ -202,5 +215,59 @@ func downloadIstioCRDs() (string, error) {
 		return "", fmt.Errorf("failed to write CRD file: %w", err)
 	}
 
+	return tmpDir, nil
+}
+
+// downloadGatewayAPICRDs downloads the Gateway API CRDs needed for target
+// validation tests. The CRDs are placed in a temporary directory that must be
+// cleaned up by the caller.
+func downloadGatewayAPICRDs() (string, error) {
+	// Use the standard Gateway API CRDs. The version should be compatible with
+	// the Istio version used in tests.
+	const gatewayAPICRDURL = "https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.2.1/standard-install.yaml"
+
+	tmpDir, err := os.MkdirTemp("", "gateway-api-crds-*")
+	if err != nil {
+		return "", fmt.Errorf("failed to create temp dir: %w", err)
+	}
+
+	success := false
+	defer func() {
+		if !success {
+			_ = os.RemoveAll(tmpDir)
+		}
+	}()
+
+	httpClient := &http.Client{Timeout: 30 * time.Second}
+	resp, err := httpClient.Get(gatewayAPICRDURL) //nolint:gosec // Fixed test URL, not user input.
+	if err != nil {
+		return "", fmt.Errorf("failed to download Gateway API CRDs: %w", err)
+	}
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to close response body: %v\n", closeErr)
+		}
+	}()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("failed to download Gateway API CRDs: HTTP %d", resp.StatusCode)
+	}
+
+	crdFile := filepath.Join(tmpDir, "gateway-api-crds.yaml")
+	f, err := os.Create(crdFile)
+	if err != nil {
+		return "", fmt.Errorf("failed to create CRD file: %w", err)
+	}
+	defer func() {
+		if closeErr := f.Close(); closeErr != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to close file: %v\n", closeErr)
+		}
+	}()
+
+	if _, err := io.Copy(f, resp.Body); err != nil {
+		return "", fmt.Errorf("failed to write CRD file: %w", err)
+	}
+
+	success = true
 	return tmpDir, nil
 }
