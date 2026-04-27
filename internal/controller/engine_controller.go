@@ -105,11 +105,11 @@ func (r *EngineReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(wasmPlugin).
 		Watches(gateway, handler.EnqueueRequestsFromMapFunc(r.findEnginesForGateway)).
 		Watches(&wafv1alpha1.RuleSet{}, handler.EnqueueRequestsFromMapFunc(r.findEnginesForRuleSet)).
-		Watches(&wafv1alpha1.Engine{}, handler.EnqueueRequestsFromMapFunc(r.findCompetingEngines), builder.WithPredicates(
+		Watches(&wafv1alpha1.Engine{}, r.competingEngineHandler(), builder.WithPredicates(
 			predicate.Funcs{
 				CreateFunc:  func(event.CreateEvent) bool { return true },
 				DeleteFunc:  func(event.DeleteEvent) bool { return true },
-				UpdateFunc:  func(event.UpdateEvent) bool { return false },
+				UpdateFunc:  func(e event.UpdateEvent) bool { return e.ObjectOld.GetGeneration() != e.ObjectNew.GetGeneration() },
 				GenericFunc: func(event.GenericEvent) bool { return false },
 			},
 		)).

@@ -3,7 +3,11 @@ package controller
 import (
 	"context"
 
+	"k8s.io/client-go/util/workqueue"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/event"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
@@ -46,8 +50,8 @@ func (r *EngineReconciler) findEnginesForGateway(ctx context.Context, gateway cl
 }
 
 // findCompetingEngines maps an Engine to all other Engines in the same
-// namespace that target the same Gateway. This enables conflict re-evaluation
-// when an Engine is created or deleted.
+// namespace that target the same Gateway. Called by competingEngineHandler on
+// create, delete, and generation-changing updates.
 func (r *EngineReconciler) findCompetingEngines(ctx context.Context, obj client.Object) []reconcile.Request {
 	log := logf.FromContext(ctx)
 
@@ -73,6 +77,32 @@ func (r *EngineReconciler) findCompetingEngines(ctx context.Context, obj client.
 			e.Spec.Target.Type == engine.Spec.Target.Type &&
 			e.Spec.Target.Name == engine.Spec.Target.Name
 	})
+}
+
+// competingEngineHandler returns an EventHandler that requeues all competing
+// Engines when an Engine is created, deleted, or has its target changed.
+//
+// On Update events (filtered by the caller to generation-changing updates),
+// competitors for both the old and new targets are enqueued so that Engines
+// targeting the old Gateway can clear a stale TargetConflict.
+func (r *EngineReconciler) competingEngineHandler() handler.EventHandler {
+	enqueue := func(ctx context.Context, obj client.Object, q workqueue.TypedRateLimitingInterface[ctrl.Request]) {
+		for _, req := range r.findCompetingEngines(ctx, obj) {
+			q.Add(req)
+		}
+	}
+	return handler.Funcs{
+		CreateFunc: func(ctx context.Context, e event.CreateEvent, q workqueue.TypedRateLimitingInterface[ctrl.Request]) {
+			enqueue(ctx, e.Object, q)
+		},
+		DeleteFunc: func(ctx context.Context, e event.DeleteEvent, q workqueue.TypedRateLimitingInterface[ctrl.Request]) {
+			enqueue(ctx, e.Object, q)
+		},
+		UpdateFunc: func(ctx context.Context, e event.UpdateEvent, q workqueue.TypedRateLimitingInterface[ctrl.Request]) {
+			enqueue(ctx, e.ObjectOld, q)
+			enqueue(ctx, e.ObjectNew, q)
+		},
+	}
 }
 
 // findEnginesForPod maps a Pod to the Engines in the same namespace whose

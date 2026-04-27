@@ -1902,6 +1902,112 @@ func TestEngineReconciler_TargetConflict_Resolves(t *testing.T) {
 	assert.Equal(t, "Accepted", acceptedB.Reason)
 }
 
+func TestEngineReconciler_TargetConflict_ResolvesOnRetarget(t *testing.T) {
+	ctx := context.Background()
+
+	t.Log("Creating Gateways and RuleSet for retarget conflict test")
+	createTestGateway(t, ctx, k8sClient, "retarget-gw-x", testNamespace)
+	createTestGateway(t, ctx, k8sClient, "retarget-gw-y", testNamespace)
+
+	ruleset := utils.NewTestRuleSet(utils.RuleSetOptions{
+		Name:      "retarget-ruleset",
+		Namespace: testNamespace,
+	})
+	require.NoError(t, k8sClient.Create(ctx, ruleset))
+	t.Cleanup(func() {
+		if err := k8sClient.Delete(ctx, ruleset); err != nil && !apierrors.IsNotFound(err) {
+			t.Logf("Failed to delete ruleset: %v", err)
+		}
+	})
+
+	t.Log("Creating Engine A targeting Gateway X (older, wins)")
+	engineA := utils.NewTestEngine(utils.EngineOptions{
+		Name:        "retarget-engine-a",
+		Namespace:   testNamespace,
+		GatewayName: "retarget-gw-x",
+		RuleSetName: ruleset.Name,
+	})
+	require.NoError(t, k8sClient.Create(ctx, engineA))
+	t.Cleanup(func() {
+		if err := k8sClient.Delete(ctx, engineA); err != nil && !apierrors.IsNotFound(err) {
+			t.Logf("Failed to delete engine A: %v", err)
+		}
+	})
+
+	reconciler := &EngineReconciler{
+		Client:                    k8sClient,
+		Scheme:                    scheme,
+		Recorder:                  utils.NewTestRecorder(),
+		kubeClient:                testKubeClient,
+		ruleSetCacheServerCluster: "test-cluster",
+		defaultWasmImage:          defaults.DefaultCorazaWasmOCIReference,
+		operatorNamespace:         testNamespace,
+	}
+	reqA := ctrl.Request{NamespacedName: types.NamespacedName{Name: engineA.Name, Namespace: testNamespace}}
+
+	// Reconcile Engine A: finalizer + provisioning.
+	result, err := reconciler.Reconcile(ctx, reqA)
+	require.NoError(t, err)
+	assert.NotZero(t, result.RequeueAfter)
+	_, err = reconciler.Reconcile(ctx, reqA)
+	require.NoError(t, err)
+
+	t.Log("Creating Engine B targeting Gateway X (newer, loses)")
+	engineB := utils.NewTestEngine(utils.EngineOptions{
+		Name:        "retarget-engine-b",
+		Namespace:   testNamespace,
+		GatewayName: "retarget-gw-x",
+		RuleSetName: ruleset.Name,
+	})
+	require.NoError(t, k8sClient.Create(ctx, engineB))
+	t.Cleanup(func() {
+		if err := k8sClient.Delete(ctx, engineB); err != nil && !apierrors.IsNotFound(err) {
+			t.Logf("Failed to delete engine B: %v", err)
+		}
+	})
+
+	reqB := ctrl.Request{NamespacedName: types.NamespacedName{Name: engineB.Name, Namespace: testNamespace}}
+
+	// Reconcile Engine B: finalizer + conflict.
+	result, err = reconciler.Reconcile(ctx, reqB)
+	require.NoError(t, err)
+	assert.NotZero(t, result.RequeueAfter)
+	_, err = reconciler.Reconcile(ctx, reqB)
+	require.NoError(t, err)
+
+	var updatedB wafv1alpha1.Engine
+	require.NoError(t, k8sClient.Get(ctx, reqB.NamespacedName, &updatedB))
+	require.NotNil(t, updatedB.Status)
+	acceptedB := apimeta.FindStatusCondition(updatedB.Status.Conditions, "Accepted")
+	require.NotNil(t, acceptedB)
+	assert.Equal(t, metav1.ConditionFalse, acceptedB.Status, "precondition: Engine B should be rejected")
+	assert.Equal(t, "TargetConflict", acceptedB.Reason)
+
+	t.Log("Retargeting Engine A from Gateway X to Gateway Y")
+	var latestA wafv1alpha1.Engine
+	require.NoError(t, k8sClient.Get(ctx, reqA.NamespacedName, &latestA))
+	latestA.Spec.Target.Name = "retarget-gw-y"
+	require.NoError(t, k8sClient.Update(ctx, &latestA))
+
+	// Reconcile Engine A on the new target.
+	_, err = reconciler.Reconcile(ctx, reqA)
+	require.NoError(t, err)
+
+	// In a real controller, the competingEngineHandler would enqueue Engine B
+	// after Engine A's spec update (generation changed). Simulate that requeue.
+	_, err = reconciler.Reconcile(ctx, reqB)
+	require.NoError(t, err)
+
+	t.Log("Verifying Engine B is now Accepted on Gateway X")
+	require.NoError(t, k8sClient.Get(ctx, reqB.NamespacedName, &updatedB))
+	require.NotNil(t, updatedB.Status)
+	acceptedB = apimeta.FindStatusCondition(updatedB.Status.Conditions, "Accepted")
+	require.NotNil(t, acceptedB, "Engine B should have Accepted condition after retarget")
+	assert.Equal(t, metav1.ConditionTrue, acceptedB.Status,
+		"Engine B should be Accepted after Engine A retargets away from Gateway X")
+	assert.Equal(t, "Accepted", acceptedB.Reason)
+}
+
 func TestEngineReconciler_ReadyToTargetNotFound(t *testing.T) {
 	ctx := context.Background()
 
