@@ -67,6 +67,44 @@ func needsAcceptedUpdate(conditions []metav1.Condition, generation int64) bool {
 }
 
 // -----------------------------------------------------------------------------
+// Target Rejection Cleanup
+// -----------------------------------------------------------------------------
+
+// cleanupNotAccepted removes child resources that were created when the Engine
+// was previously accepted (WasmPlugin, NetworkPolicy, cached token). This
+// prevents stale WasmPlugins from enforcing rules for an Engine that is no
+// longer accepted due to TargetNotFound or TargetConflict.
+func (r *EngineReconciler) cleanupNotAccepted(ctx context.Context, log logr.Logger, req ctrl.Request, engine *wafv1alpha1.Engine) error {
+	wasmPlugin := &unstructured.Unstructured{}
+	wasmPlugin.SetGroupVersionKind(schema.GroupVersionKind{
+		Group:   "extensions.istio.io",
+		Version: "v1alpha1",
+		Kind:    "WasmPlugin",
+	})
+	wasmPluginName := fmt.Sprintf("%s%s", WasmPluginNamePrefix, engine.Name)
+	err := r.Get(ctx, types.NamespacedName{Name: wasmPluginName, Namespace: engine.Namespace}, wasmPlugin)
+	if err == nil {
+		if delErr := r.Delete(ctx, wasmPlugin); client.IgnoreNotFound(delErr) != nil {
+			logAPIError(log, req, "Engine", delErr, "Failed to delete WasmPlugin for not-accepted Engine", wasmPlugin)
+			return delErr
+		}
+		logInfo(log, req, "Engine", "Deleted WasmPlugin for not-accepted Engine", "wasmPlugin", wasmPluginName)
+	} else if !apierrors.IsNotFound(err) {
+		logAPIError(log, req, "Engine", err, "Failed to get WasmPlugin for cleanup", nil)
+		return err
+	}
+
+	if err := r.cleanupNetworkPolicy(ctx, log, req); err != nil {
+		return err
+	}
+
+	tokenKey := fmt.Sprintf("%s/%s/%s", engine.Namespace, engine.Name, engine.Spec.RuleSet.Name)
+	r.tokenStore.Delete(tokenKey)
+
+	return nil
+}
+
+// -----------------------------------------------------------------------------
 // Target Validation
 // -----------------------------------------------------------------------------
 

@@ -2101,4 +2101,23 @@ func TestEngineReconciler_ReadyToTargetNotFound(t *testing.T) {
 
 	assert.True(t, recorder.HasEvent("Warning", "TargetNotFound"),
 		"expected Warning/TargetNotFound event; got: %v", recorder.Events)
+
+	t.Log("Verifying WasmPlugin was deleted")
+	wasmPlugin := &unstructured.Unstructured{}
+	wasmPlugin.SetGroupVersionKind(schema.GroupVersionKind{
+		Group:   "extensions.istio.io",
+		Version: "v1alpha1",
+		Kind:    "WasmPlugin",
+	})
+	wasmPluginKey := types.NamespacedName{
+		Name:      fmt.Sprintf("%s%s", WasmPluginNamePrefix, engine.Name),
+		Namespace: engine.Namespace,
+	}
+	err = k8sClient.Get(ctx, wasmPluginKey, wasmPlugin)
+	assert.True(t, apierrors.IsNotFound(err), "WasmPlugin should be deleted when Engine is not accepted, got: %v", err)
+
+	t.Log("Verifying token store entry was removed")
+	tokenKey := fmt.Sprintf("%s/%s/%s", engine.Namespace, engine.Name, engine.Spec.RuleSet.Name)
+	_, found := reconciler.tokenStore.Load(tokenKey)
+	assert.False(t, found, "token store entry should be removed when Engine is not accepted")
 }

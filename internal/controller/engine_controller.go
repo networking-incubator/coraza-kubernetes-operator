@@ -217,6 +217,9 @@ func (r *EngineReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	if notFound, err := r.isTargetNotFound(ctx, log, req, &engine); err != nil {
 		return ctrl.Result{}, err
 	} else if notFound {
+		if err := r.cleanupNotAccepted(ctx, log, req, &engine); err != nil {
+			return ctrl.Result{}, err
+		}
 		return ctrl.Result{}, nil
 	}
 
@@ -224,6 +227,9 @@ func (r *EngineReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	if conflict, err := r.hasTargetConflict(ctx, log, req, &engine); err != nil {
 		return ctrl.Result{}, err
 	} else if conflict {
+		if err := r.cleanupNotAccepted(ctx, log, req, &engine); err != nil {
+			return ctrl.Result{}, err
+		}
 		return ctrl.Result{}, nil
 	}
 
