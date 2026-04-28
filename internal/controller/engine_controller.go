@@ -124,9 +124,14 @@ func (r *EngineReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(&wafv1alpha1.RuleSet{}, handler.EnqueueRequestsFromMapFunc(r.findEnginesForRuleSet)).
 		Watches(&wafv1alpha1.Engine{}, r.competingEngineHandler(), builder.WithPredicates(
 			predicate.Funcs{
-				CreateFunc:  func(event.CreateEvent) bool { return true },
-				DeleteFunc:  func(event.DeleteEvent) bool { return true },
-				UpdateFunc:  func(e event.UpdateEvent) bool { return e.ObjectOld.GetGeneration() != e.ObjectNew.GetGeneration() },
+				CreateFunc: func(event.CreateEvent) bool { return true },
+				DeleteFunc: func(event.DeleteEvent) bool { return true },
+				UpdateFunc: func(e event.UpdateEvent) bool {
+					if e.ObjectOld == nil || e.ObjectNew == nil {
+						return false
+					}
+					return e.ObjectOld.GetGeneration() != e.ObjectNew.GetGeneration()
+				},
 				GenericFunc: func(event.GenericEvent) bool { return false },
 			},
 		)).

@@ -31,7 +31,7 @@ func TestEngineGatewayTarget(t *testing.T) {
 	t.Parallel()
 
 	// -------------------------------------------------------------------------
-	// Sub-test: Engine targeting non-existent Gateway still becomes Ready
+	// Sub-test: Engine targeting non-existent Gateway is not accepted
 	// -------------------------------------------------------------------------
 
 	t.Run("nonexistent_gateway", func(t *testing.T) {
@@ -48,8 +48,8 @@ func TestEngineGatewayTarget(t *testing.T) {
 			GatewayName: "nonexistent-gateway",
 		})
 
-		s.Step("verify engine is ready")
-		s.ExpectEngineReady(ns, "engine")
+		s.Step("verify engine is not accepted due to missing gateway")
+		s.ExpectEngineNotAccepted(ns, "engine")
 	})
 
 	// -------------------------------------------------------------------------
