@@ -37,6 +37,7 @@ func init() {
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:printcolumn:name="RuleSet",type=string,JSONPath=`.spec.ruleSet.name`
+// +kubebuilder:printcolumn:name="Provider",type=string,JSONPath=`.spec.target.provider`
 // +kubebuilder:printcolumn:name="Target Type",type=string,JSONPath=`.spec.target.type`
 // +kubebuilder:printcolumn:name="Target Name",type=string,JSONPath=`.spec.target.name`
 // +kubebuilder:printcolumn:name="Failure Policy",type=string,JSONPath=`.spec.failurePolicy`
@@ -83,6 +84,8 @@ type EngineList struct {
 // -----------------------------------------------------------------------------
 
 // EngineSpec defines the desired state of an Engine.
+//
+// +kubebuilder:validation:XValidation:rule="!has(self.driver) || !has(self.driver.type) || self.driver.type == '' || (self.target.provider == 'Istio' && self.driver.type == 'wasm')",message="driver type must be compatible with the target provider (Istio supports wasm)"
 type EngineSpec struct {
 	// ruleSet specifies the RuleSet resource that will be used to load rules
 	// into the Engine. The referenced RuleSet must be in the same namespace

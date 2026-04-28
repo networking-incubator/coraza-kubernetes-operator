@@ -266,8 +266,9 @@ func BuildEngine(namespace, name string, opts EngineOpts) *unstructured.Unstruct
 				Name: opts.RuleSetName,
 			},
 			Target: wafv1alpha1.EngineTarget{
-				Type: wafv1alpha1.EngineTargetTypeGateway,
-				Name: opts.GatewayName,
+				Type:     wafv1alpha1.EngineTargetTypeGateway,
+				Name:     opts.GatewayName,
+				Provider: wafv1alpha1.EngineTargetProviderIstio,
 			},
 			FailurePolicy: opts.FailurePolicy,
 			RuleSetCacheServer: &wafv1alpha1.RuleSetCacheServerConfig{

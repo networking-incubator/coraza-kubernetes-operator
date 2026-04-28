@@ -23,6 +23,7 @@ package v1alpha1
 // EngineTarget identifies the workload that the Engine protects.
 //
 // +kubebuilder:validation:XValidation:rule="self.type == 'Gateway' ? has(self.name) : true",message="name is required when type is Gateway"
+// +kubebuilder:validation:XValidation:rule="self.provider == 'Istio' ? self.type == 'Gateway' : true",message="provider \"Istio\" is only supported when target type is Gateway"
 type EngineTarget struct {
 	// type is the type of resource being targeted.
 	//
@@ -47,6 +48,30 @@ type EngineTarget struct {
 	// +kubebuilder:validation:MaxLength=63
 	// +kubebuilder:validation:XValidation:rule="!format.dns1035Label().validate(self).hasValue()",message="name must be a valid DNS-1035 label (lowercase, starts with a letter)"
 	Name string `json:"name,omitempty"`
+
+	// provider identifies the infrastructure provider that manages the
+	// target workload. The provider determines which driver types are
+	// valid for the Engine.
+	//
+	// This field is immutable after creation. Changing providers requires
+	// creating a new Engine resource so the controller does not need to
+	// clean up and recreate child resources from the previous driver.
+	//
+	// Currently supported providers and their allowed driver types:
+	// - "Istio": supports "wasm" driver type.
+	//
+	// Future providers may support different driver types. For example,
+	// "EnvoyGateway" will only support "dynamicModule" once implemented.
+	//
+	// When omitted, this means the user has no opinion and the platform
+	// will choose a reasonable default, which is subject to change over time.
+	//
+	// The current default is Istio.
+	//
+	// +optional
+	// +default="Istio"
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="provider is immutable; create a new Engine to use a different provider"
+	Provider EngineTargetProvider `json:"provider,omitempty"`
 }
 
 // -----------------------------------------------------------------------------
@@ -61,4 +86,20 @@ type EngineTargetType string
 const (
 	// EngineTargetTypeGateway targets a Gateway API Gateway resource.
 	EngineTargetTypeGateway EngineTargetType = "Gateway"
+)
+
+// -----------------------------------------------------------------------------
+// Engine - Target Provider
+// -----------------------------------------------------------------------------
+
+// EngineTargetProvider identifies the infrastructure provider managing the
+// target workload. Each provider supports a specific set of driver types.
+//
+// +kubebuilder:validation:Enum=Istio
+type EngineTargetProvider string
+
+const (
+	// EngineTargetProviderIstio indicates the target is managed by Istio.
+	// Supported driver types: "wasm".
+	EngineTargetProviderIstio EngineTargetProvider = "Istio"
 )
