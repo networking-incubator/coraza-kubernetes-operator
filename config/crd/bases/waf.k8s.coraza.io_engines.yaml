@@ -18,6 +18,9 @@ spec:
     - jsonPath: .spec.ruleSet.name
       name: RuleSet
       type: string
+    - jsonPath: .spec.target.provider
+      name: Provider
+      type: string
     - jsonPath: .spec.target.type
       name: Target Type
       type: string
@@ -185,6 +188,34 @@ spec:
                     - message: name must be a valid DNS-1035 label (lowercase, starts
                         with a letter)
                       rule: '!format.dns1035Label().validate(self).hasValue()'
+                  provider:
+                    default: Istio
+                    description: |-
+                      provider identifies the infrastructure provider that manages the
+                      target workload. The provider determines which driver types are
+                      valid for the Engine.
+
+                      This field is immutable after creation. Changing providers requires
+                      creating a new Engine resource so the controller does not need to
+                      clean up and recreate child resources from the previous driver.
+
+                      Currently supported providers and their allowed driver types:
+                      - "Istio": supports "wasm" driver type.
+
+                      Future providers may support different driver types. For example,
+                      "EnvoyGateway" will only support "dynamicModule" once implemented.
+
+                      When omitted, this means the user has no opinion and the platform
+                      will choose a reasonable default, which is subject to change over time.
+
+                      The current default is Istio.
+                    enum:
+                    - Istio
+                    type: string
+                    x-kubernetes-validations:
+                    - message: provider is immutable; create a new Engine to use a
+                        different provider
+                      rule: self == oldSelf
                   type:
                     description: |-
                       type is the type of resource being targeted.
@@ -200,10 +231,19 @@ spec:
                 x-kubernetes-validations:
                 - message: name is required when type is Gateway
                   rule: 'self.type == ''Gateway'' ? has(self.name) : true'
+                - message: provider "Istio" is only supported when target type is
+                    Gateway
+                  rule: 'self.provider == ''Istio'' ? self.type == ''Gateway'' : true'
             required:
             - ruleSet
             - target
             type: object
+            x-kubernetes-validations:
+            - message: driver type must be compatible with the target provider (Istio
+                supports wasm)
+              rule: '!has(self.driver) || !has(self.driver.type) || self.driver.type
+                == '''' || (self.target.provider == ''Istio'' && self.driver.type
+                == ''wasm'')'
           status:
             description: status defines the observed state of Engine.
             minProperties: 0

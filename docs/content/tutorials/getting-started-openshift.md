@@ -215,7 +215,7 @@ oc get ruleset -n waf-tutorial tutorial-ruleset
 
 ## Step 6: Deploy an Engine
 
-Create an Engine that attaches the RuleSet to the Gateway. The `workloadSelector` must match the labels assigned to the Gateway pods by your Istio or Service Mesh installation:
+Create an Engine that attaches the RuleSet to the Gateway. The `target.name` must match the name of your Gateway resource:
 
 ```bash
 oc apply -n waf-tutorial -f - <<EOF
@@ -226,16 +226,11 @@ metadata:
 spec:
   ruleSet:
     name: tutorial-ruleset
+  target:
+    type: Gateway
+    name: waf-gateway
+    provider: Istio
   failurePolicy: fail
-  driver:
-    istio:
-      wasm:
-        mode: gateway
-        workloadSelector:
-          matchLabels:
-            gateway.networking.k8s.io/gateway-name: waf-gateway
-        ruleSetCacheServer:
-          pollIntervalSeconds: 5
 EOF
 ```
 

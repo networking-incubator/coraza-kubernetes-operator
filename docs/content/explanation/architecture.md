@@ -49,7 +49,7 @@ If compilation fails or unsupported rules are detected, the new revision is reje
 The Engine controller watches Engine resources, their referenced RuleSets, Gateways, and pods. When an Engine is created or updated, it:
 
 1. Verifies that the referenced RuleSet is in a Ready state.
-2. Discovers Gateway pods that match the Engine's workload selector.
+2. Discovers Gateway pods that match the Engine's target name (via the GEP-1762 label selector).
 3. Creates or updates an Istio WasmPlugin resource via server-side apply, configuring the WASM plugin to poll the cache server for the specified RuleSet.
 4. Creates a NetworkPolicy to allow Gateway pods to reach the cache server.
 5. Manages a ServiceAccount token for authenticated cache access.

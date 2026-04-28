@@ -16,7 +16,7 @@ The operator requires two sets of RBAC permissions:
 | Resource | Verbs | Purpose |
 |----------|-------|---------|
 | `waf.k8s.coraza.io` **rulesources**, **ruledata** | get, list, watch | Read SecLang and data file content for RuleSet reconciliation. |
-| Pods | list, watch | Discover Gateway pods matching Engine workload selectors. |
+| Pods | list, watch | Discover Gateway pods matching Engine target names. |
 | ServiceAccounts | create, get, list, patch, update, watch | Manage service accounts for cache authentication. |
 | ServiceAccounts/token | create | Issue tokens for WASM plugin authentication. |
 | Events | create, patch | Record events on managed resources. |
@@ -70,7 +70,7 @@ This ensures that only authorized WASM plugins can fetch rules from the cache se
 
 The operator creates a NetworkPolicy in its own namespace to control access to the cache server. The policy:
 
-- Allows ingress from Gateway pods that match an Engine's workload selector.
+- Allows ingress from Gateway pods that match an Engine's target.
 - Restricts access to the cache server port only.
 - Is labeled with the Engine name and namespace for management tracking.
 - Is cleaned up via a finalizer when the Engine is deleted.

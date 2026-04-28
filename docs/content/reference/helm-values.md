@@ -32,7 +32,7 @@ The Coraza Kubernetes Operator Helm chart is located at `charts/coraza-kubernete
 | `logging.stacktraceLevel` | string | `error` | Minimum level for stack traces (`info`, `error`, `panic`). Only used when `development` is false. |
 | `logging.timeEncoding` | string | `rfc3339nano` | Timestamp format (`epoch`, `millis`, `nano`, `iso8601`, `rfc3339`, `rfc3339nano`). Only used when `development` is false. |
 | `istio.revision` | string | `""` | Istio control plane revision label. When empty, no revision label is set on managed resources. |
-| `defaultWasmImage` | string | `""` | Default WASM plugin OCI URL when an Engine omits `spec.driver.istio.wasm.image`. When empty, uses the operator's built-in default. |
+| `defaultWasmImage` | string | `""` | Default WASM plugin OCI URL when an Engine omits `spec.driver.wasm.image`. When empty, uses the operator's built-in default. |
 | `createNamespace` | bool | `true` | Manage the release namespace with Pod Security Standard labels. Requires `--create-namespace` on first install. |
 | `openshift.enabled` | bool | `false` | Omit `runAsUser`, `fsGroup`, and `fsGroupChangePolicy` from the pod security context for OpenShift SCC compatibility. |
 | `podSecurityStandard.version` | string | `latest` | Kubernetes version for Pod Security Standard labels (`latest` or `vX.YZ`). |

@@ -33,21 +33,21 @@ The plugin is distributed as an OCI image. The operator uses a built-in default 
 When an Engine is reconciled, the operator creates a WasmPlugin resource using server-side apply. The WasmPlugin:
 
 - References the WASM OCI image.
-- Targets Gateway pods using the Engine's `workloadSelector`.
+- Targets Gateway pods using the label selector derived from the Engine's `target.name` (via the GEP-1762 `gateway.networking.k8s.io/gateway-name` label).
 - Passes configuration to the WASM plugin, including the cache server URL and the RuleSet key.
 - Sets the failure policy (fail-open or fail-closed).
 
 The operator watches WasmPlugin resources it creates and filters out update events to prevent reconcile loops. Only create and delete events trigger re-reconciliation.
 
-## Workload Selection and Gateway Matching
+## Target Selection and Gateway Matching
 
-The Engine's `workloadSelector` is a standard Kubernetes label selector. It matches against the labels on Gateway pods. Kubernetes Gateway API implementations typically label Gateway pods with:
+The Engine's `target` field identifies the Gateway by name. The operator derives the workload label selector using the GEP-1762 convention — Gateway API implementations label Gateway pods with:
 
 ```
 gateway.networking.k8s.io/gateway-name: <gateway-name>
 ```
 
-The Engine controller lists all Gateways in the same namespace and reports the matching ones in `status.gateways`.
+The `target.provider` field (default: `Istio`) identifies the infrastructure provider, which determines which driver types are valid for the Engine. This field is immutable after creation — to switch providers, create a new Engine resource. This ensures the controller does not need to clean up and recreate child resources (WasmPlugin, NetworkPolicy, ServiceAccount tokens) from the previous driver.
 
 ## Poll-Based Rule Updates
 
@@ -73,6 +73,6 @@ Users can build and deploy custom WASM plugins by:
 
 1. Building the `coraza-proxy-wasm` module from source using TinyGo.
 2. Packaging it as an OCI image.
-3. Specifying the image in the Engine's `spec.driver.istio.wasm.image` field.
+3. Specifying the image in the Engine's `spec.driver.wasm.image` field.
 
 If the image is in a private registry, an `imagePullSecret` can be specified to provide authentication credentials.
