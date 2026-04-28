@@ -214,21 +214,27 @@ func (r *EngineReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	}
 
 	logDebug(log, req, "Engine", "Checking target availability")
+	wasNotAcceptedTargetNotFound := isAlreadyNotAccepted(engine.Status.Conditions, engine.Generation, "TargetNotFound")
 	if notFound, err := r.isTargetNotFound(ctx, log, req, &engine); err != nil {
 		return ctrl.Result{}, err
 	} else if notFound {
-		if err := r.cleanupNotAccepted(ctx, log, req, &engine); err != nil {
-			return ctrl.Result{}, err
+		if !wasNotAcceptedTargetNotFound {
+			if err := r.cleanupNotAccepted(ctx, log, req, &engine); err != nil {
+				return ctrl.Result{}, err
+			}
 		}
 		return ctrl.Result{}, nil
 	}
 
 	logDebug(log, req, "Engine", "Checking target conflict")
+	wasNotAcceptedTargetConflict := isAlreadyNotAccepted(engine.Status.Conditions, engine.Generation, "TargetConflict")
 	if conflict, err := r.hasTargetConflict(ctx, log, req, &engine); err != nil {
 		return ctrl.Result{}, err
 	} else if conflict {
-		if err := r.cleanupNotAccepted(ctx, log, req, &engine); err != nil {
-			return ctrl.Result{}, err
+		if !wasNotAcceptedTargetConflict {
+			if err := r.cleanupNotAccepted(ctx, log, req, &engine); err != nil {
+				return ctrl.Result{}, err
+			}
 		}
 		return ctrl.Result{}, nil
 	}

@@ -600,7 +600,7 @@ func TestEngineReconciler_ImagePullSecretEnvtest(t *testing.T) {
 			Kind:    "WasmPlugin",
 		})
 		err = k8sClient.Get(ctx, types.NamespacedName{
-			Name:      fmt.Sprintf("%s%s", WasmPluginNamePrefix, engine.Name),
+			Name:      wasmPluginName(engine.Name),
 			Namespace: engine.Namespace,
 		}, wasmPlugin)
 		require.NoError(t, err)
@@ -653,7 +653,7 @@ func TestEngineReconciler_ImagePullSecretEnvtest(t *testing.T) {
 			Kind:    "WasmPlugin",
 		})
 		err = k8sClient.Get(ctx, types.NamespacedName{
-			Name:      fmt.Sprintf("%s%s", WasmPluginNamePrefix, engine.Name),
+			Name:      wasmPluginName(engine.Name),
 			Namespace: engine.Namespace,
 		}, wasmPlugin)
 		require.NoError(t, err)
@@ -1235,7 +1235,7 @@ func TestEngineReconciler_TokenStoreIntegration(t *testing.T) {
 			Kind:    "WasmPlugin",
 		})
 		err := k8sClient.Get(ctx, types.NamespacedName{
-			Name:      fmt.Sprintf("%s%s", WasmPluginNamePrefix, engine.Name),
+			Name:      wasmPluginName(engine.Name),
 			Namespace: engine.Namespace,
 		}, wasmPlugin)
 		require.NoError(t, err)
@@ -1480,7 +1480,7 @@ func TestEngineReconciler_TargetNotFound(t *testing.T) {
 		Kind:    "WasmPlugin",
 	})
 	err = k8sClient.Get(ctx, types.NamespacedName{
-		Name:      fmt.Sprintf("%s%s", WasmPluginNamePrefix, engine.Name),
+		Name:      wasmPluginName(engine.Name),
 		Namespace: engine.Namespace,
 	}, wasmPlugin)
 	assert.True(t, apierrors.IsNotFound(err), "WasmPlugin should not exist when target is not found")
@@ -1732,12 +1732,16 @@ func TestEngineReconciler_TargetConflict_NameTiebreak(t *testing.T) {
 		}
 	})
 
-	// Force identical timestamps to guarantee the tiebreak path is exercised.
+	// Envtest timestamps have second granularity, so both engines created in
+	// rapid succession will naturally share the same creationTimestamp. Verify
+	// this assumption so the name-based tiebreak path is actually exercised.
+	// (creationTimestamp is read-only in the Kubernetes API; mutating it via
+	// Update is silently ignored by the server.)
 	var fetchedZ, fetchedA wafv1alpha1.Engine
 	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: engineZ.Name, Namespace: testNamespace}, &fetchedZ))
 	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: engineA.Name, Namespace: testNamespace}, &fetchedA))
-	fetchedA.CreationTimestamp = fetchedZ.CreationTimestamp
-	require.NoError(t, k8sClient.Update(ctx, &fetchedA))
+	assert.Equal(t, fetchedZ.CreationTimestamp, fetchedA.CreationTimestamp,
+		"Both engines should have the same creationTimestamp to exercise the name tiebreak")
 
 	reconciler := &EngineReconciler{
 		Client:                    k8sClient,
@@ -2110,7 +2114,7 @@ func TestEngineReconciler_ReadyToTargetNotFound(t *testing.T) {
 		Kind:    "WasmPlugin",
 	})
 	wasmPluginKey := types.NamespacedName{
-		Name:      fmt.Sprintf("%s%s", WasmPluginNamePrefix, engine.Name),
+		Name:      wasmPluginName(engine.Name),
 		Namespace: engine.Namespace,
 	}
 	err = k8sClient.Get(ctx, wasmPluginKey, wasmPlugin)

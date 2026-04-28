@@ -66,6 +66,17 @@ func needsAcceptedUpdate(conditions []metav1.Condition, generation int64) bool {
 	return cond == nil || cond.Status != metav1.ConditionTrue || cond.ObservedGeneration != generation
 }
 
+// isAlreadyNotAccepted reports whether the Engine already has Accepted=False
+// with the given reason at the current generation. When true, the caller can
+// skip redundant cleanup work (e.g. Get for a WasmPlugin that was never created).
+func isAlreadyNotAccepted(conditions []metav1.Condition, generation int64, reason string) bool {
+	cond := apimeta.FindStatusCondition(conditions, conditionAccepted)
+	return cond != nil &&
+		cond.Status == metav1.ConditionFalse &&
+		cond.Reason == reason &&
+		cond.ObservedGeneration == generation
+}
+
 // -----------------------------------------------------------------------------
 // Target Rejection Cleanup
 // -----------------------------------------------------------------------------
@@ -81,14 +92,14 @@ func (r *EngineReconciler) cleanupNotAccepted(ctx context.Context, log logr.Logg
 		Version: "v1alpha1",
 		Kind:    "WasmPlugin",
 	})
-	wasmPluginName := fmt.Sprintf("%s%s", WasmPluginNamePrefix, engine.Name)
-	err := r.Get(ctx, types.NamespacedName{Name: wasmPluginName, Namespace: engine.Namespace}, wasmPlugin)
+	wpName := wasmPluginName(engine.Name)
+	err := r.Get(ctx, types.NamespacedName{Name: wpName, Namespace: engine.Namespace}, wasmPlugin)
 	if err == nil {
 		if delErr := r.Delete(ctx, wasmPlugin); client.IgnoreNotFound(delErr) != nil {
 			logAPIError(log, req, "Engine", delErr, "Failed to delete WasmPlugin for not-accepted Engine", wasmPlugin)
 			return delErr
 		}
-		logInfo(log, req, "Engine", "Deleted WasmPlugin for not-accepted Engine", "wasmPlugin", wasmPluginName)
+		logInfo(log, req, "Engine", "Deleted WasmPlugin for not-accepted Engine", "wasmPlugin", wpName)
 	} else if !apierrors.IsNotFound(err) {
 		logAPIError(log, req, "Engine", err, "Failed to get WasmPlugin for cleanup", nil)
 		return err
@@ -152,19 +163,19 @@ func (r *EngineReconciler) hasTargetConflict(ctx context.Context, log logr.Logge
 	}
 
 	var engineList wafv1alpha1.EngineList
-	if err := r.List(ctx, &engineList, client.InNamespace(engine.Namespace)); err != nil {
+	if err := r.List(ctx, &engineList,
+		client.InNamespace(engine.Namespace),
+		client.MatchingFields{engineTargetIndex: engineTargetKey(engine.Spec.Target.Type, engine.Spec.Target.Name)},
+	); err != nil {
 		logAPIError(log, req, "Engine", err, "Failed to list Engines for conflict detection", engine)
 		return false, fmt.Errorf("failed to list Engines: %w", err)
 	}
 
-	// Collect all non-deleting Engines that target the same Gateway.
+	// Filter out Engines that are being deleted; the index does not
+	// account for DeletionTimestamp.
 	var candidates []wafv1alpha1.Engine
 	for i := range engineList.Items {
-		if !engineList.Items[i].DeletionTimestamp.IsZero() {
-			continue
-		}
-		if engineList.Items[i].Spec.Target.Type == engine.Spec.Target.Type &&
-			engineList.Items[i].Spec.Target.Name == engine.Spec.Target.Name {
+		if engineList.Items[i].DeletionTimestamp.IsZero() {
 			candidates = append(candidates, engineList.Items[i])
 		}
 	}
