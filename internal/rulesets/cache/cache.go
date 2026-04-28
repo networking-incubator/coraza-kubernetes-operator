@@ -51,8 +51,9 @@ type RuleSetEntries struct {
 
 // RuleSetCache provides thread-safe storage for rulesets with versioning
 type RuleSetCache struct {
-	mu      sync.RWMutex
-	entries map[string]*RuleSetEntries
+	mu        sync.RWMutex
+	entries   map[string]*RuleSetEntries
+	totalSize int
 }
 
 // NewRuleSetCache creates a new RuleSetCache instance
@@ -112,6 +113,7 @@ func (c *RuleSetCache) Put(instance string, rules string, datafiles map[string][
 		Rules:     rules,
 		DataFiles: internalData,
 	}
+	newEntrySize := entrySize(newEntry)
 
 	if c.entries[instance] == nil {
 		c.entries[instance] = &RuleSetEntries{
@@ -122,6 +124,7 @@ func (c *RuleSetCache) Put(instance string, rules string, datafiles map[string][
 		c.entries[instance].Entries = append(c.entries[instance].Entries, newEntry)
 		c.entries[instance].Latest = newEntry.UUID
 	}
+	c.totalSize += newEntrySize
 }
 
 // Len returns the number of instances stored in the cache
@@ -146,17 +149,7 @@ func (c *RuleSetCache) ListKeys() []string {
 func (c *RuleSetCache) TotalSize() int {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	size := 0
-	for _, entries := range c.entries {
-		for _, entry := range entries.Entries {
-			size += len(entry.Rules)
-			for name, value := range entry.DataFiles {
-				size += len(name)
-				size += len(value)
-			}
-		}
-	}
-	return size
+	return c.totalSize
 }
 
 // SetEntryTimestamp updates the timestamp of an entry.
@@ -224,6 +217,7 @@ func (c *RuleSetCache) Prune(maxAge time.Duration) int {
 			if now.Sub(entry.Timestamp) <= maxAge {
 				newEntries = append(newEntries, entry)
 			} else {
+				c.totalSize -= entrySize(entry)
 				pruned++
 			}
 		}
@@ -240,16 +234,7 @@ func (c *RuleSetCache) PruneBySize(maxSize int) int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	currentSize := 0
-	for _, entries := range c.entries {
-		for _, entry := range entries.Entries {
-			currentSize += len(entry.Rules)
-			for filename, v := range entry.DataFiles {
-				currentSize += len(filename)
-				currentSize += len(v)
-			}
-		}
-	}
+	currentSize := c.totalSize
 
 	if currentSize <= maxSize {
 		return 0
@@ -272,11 +257,9 @@ func (c *RuleSetCache) PruneBySize(maxSize int) int {
 
 			// If we're still over size, prune.
 			if currentSize > maxSize {
-				currentSize -= len(entry.Rules)
-				for filename, v := range entry.DataFiles {
-					currentSize -= len(filename)
-					currentSize -= len(v)
-				}
+				removedSize := entrySize(entry)
+				currentSize -= removedSize
+				c.totalSize -= removedSize
 				pruned++
 			} else {
 				// Under size now, keep the remainder.
@@ -287,4 +270,13 @@ func (c *RuleSetCache) PruneBySize(maxSize int) int {
 	}
 
 	return pruned
+}
+
+func entrySize(entry *RuleSetEntry) int {
+	size := len(entry.Rules)
+	for filename, v := range entry.DataFiles {
+		size += len(filename)
+		size += len(v)
+	}
+	return size
 }
