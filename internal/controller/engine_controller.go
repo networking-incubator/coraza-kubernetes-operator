@@ -84,8 +84,25 @@ type EngineReconciler struct {
 	tokenStore sync.Map
 }
 
+const engineTargetIndex = "spec.target"
+
+// engineTargetKey returns the composite index key for an Engine's target.
+func engineTargetKey(targetType wafv1alpha1.EngineTargetType, name string) string {
+	return string(targetType) + "/" + name
+}
+
 // SetupWithManager sets up the controller with the Manager.
 func (r *EngineReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	if err := mgr.GetFieldIndexer().IndexField(context.Background(), &wafv1alpha1.Engine{}, engineTargetIndex, func(obj client.Object) []string {
+		engine := obj.(*wafv1alpha1.Engine)
+		if engine.Spec.Target.Name == "" {
+			return nil
+		}
+		return []string{engineTargetKey(engine.Spec.Target.Type, engine.Spec.Target.Name)}
+	}); err != nil {
+		return fmt.Errorf("index %s: %w", engineTargetIndex, err)
+	}
+
 	wasmPlugin := &unstructured.Unstructured{}
 	wasmPlugin.SetGroupVersionKind(schema.GroupVersionKind{
 		Group:   "extensions.istio.io",

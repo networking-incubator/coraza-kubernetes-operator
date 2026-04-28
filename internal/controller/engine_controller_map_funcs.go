@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/util/workqueue"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -34,24 +35,34 @@ func (r *EngineReconciler) findEnginesForRuleSet(ctx context.Context, ruleSet cl
 }
 
 // findEnginesForGateway maps a Gateway to the Engines in the same namespace
-// that target this specific Gateway by name.
+// that target this specific Gateway by name. Uses the spec.target index.
 func (r *EngineReconciler) findEnginesForGateway(ctx context.Context, gateway client.Object) []reconcile.Request {
 	log := logf.FromContext(ctx)
 
 	var engineList wafv1alpha1.EngineList
-	if err := r.List(ctx, &engineList, client.InNamespace(gateway.GetNamespace())); err != nil {
+	if err := r.List(ctx, &engineList,
+		client.InNamespace(gateway.GetNamespace()),
+		client.MatchingFields{engineTargetIndex: engineTargetKey(wafv1alpha1.EngineTargetTypeGateway, gateway.GetName())},
+	); err != nil {
 		log.Error(err, "Engine: Failed to list Engines", "namespace", gateway.GetNamespace())
 		return nil
 	}
 
-	return collectRequests(engineList.Items, func(e *wafv1alpha1.Engine) bool {
-		return hasGatewayTarget(e) && e.Spec.Target.Name == gateway.GetName()
-	})
+	requests := make([]reconcile.Request, 0, len(engineList.Items))
+	for i := range engineList.Items {
+		requests = append(requests, reconcile.Request{
+			NamespacedName: types.NamespacedName{
+				Name:      engineList.Items[i].Name,
+				Namespace: engineList.Items[i].Namespace,
+			},
+		})
+	}
+	return requests
 }
 
 // findCompetingEngines maps an Engine to all other Engines in the same
 // namespace that target the same Gateway. Called by competingEngineHandler on
-// create, delete, and generation-changing updates.
+// create, delete, and generation-changing updates. Uses the spec.target index.
 func (r *EngineReconciler) findCompetingEngines(ctx context.Context, obj client.Object) []reconcile.Request {
 	log := logf.FromContext(ctx)
 
@@ -64,18 +75,16 @@ func (r *EngineReconciler) findCompetingEngines(ctx context.Context, obj client.
 	}
 
 	var engineList wafv1alpha1.EngineList
-	if err := r.List(ctx, &engineList, client.InNamespace(engine.GetNamespace())); err != nil {
+	if err := r.List(ctx, &engineList,
+		client.InNamespace(engine.GetNamespace()),
+		client.MatchingFields{engineTargetIndex: engineTargetKey(engine.Spec.Target.Type, engine.Spec.Target.Name)},
+	); err != nil {
 		log.Error(err, "Engine: Failed to list Engines for conflict mapping", "namespace", engine.GetNamespace())
 		return nil
 	}
 
 	return collectRequests(engineList.Items, func(e *wafv1alpha1.Engine) bool {
-		// hasGatewayTarget is redundant with the Type/Name checks but kept as
-		// defense-in-depth to reject candidates with empty Target.Name.
-		return e.Name != engine.Name &&
-			hasGatewayTarget(e) &&
-			e.Spec.Target.Type == engine.Spec.Target.Type &&
-			e.Spec.Target.Name == engine.Spec.Target.Name
+		return e.Name != engine.Name
 	})
 }
 
