@@ -241,9 +241,8 @@ spec:
             x-kubernetes-validations:
             - message: driver type must be compatible with the target provider (Istio
                 supports wasm)
-              rule: '!has(self.driver) || !has(self.driver.type) || self.driver.type
-                == '''' || (self.target.provider == ''Istio'' && self.driver.type
-                == ''wasm'')'
+              rule: '!has(self.driver) || !has(self.driver.type) || (self.target.provider
+                == ''Istio'' && self.driver.type == ''wasm'')'
           status:
             description: status defines the observed state of Engine.
             minProperties: 0

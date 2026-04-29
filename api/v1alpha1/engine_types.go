@@ -85,7 +85,7 @@ type EngineList struct {
 
 // EngineSpec defines the desired state of an Engine.
 //
-// +kubebuilder:validation:XValidation:rule="!has(self.driver) || !has(self.driver.type) || self.driver.type == '' || (self.target.provider == 'Istio' && self.driver.type == 'wasm')",message="driver type must be compatible with the target provider (Istio supports wasm)"
+// +kubebuilder:validation:XValidation:rule="!has(self.driver) || !has(self.driver.type) || (self.target.provider == 'Istio' && self.driver.type == 'wasm')",message="driver type must be compatible with the target provider (Istio supports wasm)"
 type EngineSpec struct {
 	// ruleSet specifies the RuleSet resource that will be used to load rules
 	// into the Engine. The referenced RuleSet must be in the same namespace
