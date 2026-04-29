@@ -332,7 +332,7 @@ func (s *ruleSetCacheServer) rungc(ctx context.Context) {
 
 				finalSize := s.cache.TotalSize()
 				if finalSize > s.gc.MaxSize {
-					gcSizeLimitExceededTotal.Inc()
+					gcSizeLimitExceededTotal.WithLabelValues().Inc()
 					s.logger.Error(errors.New("cache size exceeds maximum"), "CRITICAL: Cache size exceeds maximum even after pruning - latest entry is too large", "currentSize", finalSize, "maxSize", s.gc.MaxSize, "overage", finalSize-s.gc.MaxSize)
 				}
 			}

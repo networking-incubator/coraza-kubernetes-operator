@@ -105,7 +105,7 @@ func TestRuleSetCache_Pruning(t *testing.T) {
 				c.Put("instance1", "old-rules", nil)
 				c.Put("instance1", "new-rules", nil)
 				c.Put("instance2", "rules2", nil)
-				c.SetEntryTimestamp("instance1", 0, time.Now().Add(-25*time.Hour))
+				setEntryTimestamp(c, "instance1", 0, time.Now().Add(-25*time.Hour))
 			},
 			pruneMaxAge:   24 * time.Hour,
 			expectedCount: 1,
@@ -133,9 +133,9 @@ func TestRuleSetCache_Pruning(t *testing.T) {
 				c.Put("instance2", "new2", nil)
 				c.Put("instance3", "rules3", nil)
 				c.Put("instance4", "rules4", testDataFile)
-				c.SetEntryTimestamp("instance1", 0, time.Now().Add(-2*time.Hour))
-				c.SetEntryTimestamp("instance2", 0, time.Now().Add(-1*time.Hour))
-				c.SetEntryTimestamp("instance4", 0, time.Now().Add(-2*time.Hour))
+				setEntryTimestamp(c, "instance1", 0, time.Now().Add(-2*time.Hour))
+				setEntryTimestamp(c, "instance2", 0, time.Now().Add(-1*time.Hour))
+				setEntryTimestamp(c, "instance4", 0, time.Now().Add(-2*time.Hour))
 			},
 			pruneMaxSize:  80,
 			expectedCount: skipCountAssertion,
@@ -169,7 +169,7 @@ func TestRuleSetCache_Pruning(t *testing.T) {
 				time.Sleep(10 * time.Millisecond)
 				c.Put("instance1", "v3", nil)
 				for i := range 3 {
-					c.SetEntryTimestamp("instance1", i, time.Now().Add(-48*time.Hour))
+					setEntryTimestamp(c, "instance1", i, time.Now().Add(-48*time.Hour))
 				}
 			},
 			pruneMaxAge:   24 * time.Hour,
@@ -274,6 +274,85 @@ func TestRuleSetCache_TotalSize(t *testing.T) {
 		"file1": []byte("abcde"),
 	})
 	assert.Equal(t, 33, cache.TotalSize())
+}
+
+// TestRuleSetCache_TotalSizeInvariant verifies that TotalSize stays exactly
+// correct through a sequence of Put, Prune, and PruneBySize operations.
+func TestRuleSetCache_TotalSizeInvariant(t *testing.T) {
+	c := NewRuleSetCache()
+
+	// Put "abcde" (5) to instance1 — revision 0
+	c.Put("instance1", "abcde", nil) // +5
+	assert.Equal(t, 5, c.TotalSize())
+
+	// Put "xyz" (3) to instance1 — revision 1
+	c.Put("instance1", "xyz", nil) // +3
+	assert.Equal(t, 8, c.TotalSize())
+
+	// Put "hello" (5) + datafile "f.dat"(5)+"world"(5) = 15 to instance2 — revision 0
+	c.Put("instance2", "hello", map[string][]byte{"f.dat": []byte("world")}) // +15
+	assert.Equal(t, 23, c.TotalSize())
+
+	// Age out revision 0 of instance1 ("abcde", 5 bytes); keep revision 1 and instance2.
+	setEntryTimestamp(c, "instance1", 0, time.Now().Add(-48*time.Hour))
+	pruned := c.Prune(24 * time.Hour)
+	assert.Equal(t, 1, pruned)
+	assert.Equal(t, 18, c.TotalSize()) // 23 - 5
+
+	// Add another revision to instance1: "12" (2 bytes)
+	c.Put("instance1", "12", nil) // +2
+	assert.Equal(t, 20, c.TotalSize())
+
+	// PruneBySize to 10: should remove instance1 revision "xyz" (3 bytes), leaving "12" + instance2.
+	// After removing "xyz": 20 - 3 = 17, still > 10.
+	// After removing instance2's "hello"+"f.dat"+"world" (15): 17 - 15 = 2, under limit.
+	// But instance2 only has one entry (its latest), so it cannot be pruned.
+	// Result: only "xyz" (non-latest for instance1) gets removed. Size = 17.
+	c.PruneBySize(10)
+	// instance1 now has only "12" (latest, 2 bytes).
+	// instance2 still has "hello"+"f.dat"+"world" (15 bytes) — it's the latest and cannot be pruned.
+	assert.Equal(t, 17, c.TotalSize())
+}
+
+// TestRuleSetCache_TotalEntries verifies that TotalEntries stays exactly
+// correct through a sequence of Put, Prune, and PruneBySize operations,
+// including entries with DataFiles.
+func TestRuleSetCache_TotalEntries(t *testing.T) {
+	c := NewRuleSetCache()
+	assert.Equal(t, 0, c.TotalEntries())
+
+	// Two revisions to instance1, one to instance2.
+	c.Put("instance1", "v1", nil)
+	c.Put("instance1", "v2", nil)
+	c.Put("instance2", "v1", nil)
+	assert.Equal(t, 3, c.TotalEntries())
+
+	// One revision with DataFiles to instance3.
+	c.Put("instance3", "v1", map[string][]byte{"rules.dat": []byte("data")})
+	assert.Equal(t, 4, c.TotalEntries())
+
+	// Age out revision 0 of instance1; keep revision 1 (latest), instance2, instance3.
+	setEntryTimestamp(c, "instance1", 0, time.Now().Add(-48*time.Hour))
+	pruned := c.Prune(24 * time.Hour)
+	assert.Equal(t, 1, pruned)
+	assert.Equal(t, 3, c.TotalEntries())
+
+	// Add a new revision to instance1.
+	c.Put("instance1", "v3", nil)
+	assert.Equal(t, 4, c.TotalEntries())
+
+	// PruneBySize to a size that only forces removal of instance1's non-latest "v2".
+	// Current sizes: instance1 has "v2"(2) + "v3"(2) = 4; instance2 "v1"(2) = 2;
+	// instance3 "v1"(2) + "rules.dat"(9) + "data"(4) = 15. Total = 21.
+	// Prune to 19: need to remove 2 bytes. "v2" (2 bytes) is the only non-latest entry.
+	pruned = c.PruneBySize(19)
+	assert.Equal(t, 1, pruned)
+	assert.Equal(t, 3, c.TotalEntries())
+
+	// All remaining entries are latest; further PruneBySize does nothing.
+	pruned = c.PruneBySize(0)
+	assert.Equal(t, 0, pruned)
+	assert.Equal(t, 3, c.TotalEntries())
 }
 
 func TestRuleSetCache_PutUpdatesUUID(t *testing.T) {

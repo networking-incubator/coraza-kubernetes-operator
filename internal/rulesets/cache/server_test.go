@@ -235,10 +235,10 @@ func TestServer_GCByAge(t *testing.T) {
 	cache.Put("instancedata", "instancedata new", modifiedData)
 
 	t.Log("Manually marking old entries with old timestamps")
-	cache.SetEntryTimestamp("instance1", 0, time.Now().Add(-200*time.Millisecond))
-	cache.SetEntryTimestamp("instance2", 0, time.Now().Add(-200*time.Millisecond))
-	cache.SetEntryTimestamp("instance3", 0, time.Now().Add(-50*time.Millisecond))
-	cache.SetEntryTimestamp("instancedata", 0, time.Now().Add(-200*time.Millisecond))
+	setEntryTimestamp(cache, "instance1", 0, time.Now().Add(-200*time.Millisecond))
+	setEntryTimestamp(cache, "instance2", 0, time.Now().Add(-200*time.Millisecond))
+	setEntryTimestamp(cache, "instance3", 0, time.Now().Add(-50*time.Millisecond))
+	setEntryTimestamp(cache, "instancedata", 0, time.Now().Add(-200*time.Millisecond))
 
 	initialTotal := cache.CountEntries("instance1") + cache.CountEntries("instance2") + cache.CountEntries("instancedata")
 	t.Logf("Initial entries for instance1 and instance2: %d", initialTotal)

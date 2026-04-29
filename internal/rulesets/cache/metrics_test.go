@@ -28,7 +28,6 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
-	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"sigs.k8s.io/controller-runtime/pkg/metrics"
@@ -344,14 +343,12 @@ func startGCLoopForTest(t *testing.T, srv *ruleSetCacheServer) {
 }
 
 func TestUSEMetricsRegistered(t *testing.T) {
-	reg, c := newUSEMetricsRegistry(t)
-	// Populate at least one cache key so coraza_cache_entries emits a sample.
-	c.Put("use-lint/x", "rules", nil)
+	reg, _ := newUSEMetricsRegistry(t)
 
 	problems, err := testutil.GatherAndLint(reg,
 		MetricCacheSizeBytes,
 		MetricCacheInstances,
-		MetricCacheEntries,
+		MetricCacheTotalEntries,
 		MetricCacheConfigMaxSizeBytes,
 		MetricCacheGCPrunedEntriesTotal,
 		MetricCacheGCSizeLimitExceeded,
@@ -384,53 +381,24 @@ func TestUSEMetrics_ConfigMaxSizeBytesIsConstant(t *testing.T) {
 	assert.Equal(t, float64(DefaultGC().MaxSize), val)
 }
 
-func TestUSEMetrics_CacheEntriesPerKey(t *testing.T) {
-	c := NewRuleSetCache()
-	collector := newCacheEntriesCollector(c)
+func TestUSEMetrics_TotalEntriesReflectsCache(t *testing.T) {
+	reg, c := newUSEMetricsRegistry(t)
 
-	c.Put("ns/foo", "v1", nil)
-	c.Put("ns/foo", "v2", nil)
-	c.Put("ns/bar", "v1", nil)
+	before := gatherGaugeValue(t, reg, MetricCacheTotalEntries)
+	c.Put("entries-test/a", "v1", nil)
+	c.Put("entries-test/a", "v2", nil)
+	c.Put("entries-test/b", "v1", nil)
 
-	ch := make(chan prometheus.Metric, 10)
-	collector.Collect(ch)
-	close(ch)
+	after := gatherGaugeValue(t, reg, MetricCacheTotalEntries)
+	assert.Equal(t, before+3, after, "total_entries should increase by the number of Put calls")
 
-	byKey := map[string]float64{}
-	for m := range ch {
-		var d dto.Metric
-		require.NoError(t, m.Write(&d))
-		for _, lp := range d.GetLabel() {
-			if lp.GetName() == "cache_key" {
-				byKey[lp.GetValue()] = d.GetGauge().GetValue()
-			}
-		}
-	}
-	assert.Equal(t, float64(2), byKey["ns/foo"])
-	assert.Equal(t, float64(1), byKey["ns/bar"])
-}
-
-func TestUSEMetrics_CacheEntriesCollectorEmitsNoStaleKeys(t *testing.T) {
-	c := NewRuleSetCache()
-	collector := newCacheEntriesCollector(c)
-
-	c.Put("ns/temp", "rules", nil)
-	ch := make(chan prometheus.Metric, 10)
-	collector.Collect(ch)
-	close(ch)
-	assert.Len(t, drainMetrics(ch), 1, "should emit one sample for one key")
-
-	// Empty cache produces zero samples (no stale labels).
-	c2 := NewRuleSetCache()
-	collector2 := newCacheEntriesCollector(c2)
-	ch2 := make(chan prometheus.Metric, 10)
-	collector2.Collect(ch2)
-	close(ch2)
-	assert.Empty(t, drainMetrics(ch2), "empty cache should emit zero samples")
+	c.Prune(0) // prune all non-latest entries (maxAge=0 means everything is old)
+	afterPrune := gatherGaugeValue(t, reg, MetricCacheTotalEntries)
+	assert.Equal(t, float64(2), afterPrune, "total_entries should equal number of instances after pruning all non-latest")
 }
 
 func TestUSEMetrics_GCPrunedByAge(t *testing.T) {
-	gcPrunedEntriesTotal.Reset()
+	resetGCMetrics(t)
 
 	c := NewRuleSetCache()
 	logger := utils.NewTestLogger(t)
@@ -443,7 +411,7 @@ func TestUSEMetrics_GCPrunedByAge(t *testing.T) {
 
 	c.Put("ns/a", "old", nil)
 	c.Put("ns/a", "new", nil)
-	c.SetEntryTimestamp("ns/a", 0, time.Now().Add(-200*time.Millisecond))
+	setEntryTimestamp(c, "ns/a", 0, time.Now().Add(-200*time.Millisecond))
 
 	startGCLoopForTest(t, srv)
 	require.Eventually(t, func() bool {
@@ -452,7 +420,7 @@ func TestUSEMetrics_GCPrunedByAge(t *testing.T) {
 }
 
 func TestUSEMetrics_GCPrunedBySize(t *testing.T) {
-	gcPrunedEntriesTotal.Reset()
+	resetGCMetrics(t)
 
 	c := NewRuleSetCache()
 	logger := utils.NewTestLogger(t)
@@ -501,33 +469,17 @@ func TestRegisterUSEMetrics_ConflictWhenGCDiffers(t *testing.T) {
 	assert.True(t, errors.Is(err, ErrUSEMetricsRegistryConflict))
 }
 
-// Adversarial: cache_key label must tolerate non-ASCII instance paths (same class of input as HTTP paths).
-func TestUSEMetrics_CacheEntriesCollector_UnicodeCacheKey(t *testing.T) {
+func TestRegisterUSEMetrics_NonRegistryPath(t *testing.T) {
+	// Exercise the else branch: a wrapped registerer that is not *prometheus.Registry.
+	inner := prometheus.NewRegistry()
+	wrapped := prometheus.WrapRegistererWith(prometheus.Labels{}, inner)
 	c := NewRuleSetCache()
-	collector := newCacheEntriesCollector(c)
-	key := "ns/" + string([]rune{0x540d, 0x524d})
-	c.Put(key, "rules", nil)
-
-	ch := make(chan prometheus.Metric, 10)
-	collector.Collect(ch)
-	close(ch)
-
-	var found bool
-	for _, m := range drainMetrics(ch) {
-		var d dto.Metric
-		require.NoError(t, m.Write(&d))
-		for _, lp := range d.GetLabel() {
-			if lp.GetName() == "cache_key" && lp.GetValue() == key {
-				found = true
-				assert.Equal(t, float64(1), d.GetGauge().GetValue())
-			}
-		}
-	}
-	assert.True(t, found, "expected a sample for unicode cache_key %q", key)
+	err := RegisterUSEMetrics(wrapped, c, DefaultGC())
+	require.NoError(t, err, "first registration on non-Registry path should succeed")
 }
 
 func TestUSEMetrics_GCSizeLimitExceeded(t *testing.T) {
-	before := testutil.ToFloat64(gcSizeLimitExceededTotal)
+	resetGCMetrics(t)
 
 	c := NewRuleSetCache()
 	logger := utils.NewTestLogger(t)
@@ -542,7 +494,7 @@ func TestUSEMetrics_GCSizeLimitExceeded(t *testing.T) {
 
 	startGCLoopForTest(t, srv)
 	require.Eventually(t, func() bool {
-		return testutil.ToFloat64(gcSizeLimitExceededTotal) > before
+		return testutil.ToFloat64(gcSizeLimitExceededTotal.WithLabelValues()) >= 1
 	}, gcMetricEventuallyTimeout, gcMetricEventuallyTick,
 		"size-limit-exceeded counter should increment when latest entry exceeds MaxSize")
 }
@@ -560,14 +512,6 @@ func gatherGaugeValue(t *testing.T, g prometheus.Gatherer, name string) float64 
 	}
 	t.Fatalf("metric %s not found", name)
 	return 0
-}
-
-func drainMetrics(ch <-chan prometheus.Metric) []prometheus.Metric {
-	out := make([]prometheus.Metric, 0)
-	for m := range ch {
-		out = append(out, m)
-	}
-	return out
 }
 
 // End-to-end: real server mux + instrumentHandler records metrics (same wiring as production).

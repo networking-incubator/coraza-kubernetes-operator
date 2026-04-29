@@ -33,7 +33,7 @@ var ErrUSEMetricsRegistryConflict = errors.New("USE metrics already registered f
 const (
 	MetricCacheSizeBytes            = "coraza_cache_size_bytes"
 	MetricCacheInstances            = "coraza_cache_instances"
-	MetricCacheEntries              = "coraza_cache_entries"
+	MetricCacheTotalEntries         = "coraza_cache_total_entries"
 	MetricCacheConfigMaxSizeBytes   = "coraza_cache_config_max_size_bytes"
 	MetricCacheGCPrunedEntriesTotal = "coraza_cache_gc_pruned_entries_total"
 	MetricCacheGCSizeLimitExceeded  = "coraza_cache_gc_size_limit_exceeded_total"
@@ -50,6 +50,11 @@ type useMetricsRegistration struct {
 	gc    GarbageCollectionConfig
 }
 
+// gcPrunedEntriesTotal and gcSizeLimitExceededTotal are package-level singletons
+// shared across all RegisterUSEMetrics calls. They are incremented by the GC loop
+// in server.go regardless of which registry is active. Tests must call
+// gcPrunedEntriesTotal.Reset() / gcSizeLimitExceededTotal.Reset() in t.Cleanup
+// to prevent cross-test counter accumulation.
 var (
 	gcPrunedEntriesTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
@@ -59,11 +64,12 @@ var (
 		[]string{"reason"},
 	)
 
-	gcSizeLimitExceededTotal = prometheus.NewCounter(
+	gcSizeLimitExceededTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: MetricCacheGCSizeLimitExceeded,
 			Help: "Total number of GC cycles where cache size still exceeded the configured maximum after pruning.",
 		},
+		[]string{},
 	)
 
 	registerMu sync.Mutex
@@ -71,36 +77,6 @@ var (
 	// per *prometheus.Registry so repeat calls can be checked for idempotency.
 	registeredUSEMetricsByPromRegistry = map[*prometheus.Registry]useMetricsRegistration{}
 )
-
-// cacheEntriesCollector implements prometheus.Collector to emit per-cache-key
-// entry counts on every scrape, avoiding stale label sets when keys are removed.
-type cacheEntriesCollector struct {
-	cache *RuleSetCache
-	desc  *prometheus.Desc
-}
-
-func newCacheEntriesCollector(c *RuleSetCache) *cacheEntriesCollector {
-	return &cacheEntriesCollector{
-		cache: c,
-		desc: prometheus.NewDesc(
-			MetricCacheEntries,
-			"Number of stored entry revisions per cache key.",
-			[]string{"cache_key"}, nil,
-		),
-	}
-}
-
-// Describe implements prometheus.Collector.
-func (c *cacheEntriesCollector) Describe(ch chan<- *prometheus.Desc) {
-	ch <- c.desc
-}
-
-// Collect implements prometheus.Collector.
-func (c *cacheEntriesCollector) Collect(ch chan<- prometheus.Metric) {
-	for key, count := range c.cache.EntryCountsSnapshot() {
-		ch <- prometheus.MustNewConstMetric(c.desc, prometheus.GaugeValue, float64(count), key)
-	}
-}
 
 // RegisterUSEMetrics registers USE-method (Utilization/Saturation/Errors) metrics
 // for the RuleSet cache on the given Registerer.
@@ -111,11 +87,11 @@ func (c *cacheEntriesCollector) Collect(ch chan<- prometheus.Metric) {
 // ErrUSEMetricsRegistryConflict. The GC counters are shared collector instances
 // and are registered with each Registerer passed to this function.
 //
-// Registerers that are not *prometheus.Registry are not tracked; each call runs
-// MustRegister (typically only once — duplicate metric names panic).
+// Registerers that are not *prometheus.Registry are not tracked for idempotency;
+// each call to Register may return an error if a metric name is already in use.
 func RegisterUSEMetrics(reg prometheus.Registerer, c *RuleSetCache, gc GarbageCollectionConfig) error {
-	registerCollectors := func() {
-		reg.MustRegister(
+	registerCollectors := func() error {
+		collectors := []prometheus.Collector{
 			prometheus.NewGaugeFunc(
 				prometheus.GaugeOpts{
 					Name: MetricCacheSizeBytes,
@@ -132,15 +108,27 @@ func RegisterUSEMetrics(reg prometheus.Registerer, c *RuleSetCache, gc GarbageCo
 			),
 			prometheus.NewGaugeFunc(
 				prometheus.GaugeOpts{
+					Name: MetricCacheTotalEntries,
+					Help: "Total number of stored entry revisions across all cache keys.",
+				},
+				func() float64 { return float64(c.TotalEntries()) },
+			),
+			prometheus.NewGaugeFunc(
+				prometheus.GaugeOpts{
 					Name: MetricCacheConfigMaxSizeBytes,
 					Help: "Configured maximum cache size in bytes.",
 				},
 				func() float64 { return float64(gc.MaxSize) },
 			),
-			newCacheEntriesCollector(c),
 			gcPrunedEntriesTotal,
 			gcSizeLimitExceededTotal,
-		)
+		}
+		for _, col := range collectors {
+			if err := reg.Register(col); err != nil {
+				return err
+			}
+		}
+		return nil
 	}
 
 	if r, ok := reg.(*prometheus.Registry); ok {
@@ -155,11 +143,12 @@ func RegisterUSEMetrics(reg prometheus.Registerer, c *RuleSetCache, gc GarbageCo
 			return fmt.Errorf("%w", ErrUSEMetricsRegistryConflict)
 		}
 
-		registerCollectors()
+		if err := registerCollectors(); err != nil {
+			return err
+		}
 		registeredUSEMetricsByPromRegistry[r] = useMetricsRegistration{cache: c, gc: gc}
 		return nil
 	}
 
-	registerCollectors()
-	return nil
+	return registerCollectors()
 }
