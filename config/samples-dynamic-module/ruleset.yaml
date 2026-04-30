@@ -1,0 +1,36 @@
+apiVersion: waf.k8s.coraza.io/v1alpha1
+kind: RuleSource
+metadata:
+  name: base-rules
+spec:
+  rules: |
+    SecRuleEngine On
+    SecRequestBodyAccess On
+    SecResponseBodyAccess Off
+    SecAuditLog /dev/stdout
+    SecAuditLogFormat JSON
+    SecAuditEngine RelevantOnly
+---
+apiVersion: waf.k8s.coraza.io/v1alpha1
+kind: RuleSource
+metadata:
+  name: block-evil-monkeys
+spec:
+  rules: |
+    SecRule ARGS|REQUEST_URI|REQUEST_HEADERS "@contains evilmonkey" \
+      "id:3001,\
+      phase:2,\
+      deny,\
+      status:403,\
+      t:none,t:urlDecodeUni,\
+      msg:'Evil Monkey Detected',\
+      severity:'CRITICAL'"
+---
+apiVersion: waf.k8s.coraza.io/v1alpha1
+kind: RuleSet
+metadata:
+  name: default-ruleset
+spec:
+  sources:
+    - name: base-rules
+    - name: block-evil-monkeys

@@ -30,6 +30,8 @@ package v1alpha1
 // Exactly one driver-specific configuration must match the selected type.
 //
 // +kubebuilder:validation:XValidation:rule="self.type == 'wasm' ? has(self.wasm) : true",message="wasm config is required when type is wasm"
+// +kubebuilder:validation:XValidation:rule="self.type == 'dynamicModule' ? has(self.dynamicModule) : true",message="dynamicModule config is required when type is dynamicModule"
+// +kubebuilder:validation:XValidation:rule="!has(self.wasm) || !has(self.dynamicModule)",message="only one driver config may be set"
 // +kubebuilder:validation:MinProperties=0
 type DriverConfig struct {
 	// type selects the driver mechanism used to deploy the WAF filter.
@@ -41,6 +43,12 @@ type DriverConfig struct {
 	//
 	// +optional
 	Wasm *WasmDriverConfig `json:"wasm,omitempty"`
+
+	// dynamicModule contains configuration specific to the Envoy dynamic
+	// module driver.
+	//
+	// +optional
+	DynamicModule *DynamicModuleDriverConfig `json:"dynamicModule,omitempty"`
 }
 
 // -----------------------------------------------------------------------------
@@ -49,12 +57,15 @@ type DriverConfig struct {
 
 // DriverType specifies the mechanism used to deploy the WAF filter.
 //
-// +kubebuilder:validation:Enum=wasm
+// +kubebuilder:validation:Enum=wasm;dynamicModule
 type DriverType string
 
 const (
 	// DriverTypeWasm deploys the WAF as a WebAssembly plugin.
 	DriverTypeWasm DriverType = "wasm"
+
+	// DriverTypeDynamicModule deploys the WAF as an Envoy dynamic module.
+	DriverTypeDynamicModule DriverType = "dynamicModule"
 )
 
 // -----------------------------------------------------------------------------
@@ -89,3 +100,85 @@ type WasmDriverConfig struct {
 
 // MaxImageLen must match the CEL size constraint on WasmDriverConfig.Image.
 const MaxImageLen = 1024
+
+// -----------------------------------------------------------------------------
+// Engine - Dynamic Module Driver Config
+// -----------------------------------------------------------------------------
+
+// DynamicModuleDriverConfig defines configuration for deploying the Engine as
+// an Envoy dynamic module. The operator creates an EnvoyFilter resource that
+// patches the Envoy config to load the dynamic module and passes WAF rules
+// inline in the filter configuration.
+//
+// +kubebuilder:validation:MinProperties=0
+// +kubebuilder:validation:XValidation:rule="!has(self.proxyImage) || has(self.moduleImage)",message="moduleImage is required when proxyImage is set"
+type DynamicModuleDriverConfig struct {
+	// moduleName is the Envoy dynamic module name used to identify the loaded
+	// shared library. This corresponds to the .so filename without the "lib"
+	// prefix and ".so" suffix (e.g., "composer" loads "libcomposer.so").
+	//
+	// +optional
+	// +default="composer"
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	ModuleName string `json:"moduleName,omitempty"`
+
+	// filterName is the HTTP filter name registered by the dynamic module.
+	//
+	// +optional
+	// +default="coraza-waf"
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	FilterName string `json:"filterName,omitempty"`
+
+	// filterMode controls whether the WAF inspects requests, responses, or both.
+	//
+	// +optional
+	// +default="FULL"
+	FilterMode DynamicModuleFilterMode `json:"filterMode,omitempty"`
+
+	// moduleImage is the OCI image that contains the dynamic module shared
+	// library (libcomposer.so). When set, the operator creates a ConfigMap
+	// with a Deployment overlay that injects an init container to copy the
+	// .so into the gateway pod. The user must reference this ConfigMap in
+	// the Gateway's spec.infrastructure.parametersRef field.
+	//
+	// +optional
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=1024
+	ModuleImage string `json:"moduleImage,omitempty"`
+
+	// proxyImage overrides the Envoy proxy image used by the gateway pod.
+	// The standard Istio proxy image does not include the dynamic modules
+	// HTTP filter extension. This field allows specifying an Envoy image
+	// that has it compiled in (e.g., "gcr.io/istio-testing/proxyv2:1.31-dev").
+	//
+	// When set and moduleImage is also set, the proxy image override is
+	// included in the operator-managed ConfigMap Deployment overlay.
+	//
+	// +optional
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=1024
+	ProxyImage string `json:"proxyImage,omitempty"`
+}
+
+// -----------------------------------------------------------------------------
+// Engine - Dynamic Module Filter Mode
+// -----------------------------------------------------------------------------
+
+// DynamicModuleFilterMode specifies the WAF inspection mode for the dynamic
+// module.
+//
+// +kubebuilder:validation:Enum=REQUEST_ONLY;RESPONSE_ONLY;FULL
+type DynamicModuleFilterMode string
+
+const (
+	// DynamicModuleFilterModeRequestOnly inspects request headers and body only.
+	DynamicModuleFilterModeRequestOnly DynamicModuleFilterMode = "REQUEST_ONLY"
+
+	// DynamicModuleFilterModeResponseOnly inspects response headers and body only.
+	DynamicModuleFilterModeResponseOnly DynamicModuleFilterMode = "RESPONSE_ONLY"
+
+	// DynamicModuleFilterModeFull inspects both request and response phases.
+	DynamicModuleFilterModeFull DynamicModuleFilterMode = "FULL"
+)

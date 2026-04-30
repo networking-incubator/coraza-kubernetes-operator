@@ -44,6 +44,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	wafv1alpha1 "github.com/networking-incubator/coraza-kubernetes-operator/api/v1alpha1"
+	rcache "github.com/networking-incubator/coraza-kubernetes-operator/internal/rulesets/cache"
 )
 
 // -----------------------------------------------------------------------------
@@ -81,6 +82,10 @@ type EngineReconciler struct {
 	// Including the rulesetName in the key ensures that changing an Engine's
 	// spec.ruleSet.name invalidates the cached token (which encodes the audience).
 	tokenStore sync.Map
+
+	// ruleSetCache provides access to cached rule text for the dynamic module
+	// driver, which embeds rules inline in the EnvoyFilter.
+	ruleSetCache *rcache.RuleSetCache
 }
 
 // SetupWithManager sets up the controller with the Manager.
@@ -90,6 +95,13 @@ func (r *EngineReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Group:   "extensions.istio.io",
 		Version: "v1alpha1",
 		Kind:    "WasmPlugin",
+	})
+
+	envoyFilter := &unstructured.Unstructured{}
+	envoyFilter.SetGroupVersionKind(schema.GroupVersionKind{
+		Group:   "networking.istio.io",
+		Version: "v1alpha3",
+		Kind:    "EnvoyFilter",
 	})
 
 	gateway := &unstructured.Unstructured{}
@@ -102,6 +114,8 @@ func (r *EngineReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&wafv1alpha1.Engine{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		Owns(wasmPlugin).
+		Owns(envoyFilter).
+		Owns(&corev1.ConfigMap{}).
 		Watches(gateway, handler.EnqueueRequestsFromMapFunc(r.findEnginesForGateway)).
 		Watches(&wafv1alpha1.RuleSet{}, handler.EnqueueRequestsFromMapFunc(r.findEnginesForRuleSet)).
 		Watches(&corev1.Pod{}, handler.EnqueueRequestsFromMapFunc(r.findEnginesForPod), builder.WithPredicates(
@@ -200,7 +214,7 @@ func (r *EngineReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 // handleInvalidDriverConfiguration marks the engine as degraded due to an
 // unsupported driver type.
 func (r *EngineReconciler) handleInvalidDriverConfiguration(ctx context.Context, log logr.Logger, req ctrl.Request, engine *wafv1alpha1.Engine) error {
-	err := fmt.Errorf("unsupported driver type %q: only %q is currently supported", engine.Spec.Driver.Type, wafv1alpha1.DriverTypeWasm)
+	err := fmt.Errorf("unsupported driver type %q: supported types are %q and %q", engine.Spec.Driver.Type, wafv1alpha1.DriverTypeWasm, wafv1alpha1.DriverTypeDynamicModule)
 	logError(log, req, "Engine", err, "Invalid driver configuration")
 
 	if engine.Status == nil {
@@ -227,6 +241,9 @@ func (r *EngineReconciler) selectDriver(ctx context.Context, log logr.Logger, re
 	case wafv1alpha1.DriverTypeWasm:
 		logDebug(log, req, "Engine", "Using WASM driver")
 		return r.provisionWasmDriver(ctx, log, req, engine)
+	case wafv1alpha1.DriverTypeDynamicModule:
+		logDebug(log, req, "Engine", "Using dynamic module driver")
+		return r.provisionDynamicModuleDriver(ctx, log, req, engine)
 	default:
 		return ctrl.Result{}, r.handleInvalidDriverConfiguration(ctx, log, req, &engine)
 	}

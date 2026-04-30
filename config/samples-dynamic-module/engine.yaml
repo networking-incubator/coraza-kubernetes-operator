@@ -1,0 +1,16 @@
+apiVersion: waf.k8s.coraza.io/v1alpha1
+kind: Engine
+metadata:
+  name: coraza
+spec:
+  ruleSet:
+    name: default-ruleset
+  failurePolicy: fail
+  target:
+    type: Gateway
+    name: coraza-gateway
+  driver:
+    type: dynamicModule
+    dynamicModule:
+      moduleImage: quay.io/jwendell/composer:0.6.0-dev-linux-amd64
+      proxyImage: gcr.io/istio-testing/proxyv2:1.31-dev
