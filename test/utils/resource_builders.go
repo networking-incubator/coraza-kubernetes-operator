@@ -25,6 +25,11 @@ import (
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/defaults"
 )
 
+const (
+	defaultTestRuleSetName = "test-ruleset"
+	defaultTestNamespace   = "default"
+)
+
 // -----------------------------------------------------------------------------
 // Test Resource Builders - RuleSource
 // -----------------------------------------------------------------------------
@@ -74,10 +79,10 @@ type RuleSetOptions struct {
 // NewTestRuleSet creates a test RuleSet resource with sensible defaults
 func NewTestRuleSet(opts RuleSetOptions) *wafv1alpha1.RuleSet {
 	if opts.Name == "" {
-		opts.Name = "test-ruleset"
+		opts.Name = defaultTestRuleSetName
 	}
 	if opts.Namespace == "" {
-		opts.Namespace = "default"
+		opts.Namespace = defaultTestNamespace
 	}
 	if opts.Sources == nil {
 		opts.Sources = []wafv1alpha1.SourceReference{
@@ -121,10 +126,10 @@ func NewTestEngine(opts EngineOptions) *wafv1alpha1.Engine {
 		opts.Name = "test-engine"
 	}
 	if opts.Namespace == "" {
-		opts.Namespace = "default"
+		opts.Namespace = defaultTestNamespace
 	}
 	if opts.RuleSetName == "" {
-		opts.RuleSetName = "test-ruleset"
+		opts.RuleSetName = defaultTestRuleSetName
 	}
 	if opts.WasmImage == "" {
 		opts.WasmImage = defaults.DefaultCorazaWasmOCIReference
@@ -170,4 +175,75 @@ func NewTestEngine(opts EngineOptions) *wafv1alpha1.Engine {
 	}
 
 	return engine
+}
+
+// -----------------------------------------------------------------------------
+// Test Resource Builders - Engine (Dynamic Module)
+// -----------------------------------------------------------------------------
+
+// DynamicModuleEngineOptions provides options for creating test Engine resources
+// with the dynamic module driver.
+type DynamicModuleEngineOptions struct {
+	Name        string
+	Namespace   string
+	RuleSetName string
+	GatewayName string
+	ModuleName  string
+	FilterName  string
+	FilterMode  wafv1alpha1.DynamicModuleFilterMode
+	ModuleImage string
+	ProxyImage  string
+}
+
+// NewTestDynamicModuleEngine creates a test Engine resource configured with the
+// dynamic module driver.
+func NewTestDynamicModuleEngine(opts DynamicModuleEngineOptions) *wafv1alpha1.Engine {
+	if opts.Name == "" {
+		opts.Name = "test-engine"
+	}
+	if opts.Namespace == "" {
+		opts.Namespace = defaultTestNamespace
+	}
+	if opts.RuleSetName == "" {
+		opts.RuleSetName = defaultTestRuleSetName
+	}
+	if opts.GatewayName == "" {
+		opts.GatewayName = "test-gw"
+	}
+	if opts.ModuleName == "" {
+		opts.ModuleName = "composer"
+	}
+	if opts.FilterName == "" {
+		opts.FilterName = "coraza-waf"
+	}
+	if opts.FilterMode == "" {
+		opts.FilterMode = wafv1alpha1.DynamicModuleFilterModeFull
+	}
+
+	return &wafv1alpha1.Engine{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      opts.Name,
+			Namespace: opts.Namespace,
+		},
+		Spec: wafv1alpha1.EngineSpec{
+			RuleSet: wafv1alpha1.RuleSetReference{
+				Name: opts.RuleSetName,
+			},
+			Target: wafv1alpha1.EngineTarget{
+				Type: wafv1alpha1.EngineTargetTypeGateway,
+				Name: opts.GatewayName,
+			},
+			Driver: wafv1alpha1.DriverConfig{
+				Type: wafv1alpha1.DriverTypeDynamicModule,
+				DynamicModule: &wafv1alpha1.DynamicModuleDriverConfig{
+					ModuleName:  opts.ModuleName,
+					FilterName:  opts.FilterName,
+					FilterMode:  opts.FilterMode,
+					ModuleImage: opts.ModuleImage,
+					ProxyImage:  opts.ProxyImage,
+				},
+			},
+			FailurePolicy: wafv1alpha1.FailurePolicyFail,
+		},
+	}
 }

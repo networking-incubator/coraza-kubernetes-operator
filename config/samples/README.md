@@ -50,3 +50,8 @@ kubectl logs deploy/coraza-gateway-istio
 ```bash
 kubectl delete -f config/samples/
 ```
+
+## Dynamic Module Driver
+
+For an alternative setup using the Envoy dynamic module driver instead of WASM,
+see [`config/samples-dynamic-module/`](../samples-dynamic-module/).
