@@ -17,7 +17,7 @@ require (
 	dario.cat/mergo v1.0.1 // indirect
 	github.com/42wim/httpsig v1.2.3 // indirect
 	github.com/Masterminds/goutils v1.1.1 // indirect
-	github.com/Masterminds/semver/v3 v3.4.0 // indirect
+	github.com/Masterminds/semver/v3 v3.5.0 // indirect
 	github.com/Masterminds/sprig/v3 v3.3.0 // indirect
 	github.com/antchfx/htmlquery v1.3.4 // indirect
 	github.com/antchfx/xpath v1.3.6 // indirect

@@ -3,7 +3,7 @@ module github.com/networking-incubator/coraza-kubernetes-operator/tools/github_p
 go 1.26.2
 
 require (
-	github.com/Masterminds/semver/v3 v3.4.0
+	github.com/Masterminds/semver/v3 v3.5.0
 	github.com/stretchr/testify v1.11.1
 )
 
