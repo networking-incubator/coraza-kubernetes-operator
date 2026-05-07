@@ -151,6 +151,21 @@ func TestFileStatMetadata(t *testing.T) {
 	assert.WithinDuration(t, time.Now(), stat.ModTime(), time.Second)
 }
 
+func TestWriteFileWithModTime(t *testing.T) {
+	mfs := memfs.NewMemFS()
+
+	fixedTime := time.Date(2020, 6, 15, 12, 0, 0, 0, time.UTC)
+	mfs.WriteFileWithModTime("stamped.dat", []byte("content"), fixedTime)
+
+	file, err := mfs.Open("stamped.dat")
+	require.NoError(t, err)
+	defer func() { require.NoError(t, file.Close()) }()
+
+	stat, err := file.Stat()
+	require.NoError(t, err)
+	assert.True(t, stat.ModTime().Equal(fixedTime), "expected exact timestamp %v, got %v", fixedTime, stat.ModTime())
+}
+
 func TestFileClose(t *testing.T) {
 	mfs := memfs.NewMemFS()
 

@@ -45,14 +45,19 @@ func NewMemFS() *MemFS {
 	return &MemFS{files: make(map[string]memEntry)}
 }
 
-// WriteFile adds or updates a file in memory
+// WriteFile adds or updates a file in memory with the current time as modification time.
 func (m *MemFS) WriteFile(name string, data []byte) {
+	m.WriteFileWithModTime(name, data, time.Now())
+}
+
+// WriteFileWithModTime adds or updates a file in memory with an explicit modification time.
+func (m *MemFS) WriteFileWithModTime(name string, data []byte, modTime time.Time) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	copied := make([]byte, len(data))
 	copy(copied, data)
-	m.files[name] = memEntry{data: copied, modTime: time.Now()}
+	m.files[name] = memEntry{data: copied, modTime: modTime}
 }
 
 // Open implements the fs.FS interface (Read-Only access)
