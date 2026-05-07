@@ -88,7 +88,9 @@ func TestHighThroughput(t *testing.T) {
 	wg.Wait()
 
 	t.Logf("Blocked requests: %d/100, errors: %d", blockedCount.Load(), blockedErrors.Load())
-	assert.GreaterOrEqual(t, blockedCount.Load(), int32(95), "At least 95% of blocked requests should return 403")
+	successfulBlocked := int32(100) - blockedErrors.Load()
+	assert.Equal(t, successfulBlocked, blockedCount.Load(),
+		"all non-error blocked requests must return 403; WAF enforcement is deterministic")
 
 	s.Step("send 100 concurrent allowed requests")
 	var allowedCount atomic.Int32
@@ -111,7 +113,9 @@ func TestHighThroughput(t *testing.T) {
 	wg.Wait()
 
 	t.Logf("Allowed requests: %d/100, errors: %d", allowedCount.Load(), allowedErrors.Load())
-	assert.GreaterOrEqual(t, allowedCount.Load(), int32(95), "At least 95% of allowed requests should return 200")
+	successfulAllowed := int32(100) - allowedErrors.Load()
+	assert.Equal(t, successfulAllowed, allowedCount.Load(),
+		"all non-error allowed requests must return 200; WAF enforcement is deterministic")
 }
 
 // TestMixedTrafficLoad sends a mix of blocked and allowed requests
@@ -220,8 +224,11 @@ SecRule ARGS:attack "@contains rce" "id:12103,phase:2,deny,status:403,msg:'RCE'"
 		correct, total, float64(correct)/float64(total)*100,
 		errors, totalTime/time.Duration(total))
 
-	require.GreaterOrEqual(t, float64(correct)/float64(total), 0.95,
-		"At least 95%% of requests should have expected response")
+	nonErrorTotal := correct + incorrect
+	if nonErrorTotal > 0 {
+		require.Equal(t, nonErrorTotal, correct,
+			"all non-error requests must match expected status; WAF enforcement is deterministic")
+	}
 }
 
 // TestSustainedLoad sends requests over a sustained period to verify
@@ -257,7 +264,7 @@ func TestSustainedLoad(t *testing.T) {
 	duration := 10 * time.Second
 	deadline := time.Now().Add(duration)
 
-	var blockedCorrect, allowedCorrect, total atomic.Int32
+	var blockedCorrect, allowedCorrect, total, connErrors atomic.Int32
 	var wg sync.WaitGroup
 
 	// Worker pool of 10 concurrent requesters
@@ -268,15 +275,18 @@ func TestSustainedLoad(t *testing.T) {
 			for time.Now().Before(deadline) {
 				total.Add(1)
 
-				// Alternate between blocked and allowed requests
 				if total.Load()%2 == 0 {
 					result := gw.Get("/?test=blocked")
-					if result.Err == nil && result.StatusCode == http.StatusForbidden {
+					if result.Err != nil {
+						connErrors.Add(1)
+					} else if result.StatusCode == http.StatusForbidden {
 						blockedCorrect.Add(1)
 					}
 				} else {
 					result := gw.Get("/?test=safe")
-					if result.Err == nil && result.StatusCode == http.StatusOK {
+					if result.Err != nil {
+						connErrors.Add(1)
+					} else if result.StatusCode == http.StatusOK {
 						allowedCorrect.Add(1)
 					}
 				}
@@ -287,10 +297,13 @@ func TestSustainedLoad(t *testing.T) {
 	wg.Wait()
 
 	correctTotal := blockedCorrect.Load() + allowedCorrect.Load()
-	t.Logf("Sustained load: %d total requests, %d correct (%.1f%%), blocked=%d, allowed=%d",
-		total.Load(), correctTotal, float64(correctTotal)/float64(total.Load())*100,
+	nonErrorTotal := total.Load() - connErrors.Load()
+	t.Logf("Sustained load: %d total, %d correct, %d errors, blocked=%d, allowed=%d",
+		total.Load(), correctTotal, connErrors.Load(),
 		blockedCorrect.Load(), allowedCorrect.Load())
 
-	assert.GreaterOrEqual(t, float64(correctTotal)/float64(total.Load()), 0.99,
-		"At least 99%% of requests should have correct response under sustained load")
+	if nonErrorTotal > 0 {
+		assert.Equal(t, nonErrorTotal, correctTotal,
+			"all non-error requests must match expected status; WAF enforcement is deterministic")
+	}
 }

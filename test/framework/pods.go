@@ -31,8 +31,9 @@ import (
 
 // GatewayReadyTimeout is a longer timeout for gateway pod readiness.
 // Gateway pods may restart due to Istio CA certificate signing delays
-// when running parallel tests, so we allow extra time for recovery.
-const GatewayReadyTimeout = 1500 * time.Second
+// when running parallel tests. namespaceMu serialization mitigates
+// most contention, so 5 minutes is sufficient.
+const GatewayReadyTimeout = 300 * time.Second
 
 // waitForGatewayPodReady waits until at least one pod for the gateway is Ready.
 // This prevents port-forward attempts before Istio sidecar is fully initialized.

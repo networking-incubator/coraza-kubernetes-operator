@@ -21,9 +21,11 @@ package integration
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/networking-incubator/coraza-kubernetes-operator/test/framework"
@@ -67,11 +69,10 @@ func TestRapidRuleUpdates(t *testing.T) {
 	}
 
 	s.Step("verify final state is applied")
-	// Wait a bit for reconciliation to settle
-	time.Sleep(2 * time.Second)
-
-	// Final pattern should be "pattern-10"
-	gw.ExpectBlocked("/?test=pattern-10")
+	require.Eventually(s.T, func() bool {
+		resp := gw.Get("/?test=pattern-10")
+		return resp.Err == nil && resp.StatusCode == http.StatusForbidden
+	}, framework.DefaultTimeout, framework.DefaultInterval, "expected pattern-10 to be blocked after rapid updates")
 
 	// Previous patterns should no longer be blocked
 	gw.ExpectAllowed("/?test=pattern-1")
@@ -227,11 +228,12 @@ func TestConcurrentRuleSetUpdates(t *testing.T) {
 		s.UpdateRuleSource(ns, fmt.Sprintf("rules-%s", e.name), framework.SimpleBlockRule(e.ruleID+100, newPattern))
 	}
 
-	s.Step("wait for reconciliation")
-	time.Sleep(3 * time.Second)
-
 	s.Step("verify all updates applied correctly")
-	gw.ExpectBlocked("/?test=updated-1")
+	require.Eventually(s.T, func() bool {
+		resp := gw.Get("/?test=updated-1")
+		return resp.Err == nil && resp.StatusCode == http.StatusForbidden
+	}, framework.DefaultTimeout, framework.DefaultInterval, "expected updated-1 to be blocked after concurrent updates")
+
 	gw.ExpectBlocked("/?test=updated-2")
 	gw.ExpectBlocked("/?test=updated-3")
 

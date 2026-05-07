@@ -146,11 +146,13 @@ func TestCoreRuleSetConformance(t *testing.T) {
 	s.ExpectEvent(ns, framework.EventMatch{Type: "Normal", Reason: "RulesCached"})
 	s.ExpectEvent(ns, framework.EventMatch{Type: "Normal", Reason: "WasmPluginCreated"})
 
-	// Give enough time for the engine to load the new rules
-	// This is necessary due to multiple reasons:
-	// - The bug https://github.com/networking-incubator/coraza-proxy-wasm/issues/3 that makes Envoy crash earlier on the first load
-	// - The cache client ticks every 5seconds to get rules from server, we need to be sure it will have enough time to load
-	time.Sleep(15 * time.Second)
+	s.Step("wait for WASM plugin to load rules")
+	gw := s.ProxyToGateway(ns, gwName)
+	require.Eventually(t, func() bool {
+		resp := gw.Get("/?probe=%3Cscript%3Ealert(1)%3C/script%3E")
+		return resp.Err == nil && resp.StatusCode == 403
+	}, framework.DefaultTimeout, framework.DefaultInterval,
+		"CRS-triggering payload not blocked; WASM plugin may not have loaded rules")
 
 	// -------------------------------------------------------------------------
 	// Step 5: Start logstreaming and proxy, and fix FTW configuration
@@ -219,9 +221,6 @@ func TestCoreRuleSetConformance(t *testing.T) {
 		s.T.Logf("Gateway logs saved to: %s", logFile.Name())
 	})
 
-	s.Step("initialize proxy to Gateway")
-	gw := s.ProxyToGateway(ns, gwName)
-
 	s.Step("override FTW configuration")
 	gwUrl, err := url.Parse(gw.URL(""))
 	require.NoError(t, err)
@@ -270,7 +269,7 @@ func TestCoreRuleSetConformance(t *testing.T) {
 }
 
 // -----------------------------------------------------------------------------
-// Helpers
+// Test Utilities
 // -----------------------------------------------------------------------------
 
 func loadTests(t *testing.T, manifestDir string, ignoreErrors bool) ([]*test.FTWTest, error) {
