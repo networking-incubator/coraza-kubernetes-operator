@@ -74,7 +74,7 @@ Cross-namespace references between Engine, RuleSet, and RuleSource are explicitl
 
 This operator manages Web Application Firewall rules. Security is paramount:
 
- - **Input validation:** By default, SecLang rules from RuleSource objects are validated before being accepted, and invalid rules must be rejected with clear error messages in status conditions. The controller supports opting out of per-RuleSource validation with the `coraza.io/validation: "false"` annotation on the RuleSource; even when this is used, the aggregated RuleSet is still validated before caching and must be rejected on validation failure with appropriate status reporting.
+ - **Input validation:** By default, SecLang rules from RuleSource objects are validated before being accepted, and invalid rules must be rejected with clear error messages in status conditions. The controller supports opting out of per-RuleSource validation with the `waf.k8s.coraza.io/rule-validation: "false"` annotation on the RuleSource; even when this is used, the aggregated RuleSet is still validated before caching and must be rejected on validation failure with appropriate status reporting.
 - **Namespace isolation:** Cross-namespace references are **explicitly prohibited**. Never weaken this constraint without security review.
 - **Secret handling:** If PRs introduce credential handling, ensure secrets are never logged or exposed in status fields.
 - **Denial of Service:** Large rule sets or very frequent polling (small reload intervals) can DoS the cache server. Review performance impacts of cache operations and polling configuration.

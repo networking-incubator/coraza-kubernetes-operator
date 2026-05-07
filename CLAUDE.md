@@ -156,5 +156,5 @@ s.Step("verify behavior")
 - `framework.DefaultTimeout` / `framework.DefaultInterval` — never hardcode durations
 
 ### Skip validation annotations
-- RuleSources: `coraza.io/validation: "false"` — skips per-source Coraza rule validation
+- RuleSources: `waf.k8s.coraza.io/rule-validation: "false"` — skips per-source Coraza rule validation
 - RuleSets: `waf.k8s.coraza.io/skip-unsupported-rules-check: "true"` — prevents degrading on unsupported rules

@@ -35,7 +35,7 @@ func init() {
 const (
 	// AnnotationSkipUnsupportedRulesCheck is an annotation to disable the unsupported
 	// rules degradation on a RuleSet (it will still log).
-	AnnotationSkipUnsupportedRulesCheck = "waf.k8s.coraza.io/skip-unsupported-rules-check"
+	AnnotationSkipUnsupportedRulesCheck = Group + "/skip-unsupported-rules-check"
 )
 
 // -----------------------------------------------------------------------------

@@ -28,9 +28,12 @@ import (
 // GVK + Scheme Setup
 // -----------------------------------------------------------------------------
 
+// Group defines the group of the APIs, used on resources and as prefix of annotations
+const Group = "waf.k8s.coraza.io"
+
 var (
 	// GroupVersion is group version used to register these objects.
-	GroupVersion = schema.GroupVersion{Group: "waf.k8s.coraza.io", Version: "v1alpha1"}
+	GroupVersion = schema.GroupVersion{Group: Group, Version: "v1alpha1"}
 
 	// SchemeBuilder is used to add go types to the GroupVersionKind scheme.
 	SchemeBuilder = &scheme.Builder{GroupVersion: GroupVersion}
