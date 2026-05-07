@@ -25,13 +25,30 @@ jobs:
         uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
         with:
           go-version-file: "go.mod"
-          cache: false
+
+      - name: verify go module integrity
+        run: go mod verify
 
       - name: build and generate manifests
         run: make build helm.sync
 
       - name: check for uncommitted changes
         run: git diff --exit-code || (echo "generated files have uncommitted changes. run 'make manifests generate helm.sync' and commit the results." && exit 1)
+
+      - name: build container image
+        run: make build.image
+
+      - name: save container image
+        run: |
+          IMAGE=$(make -s print-CONTROLLER_MANAGER_CONTAINER_IMAGE)
+          docker save "${IMAGE}" -o /tmp/controller-image.tar
+
+      - name: upload container image artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: controller-image
+          path: /tmp/controller-image.tar
+          retention-days: 1
 
   lint:
     name: lint
@@ -47,7 +64,9 @@ jobs:
         uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
         with:
           go-version-file: "go.mod"
-          cache: false
+
+      - name: verify go module integrity
+        run: go mod verify
 
       - name: run linter
         run: make lint
@@ -79,7 +98,8 @@ jobs:
         uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
         with:
           go-version-file: "go.mod"
-          cache: false
+      - name: verify go module integrity
+        run: go mod verify
       - name: generate and validate bundle
         run: |
           make bundle
@@ -123,7 +143,9 @@ jobs:
         uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
         with:
           go-version-file: "go.mod"
-          cache: false
+
+      - name: verify go module integrity
+        run: go mod verify
 
       - name: run unit tests with coverage
         run: make test.coverage
@@ -156,7 +178,9 @@ jobs:
         uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
         with:
           go-version-file: "tools/github_project_manager/go.mod"
-          cache: false
+
+      - name: verify go module integrity
+        run: cd tools/github_project_manager && go mod verify
 
       - name: run tools tests
         run: make test.tools
@@ -165,6 +189,7 @@ jobs:
     name: Coreruleset conformance test
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    needs: [build]
     steps:
       - name: checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -176,7 +201,18 @@ jobs:
         uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
         with:
           go-version-file: "go.mod"
-          cache: false
+
+      - name: verify go module integrity
+        run: go mod verify
+
+      - name: download container image artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: controller-image
+          path: /tmp
+
+      - name: load container image
+        run: docker load -i /tmp/controller-image.tar
 
       - name: install kubectl
         uses: azure/setup-kubectl@829323503d1be3d00ca8346e5391ca0b07a9ab0d # v5.1.0
@@ -195,6 +231,7 @@ jobs:
         run: make cluster.kind
         env:
           KIND_CLUSTER_NAME: coraza-kubernetes-operator-integration
+          SKIP_IMAGE_BUILD: "true"
 
       - name: run Conformance tests
         run: |
@@ -207,7 +244,7 @@ jobs:
     name: integration tests
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    needs: [lint]
+    needs: [lint, build]
     steps:
       - name: checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -219,7 +256,18 @@ jobs:
         uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
         with:
           go-version-file: "go.mod"
-          cache: false
+
+      - name: verify go module integrity
+        run: go mod verify
+
+      - name: download container image artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: controller-image
+          path: /tmp
+
+      - name: load container image
+        run: docker load -i /tmp/controller-image.tar
 
       - name: set up python
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
@@ -244,6 +292,8 @@ jobs:
 
       - name: set up kind cluster
         run: make cluster.kind
+        env:
+          SKIP_IMAGE_BUILD: "true"
 
       - name: run integration tests
         run: make test.integration

@@ -25,15 +25,10 @@ spec:
   failurePolicy: fail
   ruleSet:
     name: my-ruleset
-  driver:
-    istio:
-      wasm:
-        mode: gateway
-        workloadSelector:
-          matchLabels:
-            gateway.networking.k8s.io/gateway-name: my-gateway
-        ruleSetCacheServer:
-          pollIntervalSeconds: 15
+  target:
+    type: Gateway
+    name: my-gateway
+    provider: Istio
 ```
 
 ## When to Use Each Policy

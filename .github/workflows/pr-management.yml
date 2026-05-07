@@ -1,6 +1,7 @@
 name: pr_management
 
-permissions: read-all
+permissions:
+  contents: read
 
 on:
     # SECURITY: pull_request_target runs with base-branch
@@ -32,6 +33,10 @@ jobs:
               with:
                   go-version-file: tools/github_project_manager/go.mod
 
+            - name: Verify go module integrity
+              working-directory: tools/github_project_manager
+              run: go mod verify
+
             - name: Build project manager
               working-directory: tools/github_project_manager
               run: go build -o "${{ github.workspace }}/github_project_manager" .
@@ -39,10 +44,12 @@ jobs:
             - name: Triage PR
               env:
                   GITHUB_TOKEN: ${{ secrets.PROJECT_MANAGEMENT_PAT }}
+                  GITHUB_REPO_OWNER: ${{ github.repository_owner }}
                   GITHUB_EVENT_REPOSITORY_NAME: ${{ github.event.repository.name }}
+                  PR_NUMBER: ${{ github.event.pull_request.number }}
               run: |
                   ./github_project_manager -v \
-                    --owner "${{ github.repository_owner }}" \
+                    --owner "${GITHUB_REPO_OWNER}" \
                     --repo "${GITHUB_EVENT_REPOSITORY_NAME}" \
-                    --issue "${{ github.event.pull_request.number }}" \
+                    --issue "${PR_NUMBER}" \
                     triage-pr

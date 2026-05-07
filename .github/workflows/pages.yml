@@ -1,6 +1,7 @@
 name: pages
 
-permissions: read-all
+permissions:
+  contents: read
 
 on:
   push:
@@ -127,13 +128,15 @@ jobs:
       - name: generate helm repo index
         run: |
           cr index \
-            --owner "${{ github.repository_owner }}" \
-            --git-repo "${{ github.event.repository.name }}" \
+            --owner "${REPO_OWNER}" \
+            --git-repo "${REPO_NAME}" \
             --release-name-template "v{{ .Version }}" \
             --package-path .cr-release-packages \
             --index-path docs/public/index.yaml
         env:
           CR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO_OWNER: ${{ github.repository_owner }}
+          REPO_NAME: ${{ github.event.repository.name }}
 
       - name: configure pages
         uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0

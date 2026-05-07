@@ -358,17 +358,15 @@ To build a custom WASM plugin:
    spec:
      ruleSet:
        name: default-ruleset
+     target:
+       type: Gateway
+       name: coraza-gateway
+       provider: Istio
      failurePolicy: fail
      driver:
-       istio:
-         wasm:
-           image: "oci://ghcr.io/YOUR_ORG/coraza-proxy-wasm:custom-tag"
-           mode: gateway
-           workloadSelector:
-             matchLabels:
-               gateway.networking.k8s.io/gateway-name: coraza-gateway
-           ruleSetCacheServer:
-             pollIntervalSeconds: 5
+       type: wasm
+       wasm:
+         image: "oci://ghcr.io/YOUR_ORG/coraza-proxy-wasm:custom-tag"
    ```
 
 8. Apply the updated Engine to your cluster:

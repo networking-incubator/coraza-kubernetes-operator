@@ -339,7 +339,8 @@ def deploy_coraza_operator(context: str) -> None:
 def setup_cluster(name: str) -> None:
     """End-to-end cluster setup: create, load images, install components."""
     docker_available = detect_container_runtime() == "docker"
-    build_images()
+    if os.environ.get("SKIP_IMAGE_BUILD", "").lower() != "true":
+        build_images()
     create_cluster(name)
     load_images(name)
 

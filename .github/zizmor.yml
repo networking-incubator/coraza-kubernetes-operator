@@ -1,0 +1,16 @@
+rules:
+  # pr-management.yml uses pull_request_target but follows the safe pattern:
+  # it checks out the base branch SHA (not the PR head) via sparse-checkout,
+  # so only trusted code from the base branch is built and executed.
+  dangerous-triggers:
+    ignore:
+      - pr-management.yml
+
+  # Go module caching is mitigated by running `go mod verify` immediately after
+  # cache restoration. This checks every cached module against the cryptographic
+  # checksums in go.sum, so poisoned cache entries are detected and fail the build.
+  cache-poisoning:
+    ignore:
+      - ci.yml
+      - codeql.yml
+      - release.yml
