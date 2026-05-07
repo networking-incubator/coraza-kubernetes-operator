@@ -38,7 +38,7 @@ spec:
       {{- end }}
       containers:
         - name: manager
-          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           command:
             - /manager
@@ -54,7 +54,7 @@ spec:
             {{- end }}
             {{- end }}
             - --envoy-cluster-name={{ printf "outbound|80||%s" (include "coraza-operator.serviceFQDN" .) }}
-            - --cache-gc-interval=3s
+            - --cache-gc-interval={{ .Values.cache.gcInterval }}
             {{- if .Values.istio.revision }}
             - --istio-revision={{ .Values.istio.revision }}
             {{- end }}

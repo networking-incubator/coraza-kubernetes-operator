@@ -1,11 +1,16 @@
 image:
   repository: ghcr.io/networking-incubator/coraza-kubernetes-operator
-  tag: latest
+  # Defaults to Chart.AppVersion when empty.
+  tag: ""
   pullPolicy: IfNotPresent
 
 # NOTE: HA Presently Not Supported:
 #  https://github.com/networking-incubator/coraza-kubernetes-operator/issues/38
 replicas: 1
+
+cache:
+  # Interval between cache garbage-collection sweeps.
+  gcInterval: "5m"
 
 resources:
   limits:
@@ -24,8 +29,9 @@ metrics:
   # Key names inside the certSecret (defaults: tls.crt, tls.key).
   certName: "tls.crt"
   keyName: "tls.key"
-  # If the secret also contains a CA certificate, set caName so the ServiceMonitor
-  # can verify the metrics endpoint instead of using insecureSkipVerify.
+  # If the secret also contains a CA certificate, set caName so
+  # the ServiceMonitor can verify the metrics endpoint. In
+  # production, provide a CA to avoid insecureSkipVerify.
   caName: ""
   serviceMonitor:
     enabled: false

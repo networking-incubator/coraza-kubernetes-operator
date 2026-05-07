@@ -4,9 +4,19 @@ Check the operator status:
 
   kubectl get pods -n {{ .Release.Namespace }} -l control-plane=coraza-controller-manager
 
+{{- if gt (int .Values.replicas) 1 }}
+
+WARNING: HA is not currently supported (see issue #38).
+Running multiple replicas may cause undefined behavior.
+{{- end }}
+
 {{- if .Values.istio.revision }}
 Istio integration is configured (revision: {{ .Values.istio.revision }}).
 {{- else }}
 Istio integration uses the default control plane (no Istio revision label).
 {{- end }}
 ServiceEntry and DestinationRule have been created for the ruleset cache.
+
+To get started, create a RuleSource, RuleSet, and Engine:
+
+  https://github.com/networking-incubator/coraza-kubernetes-operator#getting-started

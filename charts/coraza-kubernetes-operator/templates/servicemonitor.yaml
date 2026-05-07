@@ -23,6 +23,8 @@ spec:
             name: {{ .Values.metrics.certSecret }}
             key: {{ .Values.metrics.caName }}
         {{- else }}
+        # No CA provided; skip TLS verification for the
+        # self-signed or unverifiable metrics certificate.
         insecureSkipVerify: true
         {{- end }}
       {{- with .Values.metrics.serviceMonitor.metricRelabelings }}
