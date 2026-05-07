@@ -22,6 +22,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	wafv1alpha1 "github.com/networking-incubator/coraza-kubernetes-operator/api/v1alpha1"
 )
 
 func TestValidateRuleSourceRules(t *testing.T) {
@@ -59,5 +61,65 @@ func TestValidateRuleSourceRules(t *testing.T) {
 				assert.NotContains(t, msg, leak, "validation error leaked a filesystem path segment")
 			}
 		}
+	})
+}
+
+func TestFindDuplicateReferences(t *testing.T) {
+	t.Run("no duplicates returns empty string", func(t *testing.T) {
+		rs := &wafv1alpha1.RuleSet{}
+		rs.Spec.Sources = []wafv1alpha1.SourceReference{
+			{Name: "a"},
+			{Name: "b"},
+		}
+		rs.Spec.Data = []wafv1alpha1.DataReference{
+			{Name: "x"},
+			{Name: "y"},
+		}
+		assert.Empty(t, findDuplicateReferences(rs))
+	})
+
+	t.Run("duplicate sources detected", func(t *testing.T) {
+		rs := &wafv1alpha1.RuleSet{}
+		rs.Spec.Sources = []wafv1alpha1.SourceReference{
+			{Name: "a"},
+			{Name: "a"},
+		}
+		msg := findDuplicateReferences(rs)
+		assert.Contains(t, msg, "spec.sources")
+		assert.Contains(t, msg, "a")
+	})
+
+	t.Run("duplicate data detected", func(t *testing.T) {
+		rs := &wafv1alpha1.RuleSet{}
+		rs.Spec.Sources = []wafv1alpha1.SourceReference{
+			{Name: "a"},
+		}
+		rs.Spec.Data = []wafv1alpha1.DataReference{
+			{Name: "x"},
+			{Name: "x"},
+		}
+		msg := findDuplicateReferences(rs)
+		assert.Contains(t, msg, "spec.data")
+		assert.Contains(t, msg, "x")
+	})
+
+	t.Run("both sources and data duplicated", func(t *testing.T) {
+		rs := &wafv1alpha1.RuleSet{}
+		rs.Spec.Sources = []wafv1alpha1.SourceReference{
+			{Name: "a"},
+			{Name: "a"},
+		}
+		rs.Spec.Data = []wafv1alpha1.DataReference{
+			{Name: "x"},
+			{Name: "x"},
+		}
+		msg := findDuplicateReferences(rs)
+		assert.Contains(t, msg, "spec.sources", "should mention sources")
+		assert.Contains(t, msg, "spec.data", "should mention data")
+	})
+
+	t.Run("empty spec returns empty string", func(t *testing.T) {
+		rs := &wafv1alpha1.RuleSet{}
+		assert.Empty(t, findDuplicateReferences(rs))
 	})
 }

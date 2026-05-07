@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/corazawaf/coraza/v3"
@@ -13,6 +14,44 @@ import (
 
 	wafv1alpha1 "github.com/networking-incubator/coraza-kubernetes-operator/api/v1alpha1"
 )
+
+// -----------------------------------------------------------------------------
+// RuleSetReconciler - Reference Validation
+// -----------------------------------------------------------------------------
+
+// findDuplicateReferences checks for duplicate RuleSource names in spec.sources
+// and duplicate RuleData names in spec.data. Returns a descriptive message if
+// any duplicates are found, or empty string if all references are unique.
+func findDuplicateReferences(ruleset *wafv1alpha1.RuleSet) string {
+	var msgs []string
+
+	if dups := findDuplicateNames(ruleset.Spec.Sources, func(s wafv1alpha1.SourceReference) string { return s.Name }); len(dups) > 0 {
+		msgs = append(msgs, fmt.Sprintf("spec.sources contains duplicate RuleSource name(s): %s", strings.Join(dups, ", ")))
+	}
+
+	if dups := findDuplicateNames(ruleset.Spec.Data, func(d wafv1alpha1.DataReference) string { return d.Name }); len(dups) > 0 {
+		msgs = append(msgs, fmt.Sprintf("spec.data contains duplicate RuleData name(s): %s", strings.Join(dups, ", ")))
+	}
+
+	return strings.Join(msgs, "; ")
+}
+
+// findDuplicateNames returns the names that appear more than once in items.
+func findDuplicateNames[T any](items []T, name func(T) string) []string {
+	seen := make(map[string]int, len(items))
+	for _, item := range items {
+		seen[name(item)]++
+	}
+
+	var dups []string
+	for n, count := range seen {
+		if count > 1 {
+			dups = append(dups, n)
+		}
+	}
+	sort.Strings(dups)
+	return dups
+}
 
 // -----------------------------------------------------------------------------
 // RuleSetReconciler - Data Loading
@@ -68,8 +107,8 @@ func (r *RuleSetReconciler) loadData(
 // -----------------------------------------------------------------------------
 
 // loadSources fetches all RuleSource objects referenced by the RuleSet,
-// concatenates their rules in order, and individually validates each fragment
-// against the merged data files.
+// concatenates their rules in order, and validates each fragment individually.
+// dataFiles is passed through so @pmFromFile errors can be properly skipped.
 func (r *RuleSetReconciler) loadSources(
 	ctx context.Context,
 	log logr.Logger,
@@ -82,7 +121,7 @@ func (r *RuleSetReconciler) loadSources(
 	type ruleFragment struct {
 		name           string
 		rules          string
-		skipValidation bool
+		shouldValidate bool
 	}
 	ruleFragments := make([]ruleFragment, 0, len(ruleset.Spec.Sources))
 
@@ -108,25 +147,20 @@ func (r *RuleSetReconciler) loadSources(
 			return "", nil, true, err
 		}
 
-		skipValidation := rs.Annotations[wafv1alpha1.AnnotationSkipValidation] == "false"
+		shouldValidate := rs.Annotations[wafv1alpha1.AnnotationSkipValidation] != "false"
 		ruleFragments = append(ruleFragments, ruleFragment{
 			name:           src.Name,
 			rules:          rs.Spec.Rules,
-			skipValidation: skipValidation,
+			shouldValidate: shouldValidate,
 		})
-	}
-
-	var dataMap map[string][]byte
-	if len(dataFiles) > 0 {
-		dataMap = dataFiles
 	}
 
 	var aggregatedRules strings.Builder
 	aggregatedErrors := make([]error, 0)
 
 	for i, frag := range ruleFragments {
-		if !frag.skipValidation {
-			if validationErr := validateRuleSourceRules(frag.rules, frag.name, dataMap); validationErr != nil {
+		if frag.shouldValidate {
+			if validationErr := validateRuleSourceRules(frag.rules, frag.name, dataFiles); validationErr != nil {
 				logDebug(log, req, "RuleSet", "RuleSource validation issue recorded", "ruleSourceName", frag.name, "error", validationErr.Error())
 				aggregatedErrors = append(aggregatedErrors, validationErr)
 			}

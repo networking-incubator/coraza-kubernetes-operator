@@ -93,10 +93,15 @@ func (r *RuleSetReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(
 			&wafv1alpha1.RuleSource{},
 			handler.EnqueueRequestsFromMapFunc(r.findRuleSetsForRuleSource),
+			builder.WithPredicates(predicate.Or(
+				predicate.GenerationChangedPredicate{},
+				annotationChangedPredicate(wafv1alpha1.AnnotationSkipValidation),
+			)),
 		).
 		Watches(
 			&wafv1alpha1.RuleData{},
 			handler.EnqueueRequestsFromMapFunc(r.findRuleSetsForRuleData),
+			builder.WithPredicates(predicate.GenerationChangedPredicate{}),
 		).
 		WithOptions(controller.Options{
 			RateLimiter: workqueue.NewTypedItemExponentialFailureRateLimiter[ctrl.Request](
@@ -130,6 +135,14 @@ func (r *RuleSetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	logDebug(log, req, "RuleSet", "Initializing status")
 	if err := r.initializeStatus(ctx, log, req, &ruleset); err != nil {
 		return ctrl.Result{}, err
+	}
+
+	if msg := findDuplicateReferences(&ruleset); msg != "" {
+		logInfo(log, req, "RuleSet", "Duplicate references detected", "detail", msg)
+		if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "RuleSet", &ruleset, &ruleset.Status.Conditions, ruleset.Generation, "DuplicateReference", msg); patchErr != nil {
+			return ctrl.Result{}, patchErr
+		}
+		return ctrl.Result{}, nil
 	}
 
 	logDebug(log, req, "RuleSet", "Loading RuleData objects")

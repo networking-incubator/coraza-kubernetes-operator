@@ -1043,3 +1043,126 @@ func TestRuleSetReconciler_UnsupportedRules(t *testing.T) {
 			"expected Warning/UnsupportedRules event even with annotation override; got: %v", recorder.Events)
 	})
 }
+
+func TestRuleSetReconciler_DuplicateSourceReferences(t *testing.T) {
+	ctx := context.Background()
+	ruleSetCache := cache.NewRuleSetCache()
+
+	ruleSrc := utils.NewTestRuleSource("dup-ref-src", testNamespace, "SecCollectionTimeout 1")
+	require.NoError(t, k8sClient.Create(ctx, ruleSrc))
+	t.Cleanup(func() {
+		if err := k8sClient.Delete(ctx, ruleSrc); err != nil {
+			t.Logf("failed to delete %s: %v", ruleSrc.Name, err)
+		}
+	})
+
+	ruleSet := utils.NewTestRuleSet(utils.RuleSetOptions{
+		Name:      "dup-src-ref-ruleset",
+		Namespace: testNamespace,
+		Sources: []wafv1alpha1.SourceReference{
+			{Name: "dup-ref-src"},
+			{Name: "dup-ref-src"},
+		},
+	})
+	require.NoError(t, k8sClient.Create(ctx, ruleSet))
+	t.Cleanup(func() {
+		if err := k8sClient.Delete(ctx, ruleSet); err != nil {
+			t.Logf("failed to delete RuleSet: %v", err)
+		}
+	})
+
+	recorder := utils.NewFakeRecorder()
+	reconciler := &RuleSetReconciler{
+		Client:   k8sClient,
+		Scheme:   scheme,
+		Recorder: recorder,
+		Cache:    ruleSetCache,
+	}
+	result, err := reconciler.Reconcile(ctx, ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: ruleSet.Name, Namespace: ruleSet.Namespace},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, reconcile.Result{}, result)
+
+	cacheKey := testNamespace + "/dup-src-ref-ruleset"
+	_, ok := ruleSetCache.Get(cacheKey)
+	assert.False(t, ok, "cache should be empty when duplicate sources are detected")
+
+	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: ruleSet.Name, Namespace: ruleSet.Namespace}, ruleSet))
+	ready := apimeta.FindStatusCondition(ruleSet.Status.Conditions, "Ready")
+	require.NotNil(t, ready)
+	assert.Equal(t, metav1.ConditionFalse, ready.Status)
+	assert.Equal(t, "DuplicateReference", ready.Reason)
+	assert.Contains(t, ready.Message, "dup-ref-src")
+
+	assert.True(t, recorder.HasEvent("Warning", "DuplicateReference"),
+		"expected Warning/DuplicateReference event; got: %v", recorder.Events)
+}
+
+func TestRuleSetReconciler_DuplicateDataReferences(t *testing.T) {
+	ctx := context.Background()
+	ruleSetCache := cache.NewRuleSetCache()
+
+	ruleSrc := utils.NewTestRuleSource("dup-data-ref-src", testNamespace, "SecCollectionTimeout 1")
+	require.NoError(t, k8sClient.Create(ctx, ruleSrc))
+	t.Cleanup(func() {
+		if err := k8sClient.Delete(ctx, ruleSrc); err != nil {
+			t.Logf("failed to delete %s: %v", ruleSrc.Name, err)
+		}
+	})
+
+	ruleData := utils.NewTestRuleData("dup-data-ref", testNamespace, map[string]string{
+		"test.data": "content",
+	})
+	require.NoError(t, k8sClient.Create(ctx, ruleData))
+	t.Cleanup(func() {
+		if err := k8sClient.Delete(ctx, ruleData); err != nil {
+			t.Logf("failed to delete %s: %v", ruleData.Name, err)
+		}
+	})
+
+	ruleSet := utils.NewTestRuleSet(utils.RuleSetOptions{
+		Name:      "dup-data-ref-ruleset",
+		Namespace: testNamespace,
+		Sources: []wafv1alpha1.SourceReference{
+			{Name: "dup-data-ref-src"},
+		},
+		Data: []wafv1alpha1.DataReference{
+			{Name: "dup-data-ref"},
+			{Name: "dup-data-ref"},
+		},
+	})
+	require.NoError(t, k8sClient.Create(ctx, ruleSet))
+	t.Cleanup(func() {
+		if err := k8sClient.Delete(ctx, ruleSet); err != nil {
+			t.Logf("failed to delete RuleSet: %v", err)
+		}
+	})
+
+	recorder := utils.NewFakeRecorder()
+	reconciler := &RuleSetReconciler{
+		Client:   k8sClient,
+		Scheme:   scheme,
+		Recorder: recorder,
+		Cache:    ruleSetCache,
+	}
+	result, err := reconciler.Reconcile(ctx, ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: ruleSet.Name, Namespace: ruleSet.Namespace},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, reconcile.Result{}, result)
+
+	cacheKey := testNamespace + "/dup-data-ref-ruleset"
+	_, ok := ruleSetCache.Get(cacheKey)
+	assert.False(t, ok, "cache should be empty when duplicate data refs are detected")
+
+	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: ruleSet.Name, Namespace: ruleSet.Namespace}, ruleSet))
+	ready := apimeta.FindStatusCondition(ruleSet.Status.Conditions, "Ready")
+	require.NotNil(t, ready)
+	assert.Equal(t, metav1.ConditionFalse, ready.Status)
+	assert.Equal(t, "DuplicateReference", ready.Reason)
+	assert.Contains(t, ready.Message, "dup-data-ref")
+
+	assert.True(t, recorder.HasEvent("Warning", "DuplicateReference"),
+		"expected Warning/DuplicateReference event; got: %v", recorder.Events)
+}
