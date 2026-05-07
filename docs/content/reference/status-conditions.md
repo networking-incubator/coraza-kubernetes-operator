@@ -116,9 +116,9 @@ kubectl get rulesource,ruledata -n my-namespace
 
 **Engine is Ready but traffic is not filtered**
 
-1. Verify the Engine's workload selector matches the Gateway pods:
+1. Verify the Engine's target name matches the Gateway resource:
    ```bash
-   kubectl get pods -n my-namespace --show-labels
+   kubectl get gateways -n my-namespace
    ```
 
 2. Check that the WasmPlugin was created:

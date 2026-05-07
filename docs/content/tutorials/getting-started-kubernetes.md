@@ -202,16 +202,11 @@ metadata:
 spec:
   ruleSet:
     name: tutorial-ruleset
+  target:
+    type: Gateway
+    name: waf-gateway
+    provider: Istio
   failurePolicy: fail
-  driver:
-    istio:
-      wasm:
-        mode: gateway
-        workloadSelector:
-          matchLabels:
-            gateway.networking.k8s.io/gateway-name: waf-gateway
-        ruleSetCacheServer:
-          pollIntervalSeconds: 5
 EOF
 ```
 

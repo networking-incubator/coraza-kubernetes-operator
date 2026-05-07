@@ -55,7 +55,7 @@ istio:
   # When empty, the operator does not set an Istio revision label on managed resources.
   revision: ""
 
-# Default WASM plugin OCI URL when an Engine omits spec.driver.istio.wasm.image.
+# Default WASM plugin OCI URL when an Engine omits spec.driver.wasm.image.
 # When empty, the operator's built-in default (internal/defaults.DefaultCorazaWasmOCIReference) is used.
 defaultWasmImage: ""
 

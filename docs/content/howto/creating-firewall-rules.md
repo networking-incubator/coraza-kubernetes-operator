@@ -98,7 +98,7 @@ kind: RuleSource
 metadata:
   name: dependent-rules
   annotations:
-    coraza.io/validation: "false"
+    waf.k8s.coraza.io/rule-validation: "false"
 spec:
   rules: |
     SecRule TX:BLOCKING_PARANOIA_LEVEL "@ge 1" ...

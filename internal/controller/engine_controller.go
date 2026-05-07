@@ -218,9 +218,9 @@ func (r *EngineReconciler) handleInvalidDriverConfiguration(ctx context.Context,
 // -----------------------------------------------------------------------------
 
 func (r *EngineReconciler) selectDriver(ctx context.Context, log logr.Logger, req ctrl.Request, engine wafv1alpha1.Engine) (ctrl.Result, error) {
-	driverType := wafv1alpha1.DriverTypeWasm
-	if engine.Spec.Driver.Type != "" {
-		driverType = engine.Spec.Driver.Type
+	driverType := engine.Spec.Driver.Type
+	if driverType == "" {
+		driverType = defaultDriverTypeForProvider(engine.Spec.Target.Provider)
 	}
 
 	switch driverType {
@@ -229,6 +229,15 @@ func (r *EngineReconciler) selectDriver(ctx context.Context, log logr.Logger, re
 		return r.provisionWasmDriver(ctx, log, req, engine)
 	default:
 		return ctrl.Result{}, r.handleInvalidDriverConfiguration(ctx, log, req, &engine)
+	}
+}
+
+func defaultDriverTypeForProvider(provider wafv1alpha1.EngineTargetProvider) wafv1alpha1.DriverType {
+	switch provider {
+	case wafv1alpha1.EngineTargetProviderIstio, "":
+		return wafv1alpha1.DriverTypeWasm
+	default:
+		return ""
 	}
 }
 

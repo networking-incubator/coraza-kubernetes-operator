@@ -864,6 +864,25 @@ func TestEngineReconciler_ValidationRejection(t *testing.T) {
 			},
 			expectedError: "name must be a valid DNS-1035 label",
 		},
+		{
+			name: "invalid provider rejected",
+			engineFunc: func() *wafv1alpha1.Engine {
+				engine := utils.NewTestEngine(utils.EngineOptions{})
+				engine.Spec.Target.Provider = "InvalidProvider"
+				return engine
+			},
+			expectedError: "spec.target.provider",
+		},
+		{
+			name: "provider Istio accepted with Gateway target type",
+			engineFunc: func() *wafv1alpha1.Engine {
+				engine := utils.NewTestEngine(utils.EngineOptions{})
+				engine.Spec.Target.Provider = wafv1alpha1.EngineTargetProviderIstio
+				engine.Spec.Target.Type = wafv1alpha1.EngineTargetTypeGateway
+				return engine
+			},
+			expectedError: "",
+		},
 	}
 
 	for i, tt := range tests {
@@ -884,6 +903,31 @@ func TestEngineReconciler_ValidationRejection(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestEngineReconciler_ProviderImmutable(t *testing.T) {
+	ctx := context.Background()
+
+	engine := utils.NewTestEngine(utils.EngineOptions{
+		Name:      "immutable-provider-test",
+		Namespace: testNamespace,
+	})
+	require.NoError(t, k8sClient.Create(ctx, engine))
+	t.Cleanup(func() {
+		_ = k8sClient.Delete(ctx, engine)
+	})
+
+	var fetched wafv1alpha1.Engine
+	require.NoError(t, k8sClient.Get(ctx, client.ObjectKeyFromObject(engine), &fetched))
+
+	fetched.Spec.Target.Provider = "Istio"
+	err := k8sClient.Update(ctx, &fetched)
+	require.NoError(t, err, "updating with the same provider value should succeed")
+
+	// NOTE: We cannot test rejection of a different provider value via the
+	// API server because the enum validation (Enum=Istio) rejects unknown
+	// values before the transition rule evaluates. The oldSelf CEL rule
+	// will be exercised once additional providers are added to the enum.
 }
 
 func TestEngineReconciler_DegradedWhenRuleSetDegraded(t *testing.T) {

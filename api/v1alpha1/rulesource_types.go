@@ -36,7 +36,7 @@ const (
 	// AnnotationSkipValidation controls per-fragment Coraza rule validation on
 	// a RuleSource. When set to "false", per-source validation is skipped
 	// (the aggregated RuleSet validation still runs).
-	AnnotationSkipValidation = "coraza.io/validation"
+	AnnotationSkipValidation = Group + "/rule-validation"
 )
 
 // -----------------------------------------------------------------------------

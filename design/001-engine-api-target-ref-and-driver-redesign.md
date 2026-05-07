@@ -55,6 +55,7 @@ spec:
   target:
     type: Gateway
     name: my-gateway       # must be a valid DNS label (RFC 1035, max 63 chars)
+    provider: Istio        # identifies the infrastructure provider (default: Istio)
 
   ruleSetCacheServer:
     pollIntervalSeconds: 15

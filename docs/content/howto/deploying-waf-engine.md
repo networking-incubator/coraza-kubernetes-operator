@@ -5,11 +5,11 @@ weight: 25
 description: "Create an Engine resource to attach a WAF to a Kubernetes Gateway."
 ---
 
-An Engine resource references a RuleSet and attaches the Coraza WAF to one or more Gateways via an Istio WasmPlugin.
+An Engine resource references a RuleSet and attaches the Coraza WAF to a Gateway via an Istio WasmPlugin.
 
 ## Creating an Engine
 
-The minimum Engine configuration requires a RuleSet reference and a workload selector that matches your Gateway:
+The minimum Engine configuration requires a RuleSet reference and a target that identifies your Gateway:
 
 ```yaml
 apiVersion: waf.k8s.coraza.io/v1alpha1
@@ -19,26 +19,21 @@ metadata:
 spec:
   ruleSet:
     name: my-ruleset
-  driver:
-    istio:
-      wasm:
-        mode: gateway
-        workloadSelector:
-          matchLabels:
-            gateway.networking.k8s.io/gateway-name: my-gateway
-        ruleSetCacheServer:
-          pollIntervalSeconds: 15
+  target:
+    type: Gateway
+    name: my-gateway
+    provider: Istio
 ```
 
 ## Selecting a Gateway
 
-The `workloadSelector` determines which Gateway pods the WAF attaches to. Kubernetes Gateway API implementations typically label Gateway pods with `gateway.networking.k8s.io/gateway-name`. Use the label that matches your Gateway:
+The `target.name` identifies the Gateway resource in the same namespace. The operator derives the workload label selector using the GEP-1762 convention (`gateway.networking.k8s.io/gateway-name` label).
+
+To verify your Gateway name:
 
 ```bash
-kubectl get pods -n my-namespace --show-labels
+kubectl get gateways -n my-namespace
 ```
-
-Look for labels on the Gateway pods and use them in `matchLabels`.
 
 ## Configuring the Failure Policy
 
@@ -58,15 +53,12 @@ See [Configuring Failure Policies]({{< relref "configuring-failure-policies" >}}
 
 ## Configuring the Poll Interval
 
-The `pollIntervalSeconds` field controls how often the WASM plugin checks the cache for updated rules. The default is 15 seconds. Valid range: 1 to 3600.
+The `ruleSetCacheServer.pollIntervalSeconds` field controls how often the WASM plugin checks the cache for updated rules. The default is 15 seconds. Valid range: 1 to 3600.
 
 ```yaml
 spec:
-  driver:
-    istio:
-      wasm:
-        ruleSetCacheServer:
-          pollIntervalSeconds: 30
+  ruleSetCacheServer:
+    pollIntervalSeconds: 30
 ```
 
 Lower values mean faster rule updates but slightly more network traffic between the WASM plugin and the cache server.
@@ -78,9 +70,9 @@ By default, the operator uses its built-in WASM plugin image. To use a custom im
 ```yaml
 spec:
   driver:
-    istio:
-      wasm:
-        image: "oci://ghcr.io/my-org/coraza-proxy-wasm:v1.0.0"
+    type: wasm
+    wasm:
+      image: "oci://ghcr.io/my-org/coraza-proxy-wasm:v1.0.0"
 ```
 
 The image must use the `oci://` URI scheme.
@@ -90,10 +82,10 @@ If the image is in a private registry, provide an image pull secret:
 ```yaml
 spec:
   driver:
-    istio:
-      wasm:
-        image: "oci://my-registry.example.com/coraza-proxy-wasm:v1.0.0"
-        imagePullSecret: my-registry-credentials
+    type: wasm
+    wasm:
+      image: "oci://my-registry.example.com/coraza-proxy-wasm:v1.0.0"
+      imagePullSecret: my-registry-credentials
 ```
 
 The Secret must exist in the same namespace as the Engine.
@@ -106,15 +98,21 @@ Check the Engine status:
 kubectl get engine my-engine -n my-namespace
 ```
 
-The output shows the referenced RuleSet, failure policy, and readiness:
+The output shows the referenced RuleSet, provider, target, failure policy, and readiness:
 
 ```
-NAME        RULESET      FAILURE POLICY   READY   AGE
-my-engine   my-ruleset   fail             True    5m
+NAME        RULESET      PROVIDER   TARGET TYPE   TARGET NAME   FAILURE POLICY   READY   AGE
+my-engine   my-ruleset   Istio      Gateway       my-gateway    fail             True    5m
 ```
 
-For detailed status including matched Gateways:
+For detailed status conditions and events:
 
 ```bash
 kubectl describe engine my-engine -n my-namespace
+```
+
+To verify that the WAF is attached, check for the WasmPlugin and NetworkPolicy created by the operator:
+
+```bash
+kubectl get wasmplugin,networkpolicy -n my-namespace
 ```
