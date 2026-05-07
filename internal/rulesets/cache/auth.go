@@ -149,12 +149,12 @@ func (a *TokenAuthenticator) Authenticate(ctx context.Context, token, audience s
 		Name:      name,
 	}
 
-	// Cache the successful result if we haven't exceeded the size limit.
-	// If over limit, evict expired entries first to make room.
 	expiresAt := time.Now().Add(a.cacheTTL)
 
 	a.cacheMu.Lock()
-	if a.cacheSize >= maxAuthCacheSize {
+	// Proactive eviction at 90% capacity to prevent the cache from staying
+	// perpetually full once it reaches maxAuthCacheSize.
+	if a.cacheSize >= maxAuthCacheSize*9/10 {
 		a.evictExpiredLocked()
 	}
 	if a.cacheSize < maxAuthCacheSize {

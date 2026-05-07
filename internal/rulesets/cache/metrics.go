@@ -77,6 +77,7 @@ func instrumentHandler(next http.Handler) http.Handler {
 				elapsed := time.Since(start).Seconds()
 				requestsTotal.WithLabelValues(handler, r.Method, code).Inc()
 				requestDuration.WithLabelValues(handler, r.Method, code).Observe(elapsed)
+				// Record metrics before re-panicking; http.Server recovers per-goroutine panics.
 				panic(p)
 			}
 		}()

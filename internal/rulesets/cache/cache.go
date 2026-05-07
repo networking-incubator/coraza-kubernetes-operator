@@ -22,6 +22,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/go-logr/logr"
 	"github.com/google/uuid"
 )
 
@@ -49,19 +50,28 @@ type RuleSetEntries struct {
 // RuleSetCache
 // -----------------------------------------------------------------------------
 
-// RuleSetCache provides thread-safe storage for rulesets with versioning
+// RuleSetCache provides thread-safe storage for rulesets with versioning.
 type RuleSetCache struct {
 	mu           sync.RWMutex
 	entries      map[string]*RuleSetEntries
 	totalSize    int
 	totalEntries int
+	logger       logr.Logger
 }
 
-// NewRuleSetCache creates a new RuleSetCache instance
+// NewRuleSetCache creates a new RuleSetCache instance.
 func NewRuleSetCache() *RuleSetCache {
 	return &RuleSetCache{
 		entries: make(map[string]*RuleSetEntries),
+		logger:  logr.Discard(),
 	}
+}
+
+// SetLogger configures the logger used for invariant violation warnings.
+func (c *RuleSetCache) SetLogger(l logr.Logger) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.logger = l
 }
 
 // Get retrieves the latest ruleset entry for the given instance
@@ -70,10 +80,8 @@ func (c *RuleSetCache) Get(instance string) (*RuleSetEntry, bool) {
 	defer c.mu.RUnlock()
 	entries, ok := c.entries[instance]
 	if ok && len(entries.Entries) > 0 {
-		// Find the entry matching the Latest UUID.
 		for _, entry := range entries.Entries {
 			if entry.UUID == entries.Latest {
-				// Return a deep copy so callers cannot mutate internal cache state.
 				var copiedDataFiles map[string][]byte
 				if entry.DataFiles != nil {
 					copiedDataFiles = make(map[string][]byte, len(entry.DataFiles))
@@ -90,6 +98,11 @@ func (c *RuleSetCache) Get(instance string) (*RuleSetEntry, bool) {
 				return copiedEntry, true
 			}
 		}
+		c.logger.Info("cache invariant violation: Latest UUID not found among entries",
+			"instance", instance,
+			"latestUUID", entries.Latest,
+			"entryCount", len(entries.Entries),
+		)
 	}
 
 	return nil, false
