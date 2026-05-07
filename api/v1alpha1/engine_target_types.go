@@ -70,7 +70,7 @@ type EngineTarget struct {
 	//
 	// +optional
 	// +default="Istio"
-	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="provider is immutable; create a new Engine to use a different provider"
+	// +k8s:immutable
 	Provider EngineTargetProvider `json:"provider,omitempty"`
 }
 
