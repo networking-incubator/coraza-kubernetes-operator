@@ -218,6 +218,70 @@ func TestPruneExpiredTokens_NoneExpired(t *testing.T) {
 	assert.Equal(t, 2, count, "no entries should be pruned")
 }
 
+func TestCleanupStaleTokens(t *testing.T) {
+	r := &EngineReconciler{}
+	now := time.Now()
+
+	r.tokenStore.Store("ns/engine1/old-ruleset", &TokenEntry{
+		Token:     "old",
+		IssuedAt:  now,
+		ExpiresAt: now.Add(1 * time.Hour),
+	})
+	r.tokenStore.Store("ns/engine1/current-ruleset", &TokenEntry{
+		Token:     "current",
+		IssuedAt:  now,
+		ExpiresAt: now.Add(1 * time.Hour),
+	})
+	r.tokenStore.Store("ns/engine2/other-ruleset", &TokenEntry{
+		Token:     "unrelated",
+		IssuedAt:  now,
+		ExpiresAt: now.Add(1 * time.Hour),
+	})
+
+	r.cleanupStaleTokens("ns", "engine1", "current-ruleset")
+
+	_, hasOld := r.tokenStore.Load("ns/engine1/old-ruleset")
+	assert.False(t, hasOld, "stale token for old RuleSet should be removed")
+
+	_, hasCurrent := r.tokenStore.Load("ns/engine1/current-ruleset")
+	assert.True(t, hasCurrent, "token for current RuleSet should remain")
+
+	_, hasUnrelated := r.tokenStore.Load("ns/engine2/other-ruleset")
+	assert.True(t, hasUnrelated, "token for a different Engine should remain")
+}
+
+func TestCleanupStaleTokens_NoStaleEntries(t *testing.T) {
+	r := &EngineReconciler{}
+	now := time.Now()
+
+	r.tokenStore.Store("ns/engine1/current", &TokenEntry{
+		Token:     "t1",
+		IssuedAt:  now,
+		ExpiresAt: now.Add(1 * time.Hour),
+	})
+
+	r.cleanupStaleTokens("ns", "engine1", "current")
+
+	count := 0
+	r.tokenStore.Range(func(_, _ any) bool {
+		count++
+		return true
+	})
+	assert.Equal(t, 1, count, "no entries should be removed when none are stale")
+}
+
+func TestCleanupStaleTokens_EmptyStore(t *testing.T) {
+	r := &EngineReconciler{}
+	r.cleanupStaleTokens("ns", "engine1", "current")
+
+	count := 0
+	r.tokenStore.Range(func(_, _ any) bool {
+		count++
+		return true
+	})
+	assert.Equal(t, 0, count)
+}
+
 func TestCacheClientSALabels(t *testing.T) {
 	labels := cacheClientSALabels("my-engine")
 	assert.Equal(t, "coraza-kubernetes-operator", labels["app.kubernetes.io/managed-by"])

@@ -39,6 +39,10 @@ import (
 // Engine Controller - NetworkPolicy RBAC
 // -----------------------------------------------------------------------------
 
+// namespace=system is a kubebuilder placeholder replaced during manifest
+// generation with the operator's actual namespace, restricting NetworkPolicy
+// RBAC to the operator namespace only.
+//
 // +kubebuilder:rbac:groups=networking.k8s.io,namespace=system,resources=networkpolicies,verbs=get;list;watch;create;update;patch;delete
 
 // -----------------------------------------------------------------------------

@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -182,6 +183,10 @@ func (r *EngineReconciler) ensureCacheToken(ctx context.Context, log logr.Logger
 		return "", time.Time{}, fmt.Errorf("failed to create token for SA %s/%s: %w", req.Namespace, saName, err)
 	}
 
+	if result.Status.Token == "" {
+		return "", time.Time{}, fmt.Errorf("TokenRequest returned empty token for SA %s/%s", req.Namespace, saName)
+	}
+
 	now := time.Now()
 	expiresAt := result.Status.ExpirationTimestamp.Time
 	entry := &TokenEntry{Token: result.Status.Token, IssuedAt: now, ExpiresAt: expiresAt}
@@ -202,6 +207,21 @@ func (r *EngineReconciler) pruneExpiredTokens() {
 		entry := value.(*TokenEntry)
 		if now.After(entry.ExpiresAt) {
 			r.tokenStore.Delete(key)
+		}
+		return true
+	})
+}
+
+// cleanupStaleTokens removes token entries for RuleSets that an Engine no
+// longer references. When spec.ruleSet.name changes, the old token (keyed by
+// "namespace/engineName/oldRuleSet") would otherwise leak in the sync.Map
+// until it expires.
+func (r *EngineReconciler) cleanupStaleTokens(namespace, engineName, currentRuleSet string) {
+	prefix := fmt.Sprintf("%s/%s/", namespace, engineName)
+	r.tokenStore.Range(func(key, _ any) bool {
+		k := key.(string)
+		if strings.HasPrefix(k, prefix) && !strings.HasSuffix(k, "/"+currentRuleSet) {
+			r.tokenStore.Delete(k)
 		}
 		return true
 	})
