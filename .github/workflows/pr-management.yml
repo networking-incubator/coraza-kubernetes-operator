@@ -3,6 +3,12 @@ name: pr_management
 permissions: read-all
 
 on:
+    # SECURITY: pull_request_target runs with base-branch
+    # privileges. CRITICAL: Always checkout base SHA
+    # (github.event.pull_request.base.sha), NEVER the PR
+    # head. Changing the checkout ref to PR head would allow
+    # malicious PRs to execute arbitrary code with
+    # PROJECT_MANAGEMENT_PAT.
     pull_request_target:
         types: [opened, synchronize, reopened]
 

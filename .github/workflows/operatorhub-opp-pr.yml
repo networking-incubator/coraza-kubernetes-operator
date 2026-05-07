@@ -39,12 +39,10 @@ jobs:
       - name: set up python
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
-          python-version: "3.12"
+          python-version: "3.13.12"
 
       - name: install python dependencies
-        run: |
-          pip install PyYAML==6.0.3 ansible==8.7.0 jmespath==1.0.1
-          if [[ -f hack/requirements.txt ]]; then pip install -r hack/requirements.txt; fi
+        run: pip install -r hack/requirements-operatorhub.txt
 
       - name: generate bundle and run OPP
         run: make bundle.opp

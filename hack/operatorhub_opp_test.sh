@@ -112,6 +112,10 @@ export OPP_PRODUCTION_TYPE="${OPP_PRODUCTION_TYPE:-k8s}"
 
 OPP_SCRIPT_FILE="${TMP_DIR}/opp-pinned.sh"
 curl -fsSL "${OPP_SCRIPT_URL}" -o "${OPP_SCRIPT_FILE}"
+# SHA256 provides content integrity but not authenticity.
+# The pinned commit could be replaced if upstream
+# force-pushes. Verify the commit hash against the
+# upstream repo before updating.
 ACTUAL_SHA256="$(sha256sum "${OPP_SCRIPT_FILE}" | awk '{print $1}')"
 if [[ "${ACTUAL_SHA256}" != "${OPP_SCRIPT_SHA256}" ]]; then
     echo "Error: SHA256 mismatch for opp.sh (expected ${OPP_SCRIPT_SHA256}, got ${ACTUAL_SHA256})" >&2

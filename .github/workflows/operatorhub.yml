@@ -36,18 +36,10 @@ jobs:
       - name: set up python
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
-          python-version: "3.12"
+          python-version: "3.13.12"
 
       - name: install python dependencies
-        run: |
-          python -m pip install --upgrade pip
-          cat << 'EOF' > /tmp/operatorhub-requirements.txt
-          PyYAML==6.0.2
-          ansible==8.7.0
-          jmespath==1.0.1
-          EOF
-          python -m pip install -r /tmp/operatorhub-requirements.txt
-          if [[ -f hack/requirements.txt ]]; then python -m pip install -r hack/requirements.txt; fi
+        run: pip install -r hack/requirements-operatorhub.txt
 
       - name: extract version
         id: version

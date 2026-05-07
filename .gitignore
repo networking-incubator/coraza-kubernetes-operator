@@ -58,6 +58,9 @@ docs/resources/
 !.github/**/*.md
 !hack/operatorhub-pr-template.md
 
+# hack
+!hack/requirements*.txt
+
 # helm chart
 !charts/**/NOTES.txt
 

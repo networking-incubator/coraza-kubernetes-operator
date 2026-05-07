@@ -23,6 +23,9 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
 
+      # Manual install with SHA256 verification: no official
+      # GitHub Action available. Update checksums when
+      # upgrading versions. Not tracked by Dependabot.
       - name: install yq
         run: |
           YQ_VERSION="v4.53.2"
@@ -36,9 +39,15 @@ jobs:
       - name: build docs
         run: make docs.build
 
-      # chart-releaser (cr) CLI is used instead of helm/chart-releaser-action because
-      # the action has no "index-only" mode — it always tries to upload chart packages
-      # and push index.yaml to a git branch, neither of which we want here.
+      # chart-releaser (cr) CLI is used instead of
+      # helm/chart-releaser-action because the action has no
+      # "index-only" mode: it always tries to upload chart
+      # packages and push index.yaml to a git branch, neither
+      # of which we want here.
+      #
+      # Manual install with SHA256 verification: no official
+      # GitHub Action available. Update checksums when
+      # upgrading versions. Not tracked by Dependabot.
       - name: install chart-releaser
         run: |
           set -o pipefail
