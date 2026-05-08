@@ -161,13 +161,20 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 	cacheCtx, cacheCancel := context.WithCancel(context.Background())
+	cacheErrCh := make(chan error, 1)
 	go func() {
-		if startErr := testCache.Start(cacheCtx); startErr != nil {
-			return
-		}
+		cacheErrCh <- testCache.Start(cacheCtx)
 	}()
-	if !testCache.WaitForCacheSync(cacheCtx) {
-		fmt.Fprintf(os.Stderr, "Cache failed to sync\n")
+
+	syncCtx, syncCancel := context.WithTimeout(cacheCtx, 30*time.Second)
+	defer syncCancel()
+	if !testCache.WaitForCacheSync(syncCtx) {
+		select {
+		case startErr := <-cacheErrCh:
+			fmt.Fprintf(os.Stderr, "Cache failed to start: %v\n", startErr)
+		default:
+			fmt.Fprintf(os.Stderr, "Cache failed to sync within 30s\n")
+		}
 		cacheCancel()
 		_ = testEnv.Stop()
 		os.Exit(1)
