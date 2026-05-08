@@ -144,6 +144,25 @@ func (c *RuleSetCache) Put(instance string, rules string, datafiles map[string][
 	c.totalEntries++
 }
 
+// Delete removes all entries for the given instance from the cache.
+// Returns true if the instance existed.
+func (c *RuleSetCache) Delete(instance string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	entries, ok := c.entries[instance]
+	if !ok {
+		return false
+	}
+
+	for _, entry := range entries.Entries {
+		c.totalSize -= entrySize(entry)
+		c.totalEntries--
+	}
+	delete(c.entries, instance)
+	return true
+}
+
 // Len returns the number of instances stored in the cache
 func (c *RuleSetCache) Len() int {
 	c.mu.RLock()
