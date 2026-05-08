@@ -233,16 +233,8 @@ func TestConcurrentRuleSetUpdates(t *testing.T) {
 	}
 
 	s.Step("verify all updates applied correctly")
-	require.Eventually(s.T, func() bool {
-		resp := gw.Get("/?test=updated-1")
-		return resp.Err == nil && resp.StatusCode == http.StatusForbidden
-	}, framework.DefaultTimeout, framework.DefaultInterval, "expected updated-1 to be blocked after concurrent updates")
-
-	gw.ExpectBlocked("/?test=updated-2")
-	gw.ExpectBlocked("/?test=updated-3")
-
-	// Old patterns should no longer be blocked
-	gw.ExpectAllowed("/?test=alpha")
-	gw.ExpectAllowed("/?test=beta")
-	gw.ExpectAllowed("/?test=gamma")
+	for i, e := range engines {
+		proxies[i].ExpectBlocked(fmt.Sprintf("/?test=updated-%d", i+1))
+		proxies[i].ExpectAllowed(fmt.Sprintf("/?test=%s", e.pattern))
+	}
 }
