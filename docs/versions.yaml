@@ -3,9 +3,9 @@
 # display: label shown in the version dropdown
 # default: true = root path redirects here (exactly one entry)
 versions:
-  - name: v0.4
+  - name: latest
     ref: v0.4.0
-    display: v0.4
+    display: v0.4 (latest)
     default: true
   - name: dev
     ref: HEAD

@@ -190,10 +190,47 @@ announcements get unpinned.
 
 [immutable releases]:https://docs.github.com/en/code-security/concepts/supply-chain-security/immutable-releases
 
-### Step 6 - Github Pages
+### Step 6 - Post-Release Updates & Github Pages
 
-Re-publish the Helm chart index so it includes the released version by using one
-of these options:
+After the release is published and the container image is available, open a
+follow-up PR to `main` with the following changes:
+
+**Bump Chart version** — update `charts/coraza-kubernetes-operator/Chart.yaml`:
+
+```yaml
+version: 0.5.0        # chart version (without 'v' prefix)
+appVersion: "0.5.0"   # operator version (quoted string, without 'v' prefix)
+```
+
+While the release workflow overrides these via `helm package --version` and
+`--app-version`, the values in the repository must be correct for users who
+install from a local checkout (e.g. `helm install ./charts/...`). The
+`appVersion` also serves as the default `image.tag` when `image.tag` is not
+set in values — bumping it before the image exists would break local installs.
+
+**Update docs versioning** — update `docs/versions.yaml` to add the new release
+version and set it as the default. This must also happen **after** tagging
+because `hack/build-versioned-docs.sh` verifies that every non-HEAD ref exists
+and will fail if the tag is missing.
+
+```yaml
+versions:
+  - name: latest
+    ref: v0.5.0
+    display: v0.5 (latest)
+    default: true
+  - name: v0.4
+    ref: v0.4.0
+    display: v0.4
+    default: false
+  - name: dev
+    ref: HEAD
+    display: dev
+    default: false
+```
+
+Once the PR merges, re-publish the Helm chart index and docs by using one of
+these options:
 1. Trigger the [github Pages](https://github.com/networking-incubator/coraza-kubernetes-operator/actions/workflows/pages.yml) workflow manually from the GitHub UI.
 2. Run the CLI command `gh workflow run pages.yml`.
 

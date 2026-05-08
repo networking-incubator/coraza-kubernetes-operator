@@ -19,4 +19,4 @@ ServiceEntry and DestinationRule have been created for the ruleset cache.
 
 To get started, create a RuleSource, RuleSet, and Engine:
 
-  https://github.com/networking-incubator/coraza-kubernetes-operator#getting-started
+  https://networking-incubator.github.io/coraza-kubernetes-operator/latest/tutorials
