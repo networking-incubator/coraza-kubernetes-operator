@@ -46,6 +46,13 @@ import (
 // WasmPluginNamePrefix is the prefix used for all created WasmPlugin resources
 const WasmPluginNamePrefix = "coraza-engine-"
 
+// wasmPluginName returns the deterministic name for the WasmPlugin child
+// resource derived from the given Engine name. All call sites MUST use this
+// helper to keep the naming scheme consistent.
+func wasmPluginName(engineName string) string {
+	return WasmPluginNamePrefix + engineName
+}
+
 // -----------------------------------------------------------------------------
 // Engine Controller - WASM Driver - Provisioning
 // -----------------------------------------------------------------------------
@@ -184,7 +191,7 @@ func (r *EngineReconciler) buildWasmPlugin(engine *wafv1alpha1.Engine, wasmURL s
 			"apiVersion": "extensions.istio.io/v1alpha1",
 			"kind":       "WasmPlugin",
 			"metadata": map[string]any{
-				"name":      fmt.Sprintf("%s%s", WasmPluginNamePrefix, engine.Name),
+				"name":      wasmPluginName(engine.Name),
 				"namespace": engine.Namespace,
 			},
 			"spec": map[string]any{
