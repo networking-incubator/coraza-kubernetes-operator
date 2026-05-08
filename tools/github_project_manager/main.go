@@ -19,6 +19,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"slices"
 	"strconv"
@@ -147,7 +148,7 @@ func dispatch(cfg config, client *GitHubClient) error {
 	case "close-declined":
 		return runCloseDeclined(client, cfg.issue, iss.Labels, iss.HasMilestone(), iss.State, cfg.dryRun, log)
 	case "triage-pr":
-		return runTriagePR(client, cfg.issue, iss, cfg.project, cfg.dryRun, log)
+		return runTriagePR(client, cfg.issue, iss, cfg.project, cfg.dryRun, os.Stderr, log)
 	default:
 		return fmt.Errorf("unknown command %q\n\n%s", cfg.command, usage())
 	}
@@ -233,7 +234,7 @@ func runCloseDeclined(client *GitHubClient, number int, labels []string, hasMile
 // PR commands
 // -----------------------------------------------------------------------------
 
-func runTriagePR(client *GitHubClient, number int, iss *Issue, projectNumber int, dryRun bool, log func(string, ...any)) error {
+func runTriagePR(client *GitHubClient, number int, iss *Issue, projectNumber int, dryRun bool, warnWriter io.Writer, log func(string, ...any)) error {
 	prInfo, err := client.GetPullRequestInfo(number)
 	if err != nil {
 		return err
@@ -264,10 +265,10 @@ func runTriagePR(client *GitHubClient, number int, iss *Issue, projectNumber int
 	if !dryRun {
 		projectID, projectErr := resolveProjectID(client, projectNumber, log)
 		if projectErr != nil {
-			fmt.Fprintf(os.Stderr, "::warning::could not resolve project board: %v\n", projectErr)
+			fmt.Fprintf(warnWriter, "::warning::could not resolve project board: %v\n", projectErr)
 		} else {
 			if err := client.addItemToProject(projectID, prInfo.NodeID, "Review"); err != nil {
-				fmt.Fprintf(os.Stderr, "::warning::could not add to project board: %v\n", err)
+				fmt.Fprintf(warnWriter, "::warning::could not add to project board: %v\n", err)
 			}
 		}
 	}

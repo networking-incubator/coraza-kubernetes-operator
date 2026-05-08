@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -499,7 +500,7 @@ func TestDoRequest(t *testing.T) {
 			w.Write([]byte("ok"))
 		})
 
-		_, status, err := client.doRequest("GET", client.baseURL+"/test", "")
+		_, status, err := client.doRequestNoHeaders("GET", client.baseURL+"/test", "")
 
 		require.NoError(t, err)
 		assert.Equal(t, http.StatusOK, status)
@@ -511,7 +512,7 @@ func TestDoRequest(t *testing.T) {
 			w.Write([]byte("ok"))
 		})
 
-		_, _, err := client.doRequest("POST", client.baseURL+"/test", `{"key":"val"}`)
+		_, _, err := client.doRequestNoHeaders("POST", client.baseURL+"/test", `{"key":"val"}`)
 
 		require.NoError(t, err)
 	})
@@ -523,9 +524,133 @@ func TestDoRequest(t *testing.T) {
 		})
 		client.token = ""
 
-		_, _, err := client.doRequest("GET", client.baseURL+"/test", "")
+		_, _, err := client.doRequestNoHeaders("GET", client.baseURL+"/test", "")
 
 		require.NoError(t, err)
+	})
+}
+
+// -----------------------------------------------------------------------------
+// Tests - Pagination
+// -----------------------------------------------------------------------------
+
+func TestNextPageURL(t *testing.T) {
+	t.Run("extracts next URL", func(t *testing.T) {
+		header := `<https://api.github.com/repos/o/r/milestones?page=2>; rel="next", <https://api.github.com/repos/o/r/milestones?page=5>; rel="last"`
+
+		got := nextPageURL(header)
+
+		assert.Equal(t, "https://api.github.com/repos/o/r/milestones?page=2", got)
+	})
+
+	t.Run("returns empty when no next", func(t *testing.T) {
+		header := `<https://api.github.com/repos/o/r/milestones?page=1>; rel="prev"`
+
+		got := nextPageURL(header)
+
+		assert.Equal(t, "", got)
+	})
+
+	t.Run("returns empty for empty header", func(t *testing.T) {
+		got := nextPageURL("")
+
+		assert.Equal(t, "", got)
+	})
+}
+
+func TestListOpenMilestonesPagination(t *testing.T) {
+	t.Run("follows Link header across pages", func(t *testing.T) {
+		var requestCount int
+		var srvURL string
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			requestCount++
+			if r.URL.Query().Get("page") == "2" {
+				writeJSON(w, []Milestone{{Number: 3, Title: "v0.3.0"}})
+				return
+			}
+			nextURL := srvURL + r.URL.Path + "?state=open&per_page=100&page=2"
+			w.Header().Set("Link", `<`+nextURL+`>; rel="next"`)
+			writeJSON(w, []Milestone{{Number: 1, Title: "v0.1.0"}, {Number: 2, Title: "v0.2.0"}})
+		}))
+		t.Cleanup(srv.Close)
+		srvURL = srv.URL
+		client := NewGitHubClient("tok", "owner", "repo")
+		client.baseURL = srv.URL
+
+		milestones, err := client.ListOpenMilestones()
+
+		require.NoError(t, err)
+		assert.Len(t, milestones, 3, "should collect results from both pages")
+		assert.Equal(t, 2, requestCount, "should make exactly 2 requests")
+		assert.Equal(t, "v0.1.0", milestones[0].Title)
+		assert.Equal(t, "v0.3.0", milestones[2].Title)
+	})
+
+	t.Run("single page works without Link header", func(t *testing.T) {
+		client := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+			writeJSON(w, []Milestone{{Number: 1, Title: "v1.0.0"}})
+		})
+
+		milestones, err := client.ListOpenMilestones()
+
+		require.NoError(t, err)
+		assert.Len(t, milestones, 1)
+	})
+}
+
+func TestGetPullRequestFilesPagination(t *testing.T) {
+	t.Run("follows Link header across pages", func(t *testing.T) {
+		var requestCount int
+		var srvURL string
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			requestCount++
+			if r.URL.Query().Get("page") == "2" {
+				writeJSON(w, []map[string]string{{"filename": "c.go"}})
+				return
+			}
+			nextURL := srvURL + r.URL.Path + "?per_page=100&page=2"
+			w.Header().Set("Link", `<`+nextURL+`>; rel="next"`)
+			writeJSON(w, []map[string]string{{"filename": "a.go"}, {"filename": "b.go"}})
+		}))
+		t.Cleanup(srv.Close)
+		srvURL = srv.URL
+		client := NewGitHubClient("tok", "owner", "repo")
+		client.baseURL = srv.URL
+
+		files, err := client.GetPullRequestFiles(1)
+
+		require.NoError(t, err)
+		assert.Equal(t, []string{"a.go", "b.go", "c.go"}, files)
+		assert.Equal(t, 2, requestCount, "should make exactly 2 requests")
+	})
+}
+
+// -----------------------------------------------------------------------------
+// Tests - Response size limit
+// -----------------------------------------------------------------------------
+
+func TestDoRequestLimitsResponseSize(t *testing.T) {
+	t.Run("truncates responses larger than maxResponseSize", func(t *testing.T) {
+		oversized := strings.Repeat("x", maxResponseSize+1024)
+		client := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+			w.Write([]byte(oversized))
+		})
+
+		body, _, err := client.doRequestNoHeaders("GET", client.baseURL+"/big", "")
+
+		require.NoError(t, err)
+		assert.Len(t, body, maxResponseSize, "response should be truncated to maxResponseSize")
+	})
+
+	t.Run("small responses are not truncated", func(t *testing.T) {
+		client := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+			w.Write([]byte("ok"))
+		})
+
+		body, _, err := client.doRequestNoHeaders("GET", client.baseURL+"/small", "")
+
+		require.NoError(t, err)
+		assert.Equal(t, "ok", string(body))
 	})
 }
 

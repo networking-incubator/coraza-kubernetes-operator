@@ -22,6 +22,8 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -31,9 +33,11 @@ import (
 // -----------------------------------------------------------------------------
 
 const (
-	defaultBaseURL = "https://api.github.com"
-	apiVersion     = "2022-11-28"
-	userAgent      = "github_project_manager/1.0"
+	defaultBaseURL  = "https://api.github.com"
+	apiVersion      = "2022-11-28"
+	userAgent       = "github_project_manager/1.0"
+	maxResponseSize = 10_000_000 // 10 MB
+	maxPages        = 10
 )
 
 // -----------------------------------------------------------------------------
@@ -132,7 +136,7 @@ func (c *GitHubClient) AddLabels(number int, labels []string) error {
 	if err != nil {
 		return fmt.Errorf("encoding labels for #%d: %w", number, err)
 	}
-	body, status, err := c.doRequest("POST", c.issueLabelsURL(number), string(payload))
+	body, status, err := c.doRequestNoHeaders("POST", c.issueLabelsURL(number), string(payload))
 	if err != nil {
 		return fmt.Errorf("adding labels to #%d: %w", number, err)
 	}
@@ -144,7 +148,7 @@ func (c *GitHubClient) AddLabels(number int, labels []string) error {
 
 // RemoveLabel removes a label from an issue or pull request.
 func (c *GitHubClient) RemoveLabel(number int, label string) error {
-	body, status, err := c.doRequest("DELETE", c.issueLabelURL(number, label), "")
+	body, status, err := c.doRequestNoHeaders("DELETE", c.issueLabelURL(number, label), "")
 	if err != nil {
 		return fmt.Errorf("removing label %q from #%d: %w", label, number, err)
 	}
@@ -171,12 +175,21 @@ func (c *GitHubClient) RemoveMilestone(number int) error {
 	return nil
 }
 
-// ListOpenMilestones fetches all open milestones for the repository.
+// ListOpenMilestones fetches all open milestones for the repository,
+// following pagination to collect results beyond the per-page limit.
 func (c *GitHubClient) ListOpenMilestones() ([]Milestone, error) {
 	reqURL := fmt.Sprintf("%s/repos/%s/%s/milestones?state=open&per_page=100", c.baseURL, c.owner, c.repo)
-	var milestones []Milestone
-	if err := c.getJSON(reqURL, &milestones); err != nil {
+	pages, err := c.getJSONPaginated(reqURL)
+	if err != nil {
 		return nil, fmt.Errorf("listing milestones: %w", err)
+	}
+	milestones := make([]Milestone, 0, len(pages))
+	for _, raw := range pages {
+		var m Milestone
+		if err := json.Unmarshal(raw, &m); err != nil {
+			return nil, fmt.Errorf("decoding milestone: %w", err)
+		}
+		milestones = append(milestones, m)
 	}
 	return milestones, nil
 }
@@ -207,18 +220,23 @@ func (c *GitHubClient) GetPullRequestInfo(number int) (*pullRequestInfo, error) 
 	return &info, nil
 }
 
-// GetPullRequestFiles fetches the list of files changed in a pull request.
+// GetPullRequestFiles fetches the list of files changed in a pull request,
+// following pagination to collect results beyond the per-page limit.
 func (c *GitHubClient) GetPullRequestFiles(number int) ([]string, error) {
 	reqURL := fmt.Sprintf("%s/repos/%s/%s/pulls/%d/files?per_page=100", c.baseURL, c.owner, c.repo, number)
-	var files []struct {
-		Filename string `json:"filename"`
-	}
-	if err := c.getJSON(reqURL, &files); err != nil {
+	pages, err := c.getJSONPaginated(reqURL)
+	if err != nil {
 		return nil, fmt.Errorf("fetching PR #%d files: %w", number, err)
 	}
-	paths := make([]string, len(files))
-	for i, f := range files {
-		paths[i] = f.Filename
+	paths := make([]string, 0, len(pages))
+	for _, raw := range pages {
+		var f struct {
+			Filename string `json:"filename"`
+		}
+		if err := json.Unmarshal(raw, &f); err != nil {
+			return nil, fmt.Errorf("decoding PR #%d file entry: %w", number, err)
+		}
+		paths = append(paths, f.Filename)
 	}
 	return paths, nil
 }
@@ -264,7 +282,9 @@ func (c *GitHubClient) issueLabelURL(number int, label string) string {
 	return c.issueURL(number) + "/labels/" + url.PathEscape(label)
 }
 
-func (c *GitHubClient) doRequest(method, reqURL string, body string) ([]byte, int, error) {
+// doRequestNoHeadersFull executes an HTTP request and returns the body, status, and headers.
+// Use doRequestNoHeaders when response headers are not needed.
+func (c *GitHubClient) doRequestNoHeadersFull(method, reqURL, body string) ([]byte, int, http.Header, error) {
 	var bodyReader io.Reader
 	if body != "" {
 		bodyReader = strings.NewReader(body)
@@ -272,7 +292,7 @@ func (c *GitHubClient) doRequest(method, reqURL string, body string) ([]byte, in
 
 	req, err := http.NewRequest(method, reqURL, bodyReader)
 	if err != nil {
-		return nil, 0, fmt.Errorf("creating request: %w", err)
+		return nil, 0, nil, fmt.Errorf("creating request: %w", err)
 	}
 
 	req.Header.Set("Accept", "application/vnd.github+json")
@@ -287,20 +307,26 @@ func (c *GitHubClient) doRequest(method, reqURL string, body string) ([]byte, in
 
 	resp, err := c.client.Do(req)
 	if err != nil {
-		return nil, 0, fmt.Errorf("executing request: %w", err)
+		return nil, 0, nil, fmt.Errorf("executing request: %w", err)
 	}
 	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(resp.Body)
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseSize))
 	if err != nil {
-		return nil, resp.StatusCode, fmt.Errorf("reading response: %w", err)
+		return nil, resp.StatusCode, resp.Header, fmt.Errorf("reading response: %w", err)
 	}
 
-	return respBody, resp.StatusCode, nil
+	return respBody, resp.StatusCode, resp.Header, nil
+}
+
+// doRequestNoHeaders is a convenience wrapper around doRequestNoHeadersFull that discards headers.
+func (c *GitHubClient) doRequestNoHeaders(method, reqURL, body string) ([]byte, int, error) {
+	respBody, status, _, err := c.doRequestNoHeadersFull(method, reqURL, body)
+	return respBody, status, err
 }
 
 func (c *GitHubClient) getJSON(reqURL string, result any) error {
-	body, status, err := c.doRequest("GET", reqURL, "")
+	body, status, err := c.doRequestNoHeaders("GET", reqURL, "")
 	if err != nil {
 		return err
 	}
@@ -310,8 +336,36 @@ func (c *GitHubClient) getJSON(reqURL string, result any) error {
 	return json.Unmarshal(body, result)
 }
 
+// getJSONPaginated performs a paginated GET, following Link rel="next"
+// headers up to maxPages. It returns the raw JSON arrays concatenated
+// into a single slice of json.RawMessage.
+func (c *GitHubClient) getJSONPaginated(reqURL string) ([]json.RawMessage, error) {
+	var all []json.RawMessage
+	cur := reqURL
+	for page := 0; page < maxPages && cur != ""; page++ {
+		body, status, headers, err := c.doRequestNoHeadersFull("GET", cur, "")
+		if err != nil {
+			return nil, err
+		}
+		if status != http.StatusOK {
+			return nil, fmt.Errorf("status %d: %s", status, string(body))
+		}
+
+		var batch []json.RawMessage
+		if err := json.Unmarshal(body, &batch); err != nil {
+			return nil, fmt.Errorf("decoding paginated response: %w", err)
+		}
+		all = append(all, batch...)
+		cur = nextPageURL(headers.Get("Link"))
+	}
+	if cur != "" {
+		fmt.Fprintf(os.Stderr, "warning: pagination truncated at %d pages, some results may be missing\n", maxPages)
+	}
+	return all, nil
+}
+
 func (c *GitHubClient) patchJSON(reqURL, payload string) error {
-	body, status, err := c.doRequest("PATCH", reqURL, payload)
+	body, status, err := c.doRequestNoHeaders("PATCH", reqURL, payload)
 	if err != nil {
 		return err
 	}
@@ -321,13 +375,25 @@ func (c *GitHubClient) patchJSON(reqURL, payload string) error {
 	return nil
 }
 
+// linkNextRe matches the URL in a Link header with rel="next".
+var linkNextRe = regexp.MustCompile(`<([^>]+)>;\s*rel="next"`)
+
+// nextPageURL extracts the "next" URL from a GitHub Link header value.
+// Returns "" if there is no next page.
+func nextPageURL(linkHeader string) string {
+	if m := linkNextRe.FindStringSubmatch(linkHeader); len(m) == 2 {
+		return m[1]
+	}
+	return ""
+}
+
 func (c *GitHubClient) doGraphQL(query string, variables map[string]any) (json.RawMessage, error) {
 	payload, err := json.Marshal(map[string]any{"query": query, "variables": variables})
 	if err != nil {
 		return nil, fmt.Errorf("encoding GraphQL request: %w", err)
 	}
 
-	respBody, status, err := c.doRequest("POST", c.baseURL+"/graphql", string(payload))
+	respBody, status, err := c.doRequestNoHeaders("POST", c.baseURL+"/graphql", string(payload))
 	if err != nil {
 		return nil, fmt.Errorf("executing GraphQL request: %w", err)
 	}

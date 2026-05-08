@@ -17,10 +17,10 @@ limitations under the License.
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
 	"net/http"
-	"os"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -306,7 +306,7 @@ func TestRunTriagePR(t *testing.T) {
 		client := newTestClient(t, handler)
 		iss := &Issue{Number: 1, State: "open", Labels: []string{}}
 
-		err := runTriagePR(client, 1, iss, 1, true, noopLogger)
+		err := runTriagePR(client, 1, iss, 1, true, io.Discard, noopLogger)
 
 		require.NoError(t, err)
 		assert.Equal(t, 3, getCalls)
@@ -382,7 +382,7 @@ func TestRunTriagePR(t *testing.T) {
 		client := newTestClient(t, handler)
 		iss := &Issue{Number: 1, State: "open", Labels: []string{}}
 
-		err := runTriagePR(client, 1, iss, 0, false, noopLogger)
+		err := runTriagePR(client, 1, iss, 0, false, io.Discard, noopLogger)
 
 		require.NoError(t, err)
 		require.NotEmpty(t, graphQLCalls)
@@ -414,19 +414,8 @@ func TestRunTriagePR(t *testing.T) {
 		client := newTestClient(t, handler)
 		iss := &Issue{Number: 1, State: "open", Labels: []string{}}
 
-		// Capture stderr
-		oldStderr := os.Stderr
-		r, w, err := os.Pipe()
-		require.NoError(t, err)
-		os.Stderr = w
-
-		triageErr := runTriagePR(client, 1, iss, 1, false, noopLogger)
-
-		w.Close()
-		os.Stderr = oldStderr
-		var buf strings.Builder
-		_, copyErr := io.Copy(&buf, r)
-		require.NoError(t, copyErr)
+		var buf bytes.Buffer
+		triageErr := runTriagePR(client, 1, iss, 1, false, &buf, noopLogger)
 
 		require.NoError(t, triageErr, "project board failure should not be a fatal error")
 		assert.Contains(t, buf.String(), "::warning::")
