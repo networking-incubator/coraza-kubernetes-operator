@@ -495,7 +495,7 @@ docs.api: docs.image ## Generate CRD API reference from Go types
 		&& chown $(shell id -u):$(shell id -g) $(DOCS_DIR)/content/reference/api.md'
 
 .PHONY: docs.build
-docs.build: docs.image docs.api ## Build multi-version documentation for production
+docs.build: docs.image ## Build multi-version documentation for production
 	CONTAINER_TOOL=$(CONTAINER_TOOL) DOCS_IMG=$(DOCS_IMG) \
 		hack/build-versioned-docs.sh --base-url "$(DOCS_BASE_URL)"
 

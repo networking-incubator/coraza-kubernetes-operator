@@ -154,11 +154,25 @@ for i in "${!V_NAMES[@]}"; do
     # Determine source directory
     if [[ "${ref}" == "HEAD" ]]; then
         src_dir="${REPO_ROOT}/docs"
+        work_dir="${REPO_ROOT}"
     else
         src_dir="${TMPDIR_BASE}/${name}/docs"
-        mkdir -p "${TMPDIR_BASE}/${name}"
-        git -C "${REPO_ROOT}" archive "${ref}" -- docs/ | tar -x -C "${TMPDIR_BASE}/${name}"
+        work_dir="${TMPDIR_BASE}/${name}"
+        mkdir -p "${work_dir}"
+        git -C "${REPO_ROOT}" archive "${ref}" -- docs/ api/ hack/crd-ref-templates/ go.mod go.sum | tar -x -C "${work_dir}"
     fi
+
+    # Generate CRD API reference from Go types for this version
+    echo "    Generating API reference for ${name}..."
+    ${CONTAINER_TOOL} run --rm \
+        -v "${work_dir}:/repo:z" -w /repo "${DOCS_IMG}" \
+        sh -c 'crd-ref-docs \
+            --source-path=api \
+            --config=hack/crd-ref-templates/config.yaml \
+            --templates-dir=hack/crd-ref-templates \
+            --renderer=markdown \
+            --output-path=docs/content/reference/api.md \
+        && chown '"$(id -u):$(id -g)"' docs/content/reference/api.md'
 
     # Generate override config via yq
     override_file="${TMPDIR_BASE}/${name}-override.yaml"
