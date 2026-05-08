@@ -43,6 +43,11 @@ const (
 
 	// DefaultInterval is the default polling interval.
 	DefaultInterval = 2 * time.Second
+
+	// WasmEnforcementTimeout allows for the full WASM bootstrap pipeline
+	// (OCI pull, filter-chain reconfiguration, rule fetch, Coraza init) as the timing
+	// can vary wildly in our GitHub CI environment.
+	WasmEnforcementTimeout = 300 * time.Second
 )
 
 // namespaceMu serializes namespace creation to reduce Istio CA certificate

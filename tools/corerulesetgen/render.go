@@ -119,6 +119,16 @@ const xCRSTestBlock = `    SecResponseBodyMimeType text/plain text/html text/xml
     SecDefaultAction "phase:4,log,auditlog,pass"
     SecDefaultAction "phase:5,log,auditlog,pass"
     SecDebugLogLevel 3
+    # Readiness Probe: must precede DetectionOnly
+    SecRule REQUEST_URI "@rx ^/probe-cko-readiness" \
+    "id:10002,\
+    phase:1,\
+    deny,\
+    status:403,\
+    nolog,\
+    noauditlog,\
+    t:none,t:urlDecodeUni,t:normalizePath,t:lowercase,\
+    ctl:ruleEngine=On"
     SecAction \
      "id:900005,\
      phase:1,\

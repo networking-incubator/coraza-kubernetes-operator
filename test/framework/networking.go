@@ -36,7 +36,6 @@ type GatewayProxy struct {
 	s       *Scenario
 	baseURL string
 	httpc   *http.Client
-	cancel  context.CancelFunc
 }
 
 // ProxyToGateway sets up a SPDY port-forward to the named Gateway's pod
@@ -51,7 +50,6 @@ func (s *Scenario) ProxyToGateway(namespace, gatewayName string) *GatewayProxy {
 		s:       s,
 		baseURL: fmt.Sprintf("http://localhost:%s", port),
 		httpc:   &http.Client{Timeout: 10 * time.Second},
-		cancel:  cancel,
 	}
 
 	// Wait for the gateway pod to be Ready before starting port-forward.
