@@ -149,9 +149,10 @@ func TestCoreRuleSetConformance(t *testing.T) {
 	s.Step("wait for WASM plugin to load rules")
 	gw := s.ProxyToGateway(ns, gwName)
 	require.Eventually(t, func() bool {
-		resp := gw.Get("/?probe=%3Cscript%3Ealert(1)%3C/script%3E")
+		resp := gw.Get("/probe-cko-readiness")
+		s.T.Logf("received response when checking for WASM readiness: %+v", resp)
 		return resp.Err == nil && resp.StatusCode == 403
-	}, framework.DefaultTimeout, framework.DefaultInterval,
+	}, framework.WasmEnforcementTimeout, framework.DefaultInterval,
 		"CRS-triggering payload not blocked; WASM plugin may not have loaded rules")
 
 	// -------------------------------------------------------------------------
