@@ -127,7 +127,7 @@ func (r *RuleSetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		if apierrors.IsNotFound(err) {
 			cacheKey := fmt.Sprintf("%s/%s", req.Namespace, req.Name)
 			if r.Cache.Delete(cacheKey) {
-				logInfo(log, req, "RuleSet", "Deleted cache entry for removed resource")
+				logDebug(log, req, "RuleSet", "Deleted cache entry for removed resource")
 			} else {
 				logDebug(log, req, "RuleSet", "Resource not found, no cache entry to remove")
 			}
