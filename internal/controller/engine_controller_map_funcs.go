@@ -48,7 +48,7 @@ func (r *EngineReconciler) findEnginesForGateway(ctx context.Context, gateway cl
 	}
 
 	return collectRequests(engineList.Items, func(e *wafv1alpha1.Engine) bool {
-		// we collect all of the items, given we are already matching them using the index of 'engineTargetIndex
+		// we collect all of the items, given we are already matching them using the index of 'engineTargetIndex'
 		return true
 	})
 }

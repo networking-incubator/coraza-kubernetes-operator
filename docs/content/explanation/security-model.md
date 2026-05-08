@@ -24,7 +24,7 @@ The operator requires two sets of RBAC permissions:
 | TokenReviews, SubjectAccessReviews | create | Authenticate and authorize metrics endpoint access. |
 | Leases | create, delete, get, list, patch, update, watch | Leader election. |
 | WasmPlugins (Istio) | create, delete, get, list, patch, update, watch | Manage Istio WASM plugin resources. |
-| Gateways (Gateway API) | list, watch | Discover Gateways for Engine status reporting. |
+| Gateways (Gateway API) | get, list, watch | Discover and validate Gateways for Engine target resolution. |
 | ServiceEntries, DestinationRules (Istio) | create, get, patch, update | Create Istio prerequisites for cache server mesh connectivity. |
 
 ### Namespace-Scoped Permissions (Role)

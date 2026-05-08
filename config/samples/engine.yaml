@@ -8,11 +8,11 @@ spec:
   target:
     type: Gateway
     name: coraza-gateway
+    provider: Istio
   failurePolicy: fail
   ruleSetCacheServer:
     pollIntervalSeconds: 5
   driver:
     type: wasm
     wasm: {}
-    provider: Istio
 

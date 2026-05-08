@@ -29,6 +29,8 @@ spec:
 
 The `target.name` identifies the Gateway resource in the same namespace. The operator derives the workload label selector using the GEP-1762 convention (`gateway.networking.k8s.io/gateway-name` label).
 
+Only one Engine resource may target a given Gateway. If multiple Engines reference the same Gateway, only the oldest one (by creation timestamp) is accepted; the others receive an `Accepted=False` condition with reason `TargetConflict`. See [Status Conditions]({{< relref "../reference/status-conditions" >}}) for details.
+
 To verify your Gateway name:
 
 ```bash

@@ -91,7 +91,7 @@ to enable automatic and live rule updates on running `Engines`.
 
 Documentation is available at the [project documentation site].
 
-[project documentation site]:https://networking-incubator.github.io/coraza-kubernetes-operator/
+[project documentation site]:https://networking-incubator.github.io/coraza-kubernetes-operator/latest/
 
 ## Development
 

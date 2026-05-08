@@ -25,9 +25,19 @@ Each condition includes:
 
 ## Engine Conditions
 
+### Accepted
+
+The Engine's target Gateway has been validated. Only one Engine may target a given Gateway at a time. When multiple Engines reference the same Gateway, the oldest one (by creation timestamp) wins; if timestamps are equal, the lexicographically first name wins. The losing Engines receive `Accepted=False`.
+
+| Reason | Description | Resolution |
+|--------|-------------|------------|
+| `Accepted` | The target Gateway is available and not contested by another Engine. | No action needed. |
+| `TargetNotFound` | The referenced Gateway does not exist in the Engine's namespace. | Verify the Gateway name and namespace in the Engine spec. |
+| `TargetConflict` | Another Engine already targets the same Gateway. | Only one Engine may target a given Gateway. Remove the conflicting Engine or change the target. |
+
 ### Ready
 
-The Engine is deployed and attached to one or more Gateways.
+The Engine is deployed and attached to a Gateway.
 
 ```bash
 kubectl get engine my-engine -n my-namespace
@@ -73,6 +83,7 @@ The RuleSet could not be compiled or cached. Common reasons:
 | `RuleSourceAccessError` | The operator could not read a referenced RuleSource. | Check RBAC and API errors in operator logs. |
 | `RuleDataNotFound` | A RuleData named in `spec.data` does not exist. | Create the RuleData or correct the name. |
 | `RuleDataAccessError` | The operator could not read a referenced RuleData. | Check RBAC and API errors in operator logs. |
+| `DuplicateReference` | A RuleSource or RuleData name appears more than once in `spec.sources` or `spec.data`. | Remove the duplicate reference. |
 
 ## Troubleshooting
 
