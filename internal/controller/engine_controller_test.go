@@ -26,6 +26,7 @@ import (
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -39,6 +40,39 @@ import (
 	rcache "github.com/networking-incubator/coraza-kubernetes-operator/internal/rulesets/cache"
 	"github.com/networking-incubator/coraza-kubernetes-operator/test/utils"
 )
+
+// createTestGateway creates a Gateway resource in the envtest cluster for target
+// validation tests. The resource is cleaned up via t.Cleanup. The returned
+// object can be used for manual deletion in tests that need to remove the
+// Gateway mid-test (the cleanup will log but not fail on NotFound).
+func createTestGateway(t *testing.T, ctx context.Context, c client.Client, name, namespace string) *unstructured.Unstructured {
+	t.Helper()
+	gw := &unstructured.Unstructured{}
+	gw.SetGroupVersionKind(schema.GroupVersionKind{
+		Group:   "gateway.networking.k8s.io",
+		Version: "v1",
+		Kind:    "Gateway",
+	})
+	gw.SetName(name)
+	gw.SetNamespace(namespace)
+	gw.Object["spec"] = map[string]any{
+		"gatewayClassName": "istio",
+		"listeners": []any{
+			map[string]any{
+				"name":     "http",
+				"port":     int64(80),
+				"protocol": "HTTP",
+			},
+		},
+	}
+	require.NoError(t, c.Create(ctx, gw))
+	t.Cleanup(func() {
+		if err := c.Delete(ctx, gw); err != nil && !apierrors.IsNotFound(err) {
+			t.Logf("Failed to delete gateway: %v", err)
+		}
+	})
+	return gw
+}
 
 func TestEngineReconciler_ReconcileNotFound(t *testing.T) {
 	ctx, cleanup := setupTest(t)
@@ -137,6 +171,8 @@ func TestEngineReconciler_BuildWasmPlugin_CacheToken(t *testing.T) {
 func TestEngineReconciler_ReconcileMissingRuleSet(t *testing.T) {
 	ctx := context.Background()
 
+	createTestGateway(t, ctx, k8sClient, "test-gw", testNamespace)
+
 	t.Log("Creating test engine referencing non-existent RuleSet")
 	engine := utils.NewTestEngine(utils.EngineOptions{
 		Name:        "test-engine-missing-ruleset",
@@ -185,6 +221,8 @@ func TestEngineReconciler_ReconcileMissingRuleSet(t *testing.T) {
 func TestEngineReconciler_ReconcileIstioDriver(t *testing.T) {
 	ctx := context.Background()
 	ns := utils.NewTestEngine(utils.EngineOptions{}).Namespace
+
+	createTestGateway(t, ctx, k8sClient, "test-gw", ns)
 
 	ruleset := utils.NewTestRuleSet(utils.RuleSetOptions{
 		Name:      "test-ruleset",
@@ -246,11 +284,14 @@ func TestEngineReconciler_ReconcileIstioDriver(t *testing.T) {
 		Namespace: engine.Namespace,
 	}, &updated)
 	require.NoError(t, err)
-	assert.Len(t, updated.Status.Conditions, 1)
-	condition := updated.Status.Conditions[0]
-	assert.Equal(t, "Ready", condition.Type)
-	assert.Equal(t, metav1.ConditionTrue, condition.Status)
-	assert.Equal(t, "Configured", condition.Reason)
+	assert.Len(t, updated.Status.Conditions, 2, "should have Ready and Accepted conditions")
+	readyCond := apimeta.FindStatusCondition(updated.Status.Conditions, "Ready")
+	require.NotNil(t, readyCond)
+	assert.Equal(t, metav1.ConditionTrue, readyCond.Status)
+	assert.Equal(t, "Configured", readyCond.Reason)
+	acceptedCond := apimeta.FindStatusCondition(updated.Status.Conditions, "Accepted")
+	require.NotNil(t, acceptedCond)
+	assert.Equal(t, metav1.ConditionTrue, acceptedCond.Status)
 
 	assert.True(t, recorder.HasEvent("Normal", "WasmPluginCreated"),
 		"expected Normal/WasmPluginCreated event; got: %v", recorder.Events)
@@ -258,6 +299,8 @@ func TestEngineReconciler_ReconcileIstioDriver(t *testing.T) {
 
 func TestEngineReconciler_StatusUpdateHandling(t *testing.T) {
 	ctx := context.Background()
+
+	createTestGateway(t, ctx, k8sClient, "test-gw", testNamespace)
 
 	t.Log("Creating test engine for status update testing")
 	engine := utils.NewTestEngine(utils.EngineOptions{
@@ -314,6 +357,8 @@ func TestEngineReconciler_StatusUpdateHandling(t *testing.T) {
 
 func TestEngineReconciler_FailurePolicyInWasmPluginConfig(t *testing.T) {
 	ctx := context.Background()
+
+	createTestGateway(t, ctx, k8sClient, "test-gw", testNamespace)
 
 	ruleset := utils.NewTestRuleSet(utils.RuleSetOptions{
 		Name:      "test-ruleset",
@@ -493,6 +538,8 @@ func TestEngineReconciler_ImagePullSecretInWasmPlugin(t *testing.T) {
 func TestEngineReconciler_ImagePullSecretEnvtest(t *testing.T) {
 	ctx := context.Background()
 
+	createTestGateway(t, ctx, k8sClient, "test-gw", testNamespace)
+
 	t.Log("Creating RuleSet for imagePullSecret envtest")
 	ruleset := utils.NewTestRuleSet(utils.RuleSetOptions{
 		Name:      "pull-secret-ruleset",
@@ -553,7 +600,7 @@ func TestEngineReconciler_ImagePullSecretEnvtest(t *testing.T) {
 			Kind:    "WasmPlugin",
 		})
 		err = k8sClient.Get(ctx, types.NamespacedName{
-			Name:      fmt.Sprintf("%s%s", WasmPluginNamePrefix, engine.Name),
+			Name:      wasmPluginName(engine.Name),
 			Namespace: engine.Namespace,
 		}, wasmPlugin)
 		require.NoError(t, err)
@@ -606,7 +653,7 @@ func TestEngineReconciler_ImagePullSecretEnvtest(t *testing.T) {
 			Kind:    "WasmPlugin",
 		})
 		err = k8sClient.Get(ctx, types.NamespacedName{
-			Name:      fmt.Sprintf("%s%s", WasmPluginNamePrefix, engine.Name),
+			Name:      wasmPluginName(engine.Name),
 			Namespace: engine.Namespace,
 		}, wasmPlugin)
 		require.NoError(t, err)
@@ -933,6 +980,8 @@ func TestEngineReconciler_ProviderImmutable(t *testing.T) {
 func TestEngineReconciler_DegradedWhenRuleSetDegraded(t *testing.T) {
 	ctx := context.Background()
 
+	createTestGateway(t, ctx, k8sClient, "test-gw", testNamespace)
+
 	t.Log("Creating RuleSet with a Degraded status condition")
 	ruleSet := utils.NewTestRuleSet(utils.RuleSetOptions{
 		Name:      "degraded-ruleset",
@@ -1089,6 +1138,8 @@ func TestEngineReconciler_BuildWasmPlugin_WasmImageResolution(t *testing.T) {
 func TestEngineReconciler_TokenStoreIntegration(t *testing.T) {
 	ctx := context.Background()
 
+	createTestGateway(t, ctx, k8sClient, "test-gw", testNamespace)
+
 	ruleset := utils.NewTestRuleSet(utils.RuleSetOptions{
 		Name:      "tokenstore-ruleset",
 		Namespace: testNamespace,
@@ -1184,7 +1235,7 @@ func TestEngineReconciler_TokenStoreIntegration(t *testing.T) {
 			Kind:    "WasmPlugin",
 		})
 		err := k8sClient.Get(ctx, types.NamespacedName{
-			Name:      fmt.Sprintf("%s%s", WasmPluginNamePrefix, engine.Name),
+			Name:      wasmPluginName(engine.Name),
 			Namespace: engine.Namespace,
 		}, wasmPlugin)
 		require.NoError(t, err)
@@ -1240,6 +1291,8 @@ func TestEngineReconciler_TokenStoreIntegration(t *testing.T) {
 
 func TestEngineReconciler_NetworkPolicyCreated(t *testing.T) {
 	ctx := context.Background()
+
+	createTestGateway(t, ctx, k8sClient, "test-gw", testNamespace)
 
 	t.Log("Creating RuleSet for NetworkPolicy test")
 	ruleset := utils.NewTestRuleSet(utils.RuleSetOptions{
@@ -1356,4 +1409,719 @@ func TestEngineReconciler_NetworkPolicyCreated(t *testing.T) {
 	)
 	require.NoError(t, err)
 	assert.Empty(t, npList.Items, "NetworkPolicy should be deleted after finalizer runs")
+}
+
+// -----------------------------------------------------------------------------
+// Target Status Tests
+// -----------------------------------------------------------------------------
+
+func TestEngineReconciler_TargetNotFound(t *testing.T) {
+	ctx := context.Background()
+
+	t.Log("Creating Engine targeting a non-existent Gateway")
+	engine := utils.NewTestEngine(utils.EngineOptions{
+		Name:        "target-notfound-engine",
+		Namespace:   testNamespace,
+		GatewayName: "gateway-does-not-exist",
+	})
+	require.NoError(t, k8sClient.Create(ctx, engine))
+	t.Cleanup(func() {
+		if err := k8sClient.Delete(ctx, engine); err != nil {
+			t.Logf("Failed to delete engine: %v", err)
+		}
+	})
+
+	recorder := utils.NewFakeRecorder()
+	reconciler := &EngineReconciler{
+		Client:                    k8sClient,
+		Scheme:                    scheme,
+		Recorder:                  recorder,
+		ruleSetCacheServerCluster: "test-cluster",
+		defaultWasmImage:          defaults.DefaultCorazaWasmOCIReference,
+		operatorNamespace:         testNamespace,
+	}
+	req := ctrl.Request{
+		NamespacedName: types.NamespacedName{
+			Name:      engine.Name,
+			Namespace: engine.Namespace,
+		},
+	}
+
+	// First reconcile adds the finalizer and requeues.
+	result, err := reconciler.Reconcile(ctx, req)
+	require.NoError(t, err)
+	assert.NotZero(t, result.RequeueAfter)
+
+	// Second reconcile detects the missing Gateway.
+	result, err = reconciler.Reconcile(ctx, req)
+	require.NoError(t, err)
+	assert.Zero(t, result.RequeueAfter, "should not requeue when target is not found")
+
+	t.Log("Verifying Engine has Accepted=False with reason TargetNotFound")
+	var updated wafv1alpha1.Engine
+	require.NoError(t, k8sClient.Get(ctx, req.NamespacedName, &updated))
+	require.NotNil(t, updated.Status)
+
+	acceptedCond := apimeta.FindStatusCondition(updated.Status.Conditions, "Accepted")
+	require.NotNil(t, acceptedCond, "Engine should have Accepted condition")
+	assert.Equal(t, metav1.ConditionFalse, acceptedCond.Status)
+	assert.Equal(t, "TargetNotFound", acceptedCond.Reason)
+	assert.Contains(t, acceptedCond.Message, "gateway-does-not-exist")
+
+	readyCond := apimeta.FindStatusCondition(updated.Status.Conditions, "Ready")
+	require.NotNil(t, readyCond, "Engine should have Ready condition")
+	assert.Equal(t, metav1.ConditionFalse, readyCond.Status)
+
+	t.Log("Verifying no WasmPlugin was created")
+	wasmPlugin := &unstructured.Unstructured{}
+	wasmPlugin.SetGroupVersionKind(schema.GroupVersionKind{
+		Group:   "extensions.istio.io",
+		Version: "v1alpha1",
+		Kind:    "WasmPlugin",
+	})
+	err = k8sClient.Get(ctx, types.NamespacedName{
+		Name:      wasmPluginName(engine.Name),
+		Namespace: engine.Namespace,
+	}, wasmPlugin)
+	assert.True(t, apierrors.IsNotFound(err), "WasmPlugin should not exist when target is not found")
+
+	assert.True(t, recorder.HasEvent("Warning", "TargetNotFound"),
+		"expected Warning/TargetNotFound event; got: %v", recorder.Events)
+}
+
+func TestEngineReconciler_TargetNotFound_Resolves(t *testing.T) {
+	ctx := context.Background()
+
+	t.Log("Creating Engine targeting a Gateway that does not yet exist")
+	engine := utils.NewTestEngine(utils.EngineOptions{
+		Name:        "target-resolves-engine",
+		Namespace:   testNamespace,
+		GatewayName: "gw-resolves-later",
+	})
+	require.NoError(t, k8sClient.Create(ctx, engine))
+	t.Cleanup(func() {
+		if err := k8sClient.Delete(ctx, engine); err != nil {
+			t.Logf("Failed to delete engine: %v", err)
+		}
+	})
+
+	reconciler := &EngineReconciler{
+		Client:                    k8sClient,
+		Scheme:                    scheme,
+		Recorder:                  utils.NewTestRecorder(),
+		ruleSetCacheServerCluster: "test-cluster",
+		defaultWasmImage:          defaults.DefaultCorazaWasmOCIReference,
+		operatorNamespace:         testNamespace,
+	}
+	req := ctrl.Request{
+		NamespacedName: types.NamespacedName{
+			Name:      engine.Name,
+			Namespace: engine.Namespace,
+		},
+	}
+
+	// First reconcile adds the finalizer.
+	result, err := reconciler.Reconcile(ctx, req)
+	require.NoError(t, err)
+	assert.NotZero(t, result.RequeueAfter)
+
+	// Second reconcile hits TargetNotFound.
+	result, err = reconciler.Reconcile(ctx, req)
+	require.NoError(t, err)
+
+	var updated wafv1alpha1.Engine
+	require.NoError(t, k8sClient.Get(ctx, req.NamespacedName, &updated))
+	require.NotNil(t, updated.Status)
+	acceptedCond := apimeta.FindStatusCondition(updated.Status.Conditions, "Accepted")
+	require.NotNil(t, acceptedCond, "Engine should have Accepted=False before Gateway exists")
+	assert.Equal(t, metav1.ConditionFalse, acceptedCond.Status)
+	assert.Equal(t, "TargetNotFound", acceptedCond.Reason)
+
+	t.Log("Creating the missing Gateway")
+	createTestGateway(t, ctx, k8sClient, "gw-resolves-later", testNamespace)
+
+	// Third reconcile: Gateway now exists, Engine should progress past target check.
+	// It will hit the RuleSet check next (test-ruleset does not exist), resulting
+	// in a Degraded condition with reason RuleSetNotFound. This proves the Engine
+	// is no longer blocked by TargetNotFound.
+	result, err = reconciler.Reconcile(ctx, req)
+	require.NoError(t, err)
+
+	require.NoError(t, k8sClient.Get(ctx, req.NamespacedName, &updated))
+	require.NotNil(t, updated.Status)
+
+	acceptedCond = apimeta.FindStatusCondition(updated.Status.Conditions, "Accepted")
+	require.NotNil(t, acceptedCond, "Engine should have Accepted condition after target resolves")
+	assert.Equal(t, metav1.ConditionTrue, acceptedCond.Status,
+		"Accepted should be True after the target is found")
+
+	degradedCond := apimeta.FindStatusCondition(updated.Status.Conditions, "Degraded")
+	require.NotNil(t, degradedCond, "Engine should have Degraded condition after passing target check")
+	assert.Equal(t, metav1.ConditionTrue, degradedCond.Status)
+	assert.Equal(t, "RuleSetNotFound", degradedCond.Reason,
+		"Engine should be degraded due to missing RuleSet, not blocked by TargetNotFound")
+}
+
+func TestEngineReconciler_TargetConflict(t *testing.T) {
+	ctx := context.Background()
+
+	t.Log("Creating Gateway for conflict test")
+	createTestGateway(t, ctx, k8sClient, "conflict-gw", testNamespace)
+
+	t.Log("Creating RuleSet for conflict test")
+	ruleset := utils.NewTestRuleSet(utils.RuleSetOptions{
+		Name:      "conflict-ruleset",
+		Namespace: testNamespace,
+	})
+	require.NoError(t, k8sClient.Create(ctx, ruleset))
+	t.Cleanup(func() {
+		if err := k8sClient.Delete(ctx, ruleset); err != nil {
+			t.Logf("Failed to delete ruleset: %v", err)
+		}
+	})
+
+	t.Log("Creating Engine A (the older engine that wins)")
+	engineA := utils.NewTestEngine(utils.EngineOptions{
+		Name:        "conflict-engine-a",
+		Namespace:   testNamespace,
+		GatewayName: "conflict-gw",
+		RuleSetName: ruleset.Name,
+	})
+	require.NoError(t, k8sClient.Create(ctx, engineA))
+	t.Cleanup(func() {
+		if err := k8sClient.Delete(ctx, engineA); err != nil {
+			t.Logf("Failed to delete engine A: %v", err)
+		}
+	})
+
+	recorderA := utils.NewFakeRecorder()
+	reconciler := &EngineReconciler{
+		Client:                    k8sClient,
+		Scheme:                    scheme,
+		Recorder:                  recorderA,
+		kubeClient:                testKubeClient,
+		ruleSetCacheServerCluster: "test-cluster",
+		defaultWasmImage:          defaults.DefaultCorazaWasmOCIReference,
+		operatorNamespace:         testNamespace,
+	}
+	reqA := ctrl.Request{
+		NamespacedName: types.NamespacedName{
+			Name:      engineA.Name,
+			Namespace: engineA.Namespace,
+		},
+	}
+
+	// Reconcile Engine A: finalizer + provisioning.
+	result, err := reconciler.Reconcile(ctx, reqA)
+	require.NoError(t, err)
+	assert.NotZero(t, result.RequeueAfter)
+
+	result, err = reconciler.Reconcile(ctx, reqA)
+	require.NoError(t, err)
+
+	t.Log("Verifying Engine A is Accepted and Ready")
+	var updatedA wafv1alpha1.Engine
+	require.NoError(t, k8sClient.Get(ctx, reqA.NamespacedName, &updatedA))
+	require.NotNil(t, updatedA.Status)
+	acceptedA := apimeta.FindStatusCondition(updatedA.Status.Conditions, "Accepted")
+	require.NotNil(t, acceptedA, "Engine A should have Accepted condition")
+	assert.Equal(t, metav1.ConditionTrue, acceptedA.Status)
+
+	t.Log("Creating Engine B (the newer engine that loses)")
+	engineB := utils.NewTestEngine(utils.EngineOptions{
+		Name:        "conflict-engine-b",
+		Namespace:   testNamespace,
+		GatewayName: "conflict-gw",
+		RuleSetName: ruleset.Name,
+	})
+	require.NoError(t, k8sClient.Create(ctx, engineB))
+	t.Cleanup(func() {
+		if err := k8sClient.Delete(ctx, engineB); err != nil {
+			t.Logf("Failed to delete engine B: %v", err)
+		}
+	})
+
+	recorderB := utils.NewFakeRecorder()
+	reconcilerB := &EngineReconciler{
+		Client:                    k8sClient,
+		Scheme:                    scheme,
+		Recorder:                  recorderB,
+		ruleSetCacheServerCluster: "test-cluster",
+		defaultWasmImage:          defaults.DefaultCorazaWasmOCIReference,
+		operatorNamespace:         testNamespace,
+	}
+	reqB := ctrl.Request{
+		NamespacedName: types.NamespacedName{
+			Name:      engineB.Name,
+			Namespace: engineB.Namespace,
+		},
+	}
+
+	// Reconcile Engine B: finalizer + conflict detection.
+	result, err = reconcilerB.Reconcile(ctx, reqB)
+	require.NoError(t, err)
+	assert.NotZero(t, result.RequeueAfter)
+
+	result, err = reconcilerB.Reconcile(ctx, reqB)
+	require.NoError(t, err)
+	assert.Zero(t, result.RequeueAfter, "conflicted Engine should not requeue")
+
+	t.Log("Verifying Engine B has Accepted=False with reason TargetConflict")
+	var updatedB wafv1alpha1.Engine
+	require.NoError(t, k8sClient.Get(ctx, reqB.NamespacedName, &updatedB))
+	require.NotNil(t, updatedB.Status)
+
+	acceptedB := apimeta.FindStatusCondition(updatedB.Status.Conditions, "Accepted")
+	require.NotNil(t, acceptedB, "Engine B should have Accepted condition")
+	assert.Equal(t, metav1.ConditionFalse, acceptedB.Status)
+	assert.Equal(t, "TargetConflict", acceptedB.Reason)
+	assert.Contains(t, acceptedB.Message, engineA.Name,
+		"conflict message should mention the winning Engine's name")
+
+	readyB := apimeta.FindStatusCondition(updatedB.Status.Conditions, "Ready")
+	require.NotNil(t, readyB)
+	assert.Equal(t, metav1.ConditionFalse, readyB.Status)
+
+	assert.True(t, recorderB.HasEvent("Warning", "TargetConflict"),
+		"expected Warning/TargetConflict event; got: %v", recorderB.Events)
+}
+
+func TestEngineReconciler_TargetConflict_NameTiebreak(t *testing.T) {
+	ctx := context.Background()
+
+	t.Log("Creating Gateway and RuleSet for name-tiebreak conflict test")
+	createTestGateway(t, ctx, k8sClient, "tiebreak-gw", testNamespace)
+
+	ruleset := utils.NewTestRuleSet(utils.RuleSetOptions{
+		Name:      "tiebreak-ruleset",
+		Namespace: testNamespace,
+	})
+	require.NoError(t, k8sClient.Create(ctx, ruleset))
+	t.Cleanup(func() {
+		if err := k8sClient.Delete(ctx, ruleset); err != nil && !apierrors.IsNotFound(err) {
+			t.Logf("Failed to delete ruleset: %v", err)
+		}
+	})
+
+	// Create "zzz" first, then "aaa" immediately after. When timestamps are
+	// equal (second-granularity in envtest), lexicographic name breaks the tie:
+	// "aaa" < "zzz", so "aaa" wins even though it was created second.
+	engineZ := utils.NewTestEngine(utils.EngineOptions{
+		Name:        "tiebreak-zzz",
+		Namespace:   testNamespace,
+		GatewayName: "tiebreak-gw",
+		RuleSetName: ruleset.Name,
+	})
+	require.NoError(t, k8sClient.Create(ctx, engineZ))
+	t.Cleanup(func() {
+		if err := k8sClient.Delete(ctx, engineZ); err != nil && !apierrors.IsNotFound(err) {
+			t.Logf("Failed to delete engine Z: %v", err)
+		}
+	})
+
+	engineA := utils.NewTestEngine(utils.EngineOptions{
+		Name:        "tiebreak-aaa",
+		Namespace:   testNamespace,
+		GatewayName: "tiebreak-gw",
+		RuleSetName: ruleset.Name,
+	})
+	require.NoError(t, k8sClient.Create(ctx, engineA))
+	t.Cleanup(func() {
+		if err := k8sClient.Delete(ctx, engineA); err != nil && !apierrors.IsNotFound(err) {
+			t.Logf("Failed to delete engine A: %v", err)
+		}
+	})
+
+	// Envtest timestamps have second granularity, so both engines created in
+	// rapid succession will naturally share the same creationTimestamp. Verify
+	// this assumption so the name-based tiebreak path is actually exercised.
+	// (creationTimestamp is read-only in the Kubernetes API; mutating it via
+	// Update is silently ignored by the server.)
+	var fetchedZ, fetchedA wafv1alpha1.Engine
+	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: engineZ.Name, Namespace: testNamespace}, &fetchedZ))
+	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: engineA.Name, Namespace: testNamespace}, &fetchedA))
+	assert.Equal(t, fetchedZ.CreationTimestamp, fetchedA.CreationTimestamp,
+		"Both engines should have the same creationTimestamp to exercise the name tiebreak")
+
+	reconciler := &EngineReconciler{
+		Client:                    k8sClient,
+		Scheme:                    scheme,
+		Recorder:                  utils.NewTestRecorder(),
+		kubeClient:                testKubeClient,
+		ruleSetCacheServerCluster: "test-cluster",
+		defaultWasmImage:          defaults.DefaultCorazaWasmOCIReference,
+		operatorNamespace:         testNamespace,
+	}
+
+	// Reconcile "zzz" — should lose because "aaa" wins the tiebreak.
+	reqZ := ctrl.Request{NamespacedName: types.NamespacedName{Name: engineZ.Name, Namespace: testNamespace}}
+	result, err := reconciler.Reconcile(ctx, reqZ)
+	require.NoError(t, err)
+	assert.NotZero(t, result.RequeueAfter)
+	_, err = reconciler.Reconcile(ctx, reqZ)
+	require.NoError(t, err)
+
+	var updatedZ wafv1alpha1.Engine
+	require.NoError(t, k8sClient.Get(ctx, reqZ.NamespacedName, &updatedZ))
+	require.NotNil(t, updatedZ.Status)
+	acceptedZ := apimeta.FindStatusCondition(updatedZ.Status.Conditions, "Accepted")
+	require.NotNil(t, acceptedZ, "Engine zzz should have Accepted condition")
+	assert.Equal(t, metav1.ConditionFalse, acceptedZ.Status,
+		"Engine zzz should lose the tiebreak to aaa")
+	assert.Equal(t, "TargetConflict", acceptedZ.Reason)
+	assert.Contains(t, acceptedZ.Message, "tiebreak-aaa",
+		"conflict message should mention the winner (aaa)")
+
+	// Reconcile "aaa" — should win.
+	reqA := ctrl.Request{NamespacedName: types.NamespacedName{Name: engineA.Name, Namespace: testNamespace}}
+	result, err = reconciler.Reconcile(ctx, reqA)
+	require.NoError(t, err)
+	assert.NotZero(t, result.RequeueAfter)
+	_, err = reconciler.Reconcile(ctx, reqA)
+	require.NoError(t, err)
+
+	var updatedA wafv1alpha1.Engine
+	require.NoError(t, k8sClient.Get(ctx, reqA.NamespacedName, &updatedA))
+	require.NotNil(t, updatedA.Status)
+	acceptedA := apimeta.FindStatusCondition(updatedA.Status.Conditions, "Accepted")
+	require.NotNil(t, acceptedA, "Engine aaa should have Accepted condition")
+	assert.Equal(t, metav1.ConditionTrue, acceptedA.Status,
+		"Engine aaa should win the tiebreak by lexicographic name")
+}
+
+func TestEngineReconciler_TargetConflict_Resolves(t *testing.T) {
+	ctx := context.Background()
+
+	t.Log("Creating Gateway for conflict resolution test")
+	createTestGateway(t, ctx, k8sClient, "conflict-resolve-gw", testNamespace)
+
+	t.Log("Creating RuleSet for conflict resolution test")
+	ruleset := utils.NewTestRuleSet(utils.RuleSetOptions{
+		Name:      "conflict-resolve-ruleset",
+		Namespace: testNamespace,
+	})
+	require.NoError(t, k8sClient.Create(ctx, ruleset))
+	t.Cleanup(func() {
+		if err := k8sClient.Delete(ctx, ruleset); err != nil {
+			t.Logf("Failed to delete ruleset: %v", err)
+		}
+	})
+
+	t.Log("Creating Engine A (the older winner)")
+	engineA := utils.NewTestEngine(utils.EngineOptions{
+		Name:        "resolve-engine-a",
+		Namespace:   testNamespace,
+		GatewayName: "conflict-resolve-gw",
+		RuleSetName: ruleset.Name,
+	})
+	require.NoError(t, k8sClient.Create(ctx, engineA))
+
+	reconciler := &EngineReconciler{
+		Client:                    k8sClient,
+		Scheme:                    scheme,
+		Recorder:                  utils.NewTestRecorder(),
+		kubeClient:                testKubeClient,
+		ruleSetCacheServerCluster: "test-cluster",
+		defaultWasmImage:          defaults.DefaultCorazaWasmOCIReference,
+		operatorNamespace:         testNamespace,
+	}
+	reqA := ctrl.Request{
+		NamespacedName: types.NamespacedName{
+			Name:      engineA.Name,
+			Namespace: engineA.Namespace,
+		},
+	}
+
+	// Reconcile Engine A: finalizer + provision.
+	result, err := reconciler.Reconcile(ctx, reqA)
+	require.NoError(t, err)
+	assert.NotZero(t, result.RequeueAfter)
+	_, err = reconciler.Reconcile(ctx, reqA)
+	require.NoError(t, err)
+
+	t.Log("Creating Engine B (the newer loser)")
+	engineB := utils.NewTestEngine(utils.EngineOptions{
+		Name:        "resolve-engine-b",
+		Namespace:   testNamespace,
+		GatewayName: "conflict-resolve-gw",
+		RuleSetName: ruleset.Name,
+	})
+	require.NoError(t, k8sClient.Create(ctx, engineB))
+	t.Cleanup(func() {
+		if err := k8sClient.Delete(ctx, engineB); err != nil {
+			t.Logf("Failed to delete engine B: %v", err)
+		}
+	})
+
+	reconcilerB := &EngineReconciler{
+		Client:                    k8sClient,
+		Scheme:                    scheme,
+		Recorder:                  utils.NewTestRecorder(),
+		kubeClient:                testKubeClient,
+		ruleSetCacheServerCluster: "test-cluster",
+		defaultWasmImage:          defaults.DefaultCorazaWasmOCIReference,
+		operatorNamespace:         testNamespace,
+	}
+	reqB := ctrl.Request{
+		NamespacedName: types.NamespacedName{
+			Name:      engineB.Name,
+			Namespace: engineB.Namespace,
+		},
+	}
+
+	// Reconcile Engine B: finalizer + conflict.
+	result, err = reconcilerB.Reconcile(ctx, reqB)
+	require.NoError(t, err)
+	assert.NotZero(t, result.RequeueAfter)
+	result, err = reconcilerB.Reconcile(ctx, reqB)
+	require.NoError(t, err)
+
+	var updatedB wafv1alpha1.Engine
+	require.NoError(t, k8sClient.Get(ctx, reqB.NamespacedName, &updatedB))
+	require.NotNil(t, updatedB.Status)
+	acceptedB := apimeta.FindStatusCondition(updatedB.Status.Conditions, "Accepted")
+	require.NotNil(t, acceptedB)
+	assert.Equal(t, metav1.ConditionFalse, acceptedB.Status)
+	assert.Equal(t, "TargetConflict", acceptedB.Reason)
+
+	t.Log("Deleting Engine A to resolve the conflict")
+	require.NoError(t, k8sClient.Delete(ctx, engineA))
+
+	// The finalizer on Engine A will block deletion until reconciled.
+	// Reconcile Engine A to run its finalizer cleanup.
+	_, err = reconciler.Reconcile(ctx, reqA)
+	require.NoError(t, err)
+
+	t.Log("Reconciling Engine B after Engine A is deleted")
+	result, err = reconcilerB.Reconcile(ctx, reqB)
+	require.NoError(t, err)
+
+	require.NoError(t, k8sClient.Get(ctx, reqB.NamespacedName, &updatedB))
+	require.NotNil(t, updatedB.Status)
+
+	acceptedB = apimeta.FindStatusCondition(updatedB.Status.Conditions, "Accepted")
+	require.NotNil(t, acceptedB, "Engine B should have Accepted condition after conflict resolution")
+	assert.Equal(t, metav1.ConditionTrue, acceptedB.Status,
+		"Engine B should be Accepted after competing Engine A is deleted")
+	assert.Equal(t, "Accepted", acceptedB.Reason)
+}
+
+func TestEngineReconciler_TargetConflict_ResolvesOnRetarget(t *testing.T) {
+	ctx := context.Background()
+
+	t.Log("Creating Gateways and RuleSet for retarget conflict test")
+	createTestGateway(t, ctx, k8sClient, "retarget-gw-x", testNamespace)
+	createTestGateway(t, ctx, k8sClient, "retarget-gw-y", testNamespace)
+
+	ruleset := utils.NewTestRuleSet(utils.RuleSetOptions{
+		Name:      "retarget-ruleset",
+		Namespace: testNamespace,
+	})
+	require.NoError(t, k8sClient.Create(ctx, ruleset))
+	t.Cleanup(func() {
+		if err := k8sClient.Delete(ctx, ruleset); err != nil && !apierrors.IsNotFound(err) {
+			t.Logf("Failed to delete ruleset: %v", err)
+		}
+	})
+
+	t.Log("Creating Engine A targeting Gateway X (older, wins)")
+	engineA := utils.NewTestEngine(utils.EngineOptions{
+		Name:        "retarget-engine-a",
+		Namespace:   testNamespace,
+		GatewayName: "retarget-gw-x",
+		RuleSetName: ruleset.Name,
+	})
+	require.NoError(t, k8sClient.Create(ctx, engineA))
+	t.Cleanup(func() {
+		if err := k8sClient.Delete(ctx, engineA); err != nil && !apierrors.IsNotFound(err) {
+			t.Logf("Failed to delete engine A: %v", err)
+		}
+	})
+
+	reconciler := &EngineReconciler{
+		Client:                    k8sClient,
+		Scheme:                    scheme,
+		Recorder:                  utils.NewTestRecorder(),
+		kubeClient:                testKubeClient,
+		ruleSetCacheServerCluster: "test-cluster",
+		defaultWasmImage:          defaults.DefaultCorazaWasmOCIReference,
+		operatorNamespace:         testNamespace,
+	}
+	reqA := ctrl.Request{NamespacedName: types.NamespacedName{Name: engineA.Name, Namespace: testNamespace}}
+
+	// Reconcile Engine A: finalizer + provisioning.
+	result, err := reconciler.Reconcile(ctx, reqA)
+	require.NoError(t, err)
+	assert.NotZero(t, result.RequeueAfter)
+	_, err = reconciler.Reconcile(ctx, reqA)
+	require.NoError(t, err)
+
+	t.Log("Creating Engine B targeting Gateway X (newer, loses)")
+	engineB := utils.NewTestEngine(utils.EngineOptions{
+		Name:        "retarget-engine-b",
+		Namespace:   testNamespace,
+		GatewayName: "retarget-gw-x",
+		RuleSetName: ruleset.Name,
+	})
+	require.NoError(t, k8sClient.Create(ctx, engineB))
+	t.Cleanup(func() {
+		if err := k8sClient.Delete(ctx, engineB); err != nil && !apierrors.IsNotFound(err) {
+			t.Logf("Failed to delete engine B: %v", err)
+		}
+	})
+
+	reqB := ctrl.Request{NamespacedName: types.NamespacedName{Name: engineB.Name, Namespace: testNamespace}}
+
+	// Reconcile Engine B: finalizer + conflict.
+	result, err = reconciler.Reconcile(ctx, reqB)
+	require.NoError(t, err)
+	assert.NotZero(t, result.RequeueAfter)
+	_, err = reconciler.Reconcile(ctx, reqB)
+	require.NoError(t, err)
+
+	var updatedB wafv1alpha1.Engine
+	require.NoError(t, k8sClient.Get(ctx, reqB.NamespacedName, &updatedB))
+	require.NotNil(t, updatedB.Status)
+	acceptedB := apimeta.FindStatusCondition(updatedB.Status.Conditions, "Accepted")
+	require.NotNil(t, acceptedB)
+	assert.Equal(t, metav1.ConditionFalse, acceptedB.Status, "precondition: Engine B should be rejected")
+	assert.Equal(t, "TargetConflict", acceptedB.Reason)
+
+	t.Log("Retargeting Engine A from Gateway X to Gateway Y")
+	var latestA wafv1alpha1.Engine
+	require.NoError(t, k8sClient.Get(ctx, reqA.NamespacedName, &latestA))
+	latestA.Spec.Target.Name = "retarget-gw-y"
+	require.NoError(t, k8sClient.Update(ctx, &latestA))
+
+	// Reconcile Engine A on the new target.
+	_, err = reconciler.Reconcile(ctx, reqA)
+	require.NoError(t, err)
+
+	// In a real controller, the competingEngineHandler would enqueue Engine B
+	// after Engine A's spec update (generation changed). Simulate that requeue.
+	_, err = reconciler.Reconcile(ctx, reqB)
+	require.NoError(t, err)
+
+	t.Log("Verifying Engine B is now Accepted on Gateway X")
+	require.NoError(t, k8sClient.Get(ctx, reqB.NamespacedName, &updatedB))
+	require.NotNil(t, updatedB.Status)
+	acceptedB = apimeta.FindStatusCondition(updatedB.Status.Conditions, "Accepted")
+	require.NotNil(t, acceptedB, "Engine B should have Accepted condition after retarget")
+	assert.Equal(t, metav1.ConditionTrue, acceptedB.Status,
+		"Engine B should be Accepted after Engine A retargets away from Gateway X")
+	assert.Equal(t, "Accepted", acceptedB.Reason)
+}
+
+func TestEngineReconciler_ReadyToTargetNotFound(t *testing.T) {
+	ctx := context.Background()
+
+	t.Log("Creating Gateway and RuleSet for ready-to-notfound test")
+	gwName := "ready-notfound-gw"
+	gw := createTestGateway(t, ctx, k8sClient, gwName, testNamespace)
+
+	ruleset := utils.NewTestRuleSet(utils.RuleSetOptions{
+		Name:      "ready-notfound-ruleset",
+		Namespace: testNamespace,
+	})
+	require.NoError(t, k8sClient.Create(ctx, ruleset))
+	t.Cleanup(func() {
+		_ = k8sClient.Delete(ctx, ruleset)
+	})
+
+	engine := utils.NewTestEngine(utils.EngineOptions{
+		Name:        "ready-notfound-engine",
+		Namespace:   testNamespace,
+		GatewayName: gwName,
+		RuleSetName: ruleset.Name,
+	})
+	require.NoError(t, k8sClient.Create(ctx, engine))
+	t.Cleanup(func() {
+		_ = k8sClient.Delete(ctx, engine)
+	})
+
+	reconciler := &EngineReconciler{
+		Client:                    k8sClient,
+		Scheme:                    scheme,
+		Recorder:                  utils.NewTestRecorder(),
+		kubeClient:                testKubeClient,
+		ruleSetCacheServerCluster: "test-cluster",
+		defaultWasmImage:          defaults.DefaultCorazaWasmOCIReference,
+		operatorNamespace:         testNamespace,
+	}
+	req := ctrl.Request{
+		NamespacedName: types.NamespacedName{
+			Name:      engine.Name,
+			Namespace: engine.Namespace,
+		},
+	}
+
+	// First reconcile: finalizer.
+	result, err := reconciler.Reconcile(ctx, req)
+	require.NoError(t, err)
+	assert.NotZero(t, result.RequeueAfter)
+
+	// Second reconcile: full provisioning → Ready.
+	result, err = reconciler.Reconcile(ctx, req)
+	require.NoError(t, err)
+
+	var updated wafv1alpha1.Engine
+	require.NoError(t, k8sClient.Get(ctx, req.NamespacedName, &updated))
+	require.NotNil(t, updated.Status)
+	readyCond := apimeta.FindStatusCondition(updated.Status.Conditions, "Ready")
+	require.NotNil(t, readyCond)
+	assert.Equal(t, metav1.ConditionTrue, readyCond.Status, "precondition: Engine should be Ready")
+	acceptedCond := apimeta.FindStatusCondition(updated.Status.Conditions, "Accepted")
+	require.NotNil(t, acceptedCond)
+	assert.Equal(t, metav1.ConditionTrue, acceptedCond.Status, "precondition: Engine should be Accepted")
+
+	t.Log("Deleting the Gateway to trigger TargetNotFound")
+	require.NoError(t, k8sClient.Delete(ctx, gw))
+
+	// Reconcile after Gateway deletion.
+	recorder := utils.NewFakeRecorder()
+	reconciler.Recorder = recorder
+	result, err = reconciler.Reconcile(ctx, req)
+	require.NoError(t, err)
+	assert.Zero(t, result.RequeueAfter, "should not requeue when target is not found")
+
+	t.Log("Verifying Engine transitions to Accepted=False, Ready=False")
+	require.NoError(t, k8sClient.Get(ctx, req.NamespacedName, &updated))
+	require.NotNil(t, updated.Status)
+
+	acceptedCond = apimeta.FindStatusCondition(updated.Status.Conditions, "Accepted")
+	require.NotNil(t, acceptedCond, "Engine should have Accepted condition")
+	assert.Equal(t, metav1.ConditionFalse, acceptedCond.Status)
+	assert.Equal(t, "TargetNotFound", acceptedCond.Reason)
+
+	readyCond = apimeta.FindStatusCondition(updated.Status.Conditions, "Ready")
+	require.NotNil(t, readyCond, "Engine should have Ready condition")
+	assert.Equal(t, metav1.ConditionFalse, readyCond.Status)
+
+	degradedCond := apimeta.FindStatusCondition(updated.Status.Conditions, "Degraded")
+	assert.Nil(t, degradedCond, "Degraded should be cleared by applyStatusNotAccepted")
+
+	progressingCond := apimeta.FindStatusCondition(updated.Status.Conditions, "Progressing")
+	assert.Nil(t, progressingCond, "Progressing should be cleared by applyStatusNotAccepted")
+
+	assert.True(t, recorder.HasEvent("Warning", "TargetNotFound"),
+		"expected Warning/TargetNotFound event; got: %v", recorder.Events)
+
+	t.Log("Verifying WasmPlugin was deleted")
+	wasmPlugin := &unstructured.Unstructured{}
+	wasmPlugin.SetGroupVersionKind(schema.GroupVersionKind{
+		Group:   "extensions.istio.io",
+		Version: "v1alpha1",
+		Kind:    "WasmPlugin",
+	})
+	wasmPluginKey := types.NamespacedName{
+		Name:      wasmPluginName(engine.Name),
+		Namespace: engine.Namespace,
+	}
+	err = k8sClient.Get(ctx, wasmPluginKey, wasmPlugin)
+	assert.True(t, apierrors.IsNotFound(err), "WasmPlugin should be deleted when Engine is not accepted, got: %v", err)
+
+	t.Log("Verifying token store entry was removed")
+	tokenKey := fmt.Sprintf("%s/%s/%s", engine.Namespace, engine.Name, engine.Spec.RuleSet.Name)
+	_, found := reconciler.tokenStore.Load(tokenKey)
+	assert.False(t, found, "token store entry should be removed when Engine is not accepted")
 }

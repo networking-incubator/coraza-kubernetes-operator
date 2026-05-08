@@ -159,11 +159,12 @@ func TestEngineRecreateAfterGateway(t *testing.T) {
 		RuleSetName: "ruleset",
 		GatewayName: "gw",
 	})
-	s.ExpectEngineReady(ns, "engine")
+	s.ExpectEngineNotAccepted(ns, "engine")
 
 	s.Step("create gateway after engine")
 	s.CreateGateway(ns, "gw")
 	s.ExpectGatewayProgrammed(ns, "gw")
+	s.ExpectEngineReady(ns, "engine")
 
 	s.Step("deploy backend")
 	s.CreateEchoBackend(ns, "echo")
@@ -183,11 +184,8 @@ func TestConcurrentRuleSetUpdates(t *testing.T) {
 
 	ns := s.GenerateNamespace("concurrent")
 
-	s.Step("create gateway")
-	s.CreateGateway(ns, "gw")
-	s.ExpectGatewayProgrammed(ns, "gw")
-
-	// Create 3 independent engines with their own rulesets
+	// Create 3 independent engines, each with its own gateway and ruleset.
+	// Each engine targets a separate gateway to avoid conflict detection.
 	engines := []struct {
 		name    string
 		pattern string
@@ -198,47 +196,45 @@ func TestConcurrentRuleSetUpdates(t *testing.T) {
 		{"engine-3", "gamma", 11403},
 	}
 
+	s.Step("create gateways")
+	for _, e := range engines {
+		gwName := fmt.Sprintf("gw-%s", e.name)
+		s.CreateGateway(ns, gwName)
+		s.ExpectGatewayProgrammed(ns, gwName)
+	}
+
 	s.Step("deploy multiple engines with separate rulesets")
 	s.CreateRuleSource(ns, "base-rules", `SecRuleEngine On`)
 
-	for _, e := range engines {
+	s.CreateEchoBackend(ns, "echo")
+	proxies := make([]*framework.GatewayProxy, len(engines))
+	for i, e := range engines {
+		gwName := fmt.Sprintf("gw-%s", e.name)
 		s.CreateRuleSource(ns, fmt.Sprintf("rules-%s", e.name), framework.SimpleBlockRule(e.ruleID, e.pattern))
 		s.CreateRuleSet(ns, fmt.Sprintf("ruleset-%s", e.name), []string{"base-rules", fmt.Sprintf("rules-%s", e.name)}, nil)
 		s.CreateEngine(ns, e.name, framework.EngineOpts{
 			RuleSetName: fmt.Sprintf("ruleset-%s", e.name),
-			GatewayName: "gw",
+			GatewayName: gwName,
 		})
 		s.ExpectEngineReady(ns, e.name)
+		s.CreateHTTPRoute(ns, fmt.Sprintf("route-%s", e.name), gwName, "echo")
+		proxies[i] = s.ProxyToGateway(ns, gwName)
 	}
 
-	s.CreateEchoBackend(ns, "echo")
-	s.CreateHTTPRoute(ns, "route", "gw", "echo")
-
-	gw := s.ProxyToGateway(ns, "gw")
-
 	s.Step("verify initial state")
-	gw.ExpectBlocked("/?test=alpha")
-	gw.ExpectBlocked("/?test=beta")
-	gw.ExpectBlocked("/?test=gamma")
+	for i, e := range engines {
+		proxies[i].ExpectBlocked(fmt.Sprintf("/?test=%s", e.pattern))
+	}
 
 	s.Step("update all rulesets concurrently")
-	// Update all RuleSources rapidly
 	for i, e := range engines {
 		newPattern := fmt.Sprintf("updated-%d", i+1)
 		s.UpdateRuleSource(ns, fmt.Sprintf("rules-%s", e.name), framework.SimpleBlockRule(e.ruleID+100, newPattern))
 	}
 
 	s.Step("verify all updates applied correctly")
-	require.Eventually(s.T, func() bool {
-		resp := gw.Get("/?test=updated-1")
-		return resp.Err == nil && resp.StatusCode == http.StatusForbidden
-	}, framework.DefaultTimeout, framework.DefaultInterval, "expected updated-1 to be blocked after concurrent updates")
-
-	gw.ExpectBlocked("/?test=updated-2")
-	gw.ExpectBlocked("/?test=updated-3")
-
-	// Old patterns should no longer be blocked
-	gw.ExpectAllowed("/?test=alpha")
-	gw.ExpectAllowed("/?test=beta")
-	gw.ExpectAllowed("/?test=gamma")
+	for i, e := range engines {
+		proxies[i].ExpectBlocked(fmt.Sprintf("/?test=updated-%d", i+1))
+		proxies[i].ExpectAllowed(fmt.Sprintf("/?test=%s", e.pattern))
+	}
 }

@@ -25,6 +25,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	appsv1 "k8s.io/api/apps/v1"
@@ -33,6 +34,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
+	ctrlcache "sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 
@@ -67,6 +69,17 @@ func TestMain(m *testing.M) {
 		}
 	}()
 
+	gatewayAPICRDDir, err := downloadGatewayAPICRDs()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to download Gateway API CRDs: %v\n", err)
+		os.Exit(1)
+	}
+	defer func() {
+		if rmErr := os.RemoveAll(gatewayAPICRDDir); rmErr != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to cleanup Gateway API CRD dir: %v\n", rmErr)
+		}
+	}()
+
 	scheme = runtime.NewScheme()
 	if err := wafv1alpha1.AddToScheme(scheme); err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to add waf scheme: %v\n", err)
@@ -95,6 +108,7 @@ func TestMain(m *testing.M) {
 			Paths: []string{
 				filepath.Join("..", "..", "config", "crd", "bases"),
 				istioCRDDir,
+				gatewayAPICRDDir,
 			},
 			CleanUpAfterUse: true,
 		},
@@ -108,6 +122,11 @@ func TestMain(m *testing.M) {
 		fmt.Fprintf(os.Stderr, "Failed to start test environment: %v\n", err)
 		os.Exit(1)
 	}
+	// NOTE: there are two testEnv.Stop() calls — the defer below and an
+	// explicit call near the end of TestMain. Both are necessary:
+	//   - The defer catches early os.Exit(1) calls if subsequent setup fails.
+	//   - The explicit call at the end handles the normal path, because
+	//     os.Exit(code) does NOT execute deferred functions.
 	defer func() {
 		if err := testEnv.Stop(); err != nil {
 			fmt.Fprintf(os.Stderr, "Failed to stop test environment: %v\n", err)
@@ -115,12 +134,55 @@ func TestMain(m *testing.M) {
 		}
 	}()
 
-	k8sClient, err = client.New(cfg, client.Options{Scheme: scheme})
+	directClient, err := client.New(cfg, client.Options{Scheme: scheme})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to create client: %v\n", err)
 		_ = testEnv.Stop()
 		os.Exit(1)
 	}
+
+	// Create a cache with the Engine target field index so that tests can use
+	// client.MatchingFields in List calls (required by hasTargetConflict).
+	testCache, err := ctrlcache.New(cfg, ctrlcache.Options{Scheme: scheme})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to create cache: %v\n", err)
+		_ = testEnv.Stop()
+		os.Exit(1)
+	}
+	if err := testCache.(client.FieldIndexer).IndexField(context.Background(), &wafv1alpha1.Engine{}, engineTargetIndex, func(obj client.Object) []string {
+		engine := obj.(*wafv1alpha1.Engine)
+		if engine.Spec.Target.Name == "" {
+			return nil
+		}
+		return []string{engineTargetKey(engine.Spec.Target.Type, engine.Spec.Target.Name)}
+	}); err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to register field index: %v\n", err)
+		_ = testEnv.Stop()
+		os.Exit(1)
+	}
+	cacheCtx, cacheCancel := context.WithCancel(context.Background())
+	cacheErrCh := make(chan error, 1)
+	go func() {
+		cacheErrCh <- testCache.Start(cacheCtx)
+	}()
+
+	syncCtx, syncCancel := context.WithTimeout(cacheCtx, 30*time.Second)
+	defer syncCancel()
+	if !testCache.WaitForCacheSync(syncCtx) {
+		select {
+		case startErr := <-cacheErrCh:
+			fmt.Fprintf(os.Stderr, "Cache failed to start: %v\n", startErr)
+		default:
+			fmt.Fprintf(os.Stderr, "Cache failed to sync within 30s\n")
+		}
+		cacheCancel()
+		_ = testEnv.Stop()
+		os.Exit(1)
+	}
+
+	// Wrap the direct client so List reads go through the indexed cache while
+	// all writes go directly to the API server.
+	k8sClient = &indexedTestClient{Client: directClient, reader: testCache}
 
 	testKubeClient, err = kubernetes.NewForConfig(cfg)
 	if err != nil {
@@ -131,6 +193,7 @@ func TestMain(m *testing.M) {
 
 	code := m.Run()
 
+	cacheCancel()
 	if err := testEnv.Stop(); err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to stop test environment: %v\n", err)
 		os.Exit(1)
@@ -159,6 +222,23 @@ func setupTest(t *testing.T) (context.Context, func()) {
 	}
 
 	return ctx, cleanup
+}
+
+// indexedTestClient wraps a direct API client and overrides List to read from
+// an indexed cache. This allows tests to use client.MatchingFields in List
+// calls while keeping all writes going directly to the API server.
+//
+// Only List is overridden because field-index queries (client.MatchingFields)
+// require the informer cache. Get is intentionally left reading from the
+// direct API client: it does not use field indexes, and keeping it direct
+// avoids cache-propagation delays in tests that Create-then-Get immediately.
+type indexedTestClient struct {
+	client.Client
+	reader client.Reader
+}
+
+func (c *indexedTestClient) List(ctx context.Context, list client.ObjectList, opts ...client.ListOption) error {
+	return c.reader.List(ctx, list, opts...)
 }
 
 func downloadIstioCRDs() (string, error) {
@@ -202,5 +282,59 @@ func downloadIstioCRDs() (string, error) {
 		return "", fmt.Errorf("failed to write CRD file: %w", err)
 	}
 
+	return tmpDir, nil
+}
+
+// downloadGatewayAPICRDs downloads the Gateway API CRDs needed for target
+// validation tests. The CRDs are placed in a temporary directory that must be
+// cleaned up by the caller.
+func downloadGatewayAPICRDs() (string, error) {
+	// Use the standard Gateway API CRDs. The version should be compatible with
+	// the Istio version used in tests.
+	const gatewayAPICRDURL = "https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.2.1/standard-install.yaml"
+
+	tmpDir, err := os.MkdirTemp("", "gateway-api-crds-*")
+	if err != nil {
+		return "", fmt.Errorf("failed to create temp dir: %w", err)
+	}
+
+	success := false
+	defer func() {
+		if !success {
+			_ = os.RemoveAll(tmpDir)
+		}
+	}()
+
+	httpClient := &http.Client{Timeout: 30 * time.Second}
+	resp, err := httpClient.Get(gatewayAPICRDURL) //nolint:gosec // Fixed test URL, not user input.
+	if err != nil {
+		return "", fmt.Errorf("failed to download Gateway API CRDs: %w", err)
+	}
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to close response body: %v\n", closeErr)
+		}
+	}()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("failed to download Gateway API CRDs: HTTP %d", resp.StatusCode)
+	}
+
+	crdFile := filepath.Join(tmpDir, "gateway-api-crds.yaml")
+	f, err := os.Create(crdFile)
+	if err != nil {
+		return "", fmt.Errorf("failed to create CRD file: %w", err)
+	}
+	defer func() {
+		if closeErr := f.Close(); closeErr != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to close file: %v\n", closeErr)
+		}
+	}()
+
+	if _, err := io.Copy(f, resp.Body); err != nil {
+		return "", fmt.Errorf("failed to write CRD file: %w", err)
+	}
+
+	success = true
 	return tmpDir, nil
 }

@@ -49,6 +49,7 @@ const (
 	conditionReady       = "Ready"
 	conditionDegraded    = "Degraded"
 	conditionProgressing = "Progressing"
+	conditionAccepted    = "Accepted"
 )
 
 // logInfo logs an info-level message with consistent structured context.
@@ -120,7 +121,7 @@ func extractStatusErrorFields(err error) []any {
 
 // trackedConditionTypes are the operator-owned condition types whose transitions
 // are logged at Info level.
-var trackedConditionTypes = []string{conditionReady, conditionDegraded, conditionProgressing}
+var trackedConditionTypes = []string{conditionReady, conditionDegraded, conditionProgressing, conditionAccepted}
 
 // conditionSnapshot captures the Status and Reason of each tracked condition
 // type before mutation. A nil entry means the condition was absent.
@@ -251,8 +252,44 @@ func patchDegraded(
 	return nil
 }
 
-// applyStatusReady mutates conditions to Ready. It does not log; call
-// logConditionTransitions after a successful Status().Patch.
+// applyStatusNotAccepted mutates conditions to signal that the Engine is not
+// accepted (e.g., target not found or target conflict). It clears Progressing
+// and Degraded and sets Ready=False.
+func applyStatusNotAccepted(conditions *[]metav1.Condition, generation int64, reason, message string) {
+	setConditionFalse(conditions, generation, conditionAccepted, reason, message)
+	setConditionFalse(conditions, generation, conditionReady, reason, message)
+	apimeta.RemoveStatusCondition(conditions, conditionDegraded)
+	apimeta.RemoveStatusCondition(conditions, conditionProgressing)
+}
+
+// patchNotAccepted marks a resource as not accepted, emits a Warning event,
+// and patches the status in a single call.
+func patchNotAccepted(
+	ctx context.Context,
+	statusWriter client.StatusWriter,
+	recorder events.EventRecorder,
+	log logr.Logger,
+	req ctrl.Request,
+	kind string,
+	obj client.Object,
+	conditions *[]metav1.Condition,
+	generation int64,
+	reason, message string,
+) error {
+	recorder.Eventf(obj, nil, "Warning", reason, "Reconcile", truncateEventNote(message))
+	patch := client.MergeFrom(obj.DeepCopyObject().(client.Object))
+	before := snapshotConditions(*conditions)
+	applyStatusNotAccepted(conditions, generation, reason, message)
+	if err := statusWriter.Patch(ctx, obj, patch); err != nil {
+		logAPIError(log, req, kind, err, "Failed to patch status", obj)
+		return err
+	}
+	logConditionTransitions(log, req, kind, before, *conditions)
+	return nil
+}
+
+// applyStatusReady mutates conditions to Ready=True, clears Degraded and
+// Progressing. Accepted is managed separately by the Engine reconciler.
 func applyStatusReady(conditions *[]metav1.Condition, generation int64, reason, message string) {
 	setConditionTrue(conditions, generation, conditionReady, reason, message)
 	apimeta.RemoveStatusCondition(conditions, conditionDegraded)

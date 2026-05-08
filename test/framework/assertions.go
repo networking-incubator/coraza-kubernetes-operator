@@ -65,6 +65,20 @@ func (s *Scenario) ExpectEngineDegraded(namespace, name string) {
 	s.ExpectCondition(namespace, name, EngineGVR, "Degraded", "True")
 }
 
+// ExpectEngineNotAccepted polls until the Engine has condition Accepted=False.
+func (s *Scenario) ExpectEngineNotAccepted(namespace, name string) {
+	s.T.Helper()
+	s.T.Logf("Waiting for Engine %s/%s to be NotAccepted", namespace, name)
+	s.ExpectCondition(namespace, name, EngineGVR, "Accepted", "False")
+}
+
+// ExpectEngineAccepted polls until the Engine has condition Accepted=True.
+func (s *Scenario) ExpectEngineAccepted(namespace, name string) {
+	s.T.Helper()
+	s.T.Logf("Waiting for Engine %s/%s to be Accepted", namespace, name)
+	s.ExpectCondition(namespace, name, EngineGVR, "Accepted", "True")
+}
+
 // ExpectRuleSetReady polls until the RuleSet has condition Ready=True.
 func (s *Scenario) ExpectRuleSetReady(namespace, name string) {
 	s.T.Helper()

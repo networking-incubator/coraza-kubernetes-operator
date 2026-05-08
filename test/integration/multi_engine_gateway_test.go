@@ -113,28 +113,23 @@ func TestMultiEngineMultiGateway(t *testing.T) {
 		s.CreateEchoBackend(ns, "echo")
 		s.CreateHTTPRoute(ns, "echo-route", "target-gw", "echo")
 
-		s.Step("attach both engines to the gateway")
-		// The operator currently accepts multiple engines targeting the
-		// same gateway — there is no admission webhook preventing it.
-		// Each engine creates its own WasmPlugin, and both enforce rules.
-		// If issue #52 adds rejection logic, this test should be updated
-		// to use TryCreateEngine and assert the error.
+		s.Step("attach first engine to the gateway")
 		s.CreateEngine(ns, "engine-a", framework.EngineOpts{
 			RuleSetName: "ruleset-a",
 			GatewayName: "target-gw",
 		})
 		s.ExpectEngineReady(ns, "engine-a")
 
+		s.Step("attach second engine — should be rejected by conflict detection")
 		s.CreateEngine(ns, "engine-b", framework.EngineOpts{
 			RuleSetName: "ruleset-b",
 			GatewayName: "target-gw",
 		})
-		s.ExpectEngineReady(ns, "engine-b")
+		s.ExpectEngineNotAccepted(ns, "engine-b")
 
-		s.Step("verify both engines enforce their rules")
+		s.Step("verify the winning engine enforces its rules")
 		gw := s.ProxyToGateway(ns, "target-gw")
 		gw.ExpectBlocked("/?test=attackA")
-		gw.ExpectBlocked("/?test=attackB")
 		gw.ExpectAllowed("/?test=safe")
 	})
 
@@ -156,13 +151,7 @@ func TestMultiEngineMultiGateway(t *testing.T) {
 			GatewayName: "nonexistent-gateway",
 		})
 
-		s.Step("verify engine status")
-		// The WasmPlugin is still created (targeting pods that don't exist).
-		// Per issue #52, the engine status should reflect the degraded state
-		// when Gateway watches are implemented. For now we verify the engine
-		// still reaches Ready since the operator doesn't currently check
-		// whether the label selector matches any pods.
-		s.ExpectEngineReady(ns, "orphan-engine")
-		s.ExpectWasmPluginExists(ns, "coraza-engine-orphan-engine")
+		s.Step("verify engine is not accepted due to missing gateway")
+		s.ExpectEngineNotAccepted(ns, "orphan-engine")
 	})
 }

@@ -145,6 +145,8 @@ type EngineStatus struct {
 	// aspect of the resource.
 	//
 	// Standard condition types include:
+	// - "Accepted": the target is valid and not contested by another Engine.
+	//    Reasons: "Accepted", "TargetNotFound", "TargetConflict"
 	// - "Ready": the engine has been successfully deployed and is operational
 	// - "Progressing": the resource is being created or updated
 	// - "Degraded": the resource failed to reach or maintain its desired state

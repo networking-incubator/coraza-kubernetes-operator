@@ -105,9 +105,11 @@ func TestCacheServerAuthentication(t *testing.T) {
 	s.CreateRuleSet(ns, "other-test", []string{"other-rules"}, nil)
 	s.ExpectRuleSetReady(ns, "other-test")
 
+	s.CreateGateway(ns, "other-gateway")
+	s.ExpectGatewayProgrammed(ns, "other-gateway")
 	s.CreateEngine(ns, "other-test", framework.EngineOpts{
 		RuleSetName: "other-test",
-		GatewayName: "auth-gateway",
+		GatewayName: "other-gateway",
 	})
 
 	otherSAName := s.ExpectCacheClientSAExists(ns, "other-test")

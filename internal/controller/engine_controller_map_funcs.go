@@ -3,7 +3,11 @@ package controller
 import (
 	"context"
 
+	"k8s.io/client-go/util/workqueue"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/event"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
@@ -30,19 +34,77 @@ func (r *EngineReconciler) findEnginesForRuleSet(ctx context.Context, ruleSet cl
 }
 
 // findEnginesForGateway maps a Gateway to the Engines in the same namespace
-// that target this specific Gateway by name.
+// that target this specific Gateway by name. Uses the spec.target index.
 func (r *EngineReconciler) findEnginesForGateway(ctx context.Context, gateway client.Object) []reconcile.Request {
 	log := logf.FromContext(ctx)
 
 	var engineList wafv1alpha1.EngineList
-	if err := r.List(ctx, &engineList, client.InNamespace(gateway.GetNamespace())); err != nil {
+	if err := r.List(ctx, &engineList,
+		client.InNamespace(gateway.GetNamespace()),
+		client.MatchingFields{engineTargetIndex: engineTargetKey(wafv1alpha1.EngineTargetTypeGateway, gateway.GetName())},
+	); err != nil {
 		log.Error(err, "Engine: Failed to list Engines", "namespace", gateway.GetNamespace())
 		return nil
 	}
 
 	return collectRequests(engineList.Items, func(e *wafv1alpha1.Engine) bool {
-		return hasGatewayTarget(e) && e.Spec.Target.Name == gateway.GetName()
+		// we collect all of the items, given we are already matching them using the index of 'engineTargetIndex
+		return true
 	})
+}
+
+// findCompetingEngines maps an Engine to all other Engines in the same
+// namespace that target the same Gateway. Called by competingEngineHandler on
+// create, delete, and generation-changing updates. Uses the spec.target index.
+func (r *EngineReconciler) findCompetingEngines(ctx context.Context, obj client.Object) []reconcile.Request {
+	log := logf.FromContext(ctx)
+
+	engine, ok := obj.(*wafv1alpha1.Engine)
+	if !ok {
+		return nil
+	}
+	if !hasGatewayTarget(engine) {
+		return nil
+	}
+
+	var engineList wafv1alpha1.EngineList
+	if err := r.List(ctx, &engineList,
+		client.InNamespace(engine.GetNamespace()),
+		client.MatchingFields{engineTargetIndex: engineTargetKey(engine.Spec.Target.Type, engine.Spec.Target.Name)},
+	); err != nil {
+		log.Error(err, "Engine: Failed to list Engines for conflict mapping", "namespace", engine.GetNamespace())
+		return nil
+	}
+
+	return collectRequests(engineList.Items, func(e *wafv1alpha1.Engine) bool {
+		return e.Name != engine.Name
+	})
+}
+
+// competingEngineHandler returns an EventHandler that requeues all competing
+// Engines when an Engine is created, deleted, or has its target changed.
+//
+// On Update events (filtered by the caller to generation-changing updates),
+// competitors for both the old and new targets are enqueued so that Engines
+// targeting the old Gateway can clear a stale TargetConflict.
+func (r *EngineReconciler) competingEngineHandler() handler.EventHandler {
+	enqueue := func(ctx context.Context, obj client.Object, q workqueue.TypedRateLimitingInterface[ctrl.Request]) {
+		for _, req := range r.findCompetingEngines(ctx, obj) {
+			q.Add(req)
+		}
+	}
+	return handler.Funcs{
+		CreateFunc: func(ctx context.Context, e event.CreateEvent, q workqueue.TypedRateLimitingInterface[ctrl.Request]) {
+			enqueue(ctx, e.Object, q)
+		},
+		DeleteFunc: func(ctx context.Context, e event.DeleteEvent, q workqueue.TypedRateLimitingInterface[ctrl.Request]) {
+			enqueue(ctx, e.Object, q)
+		},
+		UpdateFunc: func(ctx context.Context, e event.UpdateEvent, q workqueue.TypedRateLimitingInterface[ctrl.Request]) {
+			enqueue(ctx, e.ObjectOld, q)
+			enqueue(ctx, e.ObjectNew, q)
+		},
+	}
 }
 
 // findEnginesForPod maps a Pod to the Engines in the same namespace whose
