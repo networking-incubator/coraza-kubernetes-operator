@@ -47,7 +47,9 @@ import (
 // +kubebuilder:rbac:groups=waf.k8s.coraza.io,resources=rulesets,verbs=get;list;watch;patch;update
 // +kubebuilder:rbac:groups=waf.k8s.coraza.io,resources=rulesets/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=waf.k8s.coraza.io,resources=rulesources,verbs=get;list;watch
+// +kubebuilder:rbac:groups=waf.k8s.coraza.io,resources=rulesources/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=waf.k8s.coraza.io,resources=ruledata,verbs=get;list;watch
+// +kubebuilder:rbac:groups=waf.k8s.coraza.io,resources=ruledata/status,verbs=get;update;patch
 
 // -----------------------------------------------------------------------------
 // RuleSetReconciler

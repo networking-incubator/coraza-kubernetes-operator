@@ -46,6 +46,8 @@ const (
 // RuleSource holds SecLang WAF rule text for consumption by RuleSet resources.
 //
 // +kubebuilder:object:root=true
+// +kubebuilder:subresource:status
+// +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].status`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 // +kubebuilder:validation:XValidation:rule="has(self.spec.rules) && self.spec.rules != \"\"",message="rules must be set and non-empty"
 type RuleSource struct {
@@ -60,6 +62,11 @@ type RuleSource struct {
 	//
 	// +required
 	Spec RuleSourceSpec `json:"spec,omitzero"`
+
+	// status defines the observed state of RuleSource.
+	//
+	// +optional
+	Status RuleSourceStatus `json:"status,omitempty,omitzero"`
 }
 
 // RuleSourceList contains a list of RuleSource resources.
@@ -91,4 +98,30 @@ type RuleSourceSpec struct {
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=1572864
 	Rules string `json:"rules,omitempty"`
+}
+
+// -----------------------------------------------------------------------------
+// RuleSource - Status
+// -----------------------------------------------------------------------------
+
+// RuleSourceStatus defines the observed state of RuleSource.
+// +kubebuilder:validation:MinProperties=1
+type RuleSourceStatus struct {
+	// conditions represent the current state of the RuleSource resource.
+	// Each condition has a unique type and reflects the status of a specific aspect of the resource.
+	//
+	// Standard condition types include:
+	// - "Ready": the RuleSource has been loaded and validated by at least one RuleSet
+	// - "Degraded": per-fragment rule validation failed
+	//
+	// The status of each condition is one of True, False, or Unknown.
+	//
+	// +listType=map
+	// +listMapKey=type
+	// +patchStrategy=merge
+	// +patchMergeKey=type
+	// +kubebuilder:validation:MinItems=1
+	// +kubebuilder:validation:MaxItems=16
+	// +optional
+	Conditions []metav1.Condition `json:"conditions,omitempty" patchStrategy:"merge" patchMergeKey:"type" protobuf:"bytes,1,rep,name=conditions"`
 }

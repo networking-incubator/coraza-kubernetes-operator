@@ -5,7 +5,7 @@ weight: 35
 description: "Understanding resource status conditions and common troubleshooting steps."
 ---
 
-Both Engine and RuleSet resources report their state through standard Kubernetes conditions. This page describes each condition type and provides troubleshooting guidance.
+Engine, RuleSet, RuleSource, and RuleData resources report their state through standard Kubernetes conditions. This page describes each condition type and provides troubleshooting guidance.
 
 ## Condition Types
 
@@ -60,6 +60,41 @@ The Engine could not reach its desired state. Common reasons:
 | `NetworkPolicyFailed` | Failed to apply the NetworkPolicy for the cache server. | Check operator logs and RBAC permissions. |
 | `ServiceAccountFailed` | Failed to ensure the cache client ServiceAccount. | Check operator logs and RBAC permissions. |
 | `TokenFailed` | Failed to ensure the cache client token. | Check operator logs and RBAC permissions. |
+
+## RuleSource Conditions
+
+RuleSource status is updated by the RuleSet reconciler when a RuleSet references the source. If a RuleSource is not referenced by any RuleSet, its status reflects the last reconciliation that touched it.
+
+### Ready
+
+The RuleSource has been loaded and validated (or validation was skipped) by a RuleSet reconciliation.
+
+| Reason | Description |
+|--------|-------------|
+| `Validated` | Per-fragment Coraza rule validation passed. |
+| `ValidationSkipped` | Validation was skipped via the `waf.k8s.coraza.io/rule-validation: "false"` annotation. |
+
+### Degraded
+
+Per-fragment rule validation failed.
+
+| Reason | Description | Resolution |
+|--------|-------------|------------|
+| `InvalidRules` | The SecLang rules failed Coraza validation. | Check the condition message for the validation error and fix the rule text. |
+
+## RuleData Conditions
+
+RuleData status is updated by the RuleSet reconciler when a RuleSet references the data. If a RuleData is not referenced by any RuleSet, its status reflects the last reconciliation that touched it.
+
+### Ready
+
+The RuleData has been loaded by a RuleSet reconciliation.
+
+| Reason | Description |
+|--------|-------------|
+| `Loaded` | The data was read successfully. |
+
+> **Note:** Coraza does not validate individual data files before aggregation, so RuleData has no `Degraded` condition. Data-related errors (missing files, access errors) are reported on the **RuleSet** status.
 
 ## RuleSet Conditions
 

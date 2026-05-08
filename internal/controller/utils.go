@@ -173,6 +173,14 @@ func logConditionTransitions(log logr.Logger, req ctrl.Request, kind string, bef
 	}
 }
 
+// isConditionCurrent reports whether a condition already has the given status,
+// reason, and observedGeneration. Used to short-circuit status patches and
+// avoid emitting duplicate events on every reconcile.
+func isConditionCurrent(conditions []metav1.Condition, condType string, status metav1.ConditionStatus, reason string, generation int64) bool {
+	c := apimeta.FindStatusCondition(conditions, condType)
+	return c != nil && c.Status == status && c.Reason == reason && c.ObservedGeneration == generation
+}
+
 // setConditionTrue is a helper function to set metav1.Conditions to True.
 func setConditionTrue(conditions *[]metav1.Condition, generation int64, conditionType, reason, message string) {
 	apimeta.SetStatusCondition(conditions, metav1.Condition{
