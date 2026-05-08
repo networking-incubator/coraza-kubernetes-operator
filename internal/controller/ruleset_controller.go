@@ -125,7 +125,12 @@ func (r *RuleSetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	var ruleset wafv1alpha1.RuleSet
 	if err := r.Get(ctx, req.NamespacedName, &ruleset); err != nil {
 		if apierrors.IsNotFound(err) {
-			logDebug(log, req, "RuleSet", "Resource not found")
+			cacheKey := fmt.Sprintf("%s/%s", req.Namespace, req.Name)
+			if r.Cache.Delete(cacheKey) {
+				logDebug(log, req, "RuleSet", "Deleted cache entry for removed resource")
+			} else {
+				logDebug(log, req, "RuleSet", "Resource not found, no cache entry to remove")
+			}
 			return ctrl.Result{}, nil
 		}
 		logAPIError(log, req, "RuleSet", err, "Failed to GET", nil)

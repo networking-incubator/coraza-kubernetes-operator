@@ -60,6 +60,35 @@ func TestRuleSetReconciler_ReconcileNotFound(t *testing.T) {
 	assert.Equal(t, reconcile.Result{}, result)
 }
 
+func TestRuleSetReconciler_ReconcileNotFoundDeletesCache(t *testing.T) {
+	_, cleanup := setupTest(t)
+	t.Cleanup(cleanup)
+
+	ruleSetCache := cache.NewRuleSetCache()
+	cacheKey := testNamespace + "/deleted-ruleset"
+	ruleSetCache.Put(cacheKey, "SecCollectionTimeout 1", nil)
+	require.Equal(t, 1, ruleSetCache.Len(), "pre-condition: cache should have one entry")
+
+	reconciler := &RuleSetReconciler{
+		Client:   k8sClient,
+		Scheme:   scheme,
+		Recorder: utils.NewTestRecorder(),
+		Cache:    ruleSetCache,
+	}
+	result, err := reconciler.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{
+			Name:      "deleted-ruleset",
+			Namespace: testNamespace,
+		},
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, reconcile.Result{}, result)
+	_, ok := ruleSetCache.Get(cacheKey)
+	assert.False(t, ok, "cache entry should be removed when RuleSet is deleted")
+	assert.Equal(t, 0, ruleSetCache.Len(), "cache should be empty after deletion")
+}
+
 func TestRuleSetReconciler_ReconcileRuleSources(t *testing.T) {
 	tests := []struct {
 		name          string

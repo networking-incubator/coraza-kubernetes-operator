@@ -368,6 +368,33 @@ func TestRuleSetCache_PutUpdatesUUID(t *testing.T) {
 	assert.Equal(t, "rules v2", entry2.Rules)
 }
 
+func TestRuleSetCache_Delete(t *testing.T) {
+	c := NewRuleSetCache()
+
+	c.Put("instance1", "rules1", nil)
+	c.Put("instance1", "rules2", nil)
+	c.Put("instance2", "other", map[string][]byte{"f.dat": []byte("data")})
+	require.Equal(t, 2, c.Len(), "pre-condition: two instances")
+	sizeBefore := c.TotalSize()
+	entriesBefore := c.TotalEntries()
+
+	ok := c.Delete("instance1")
+	assert.True(t, ok, "Delete should return true for existing instance")
+	assert.Equal(t, 1, c.Len(), "one instance should remain")
+	_, found := c.Get("instance1")
+	assert.False(t, found, "deleted instance should not be retrievable")
+
+	assert.Less(t, c.TotalSize(), sizeBefore, "TotalSize should decrease after Delete")
+	assert.Less(t, c.TotalEntries(), entriesBefore, "TotalEntries should decrease after Delete")
+
+	entry, found := c.Get("instance2")
+	require.True(t, found, "unrelated instance should be unaffected")
+	assert.Equal(t, "other", entry.Rules)
+
+	ok = c.Delete("non-existent")
+	assert.False(t, ok, "Delete should return false for non-existent instance")
+}
+
 func TestRuleSetCache_GetNonExistent(t *testing.T) {
 	cache := NewRuleSetCache()
 	entry, ok := cache.Get("non-existent")
