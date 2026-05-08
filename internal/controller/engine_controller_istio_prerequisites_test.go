@@ -217,17 +217,27 @@ func TestIstioPrerequisites_ApplyDeploymentNotFound(t *testing.T) {
 	assert.Contains(t, err.Error(), "looking up owner Deployment")
 }
 
-func TestIstioPrerequisites_StartReturnsNilOnError(t *testing.T) {
+func TestIstioPrerequisites_StartPropagatesError(t *testing.T) {
 	ctx := context.Background()
 	namespace := setupTestNamespace(t, ctx)
 
 	p := NewIstioPrerequisites(k8sClient, k8sClient, "no-such-deploy", namespace, "")
 	err := p.Start(ctx)
-	assert.NoError(t, err, "Start() must return nil even when apply fails")
+	require.Error(t, err, "Start() must propagate apply errors to shut down the manager")
+	assert.Contains(t, err.Error(), "looking up owner Deployment")
+}
+
+func TestIstioPrerequisites_StartSucceeds(t *testing.T) {
+	ctx := context.Background()
+	namespace := setupTestNamespace(t, ctx)
+	createDeployment(t, ctx, "start-ok", namespace)
+
+	p := NewIstioPrerequisites(k8sClient, k8sClient, "start-ok", namespace, "")
+	require.NoError(t, p.Start(ctx))
 }
 
 // -----------------------------------------------------------------------------
-// Helpers
+// Test Utilities
 // -----------------------------------------------------------------------------
 
 func newTestPrereqs(operatorName, namespace, istioRevision string) *IstioPrerequisites {

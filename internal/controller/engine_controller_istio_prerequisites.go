@@ -61,13 +61,13 @@ func NewIstioPrerequisites(c client.Client, reader client.Reader, operatorName, 
 
 // Start applies the Istio ServiceEntry and DestinationRule for the
 // RuleSet cache server. It satisfies the manager.Runnable interface.
+//
+// Returning an error shuts down the manager, which is correct: without
+// mesh prerequisites the cache server is unreachable and Engines cannot
+// function. Kubernetes pod-restart backoff provides the retry mechanism.
 func (p *IstioPrerequisites) Start(ctx context.Context) error {
 	log := ctrl.Log.WithName("istio-prerequisites")
-
-	if err := p.apply(ctx, log); err != nil {
-		log.Error(err, "Failed to apply Istio prerequisites (controllers will continue without them)")
-	}
-	return nil
+	return p.apply(ctx, log)
 }
 
 func (p *IstioPrerequisites) apply(ctx context.Context, log logr.Logger) error {
