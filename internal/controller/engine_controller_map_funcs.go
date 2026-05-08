@@ -3,7 +3,6 @@ package controller
 import (
 	"context"
 
-	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/util/workqueue"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -48,16 +47,10 @@ func (r *EngineReconciler) findEnginesForGateway(ctx context.Context, gateway cl
 		return nil
 	}
 
-	requests := make([]reconcile.Request, 0, len(engineList.Items))
-	for i := range engineList.Items {
-		requests = append(requests, reconcile.Request{
-			NamespacedName: types.NamespacedName{
-				Name:      engineList.Items[i].Name,
-				Namespace: engineList.Items[i].Namespace,
-			},
-		})
-	}
-	return requests
+	return collectRequests(engineList.Items, func(e *wafv1alpha1.Engine) bool {
+		// we collect all of the items, given we are already maching them using the index of 'engineTargetIndex
+		return true
+	})
 }
 
 // findCompetingEngines maps an Engine to all other Engines in the same

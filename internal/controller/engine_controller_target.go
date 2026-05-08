@@ -66,20 +66,20 @@ func needsAcceptedUpdate(conditions []metav1.Condition, generation int64) bool {
 	return cond == nil || cond.Status != metav1.ConditionTrue || cond.ObservedGeneration != generation
 }
 
-// isAlreadyNotAccepted reports whether the Engine already has Accepted=False
-// with the given reason at the current generation. When true, the caller can
-// skip redundant cleanup work (e.g. Get for a WasmPlugin that was never created).
-func isAlreadyNotAccepted(conditions []metav1.Condition, generation int64, reason string) bool {
-	cond := apimeta.FindStatusCondition(conditions, conditionAccepted)
-	return cond != nil &&
-		cond.Status == metav1.ConditionFalse &&
-		cond.Reason == reason &&
-		cond.ObservedGeneration == generation
-}
-
 // -----------------------------------------------------------------------------
 // Target Rejection Cleanup
 // -----------------------------------------------------------------------------
+
+// rejectTarget cleans up child resources and then patches the Engine status to
+// Accepted=False. Cleanup runs before the status patch so that a cleanup
+// failure causes a retry with the status still reflecting the previous state
+// (avoiding the case where the status is patched but cleanup never completes).
+func (r *EngineReconciler) rejectTarget(ctx context.Context, log logr.Logger, req ctrl.Request, engine *wafv1alpha1.Engine, reason, message string) error {
+	if err := r.cleanupNotAccepted(ctx, log, req, engine); err != nil {
+		return err
+	}
+	return patchNotAccepted(ctx, r.Status(), r.Recorder, log, req, "Engine", engine, &engine.Status.Conditions, engine.Generation, reason, message)
+}
 
 // cleanupNotAccepted removes child resources that were created when the Engine
 // was previously accepted (WasmPlugin, NetworkPolicy, cached token). This
@@ -122,6 +122,7 @@ func (r *EngineReconciler) cleanupNotAccepted(ctx context.Context, log logr.Logg
 // isTargetNotFound checks whether the Gateway referenced by spec.target.name
 // exists in the Engine's namespace. Returns true when the Gateway is not found.
 // On transient API errors it returns (false, err) so the caller can retry.
+// This function only detects the condition — it does not patch status.
 func (r *EngineReconciler) isTargetNotFound(ctx context.Context, log logr.Logger, req ctrl.Request, engine *wafv1alpha1.Engine) (bool, error) {
 	if !hasGatewayTarget(engine) {
 		return false, nil
@@ -140,11 +141,7 @@ func (r *EngineReconciler) isTargetNotFound(ctx context.Context, log logr.Logger
 	}, gw)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
-			msg := fmt.Sprintf("Gateway %q not found in namespace %q", engine.Spec.Target.Name, engine.Namespace)
-			logInfo(log, req, "Engine", "Target Gateway not found; marking Engine not accepted", "gateway", engine.Spec.Target.Name)
-			if patchErr := patchNotAccepted(ctx, r.Status(), r.Recorder, log, req, "Engine", engine, &engine.Status.Conditions, engine.Generation, "TargetNotFound", msg); patchErr != nil {
-				return true, patchErr
-			}
+			logInfo(log, req, "Engine", "Target Gateway not found", "gateway", engine.Spec.Target.Name)
 			return true, nil
 		}
 		logAPIError(log, req, "Engine", err, "Failed to get target Gateway", engine)
@@ -156,10 +153,12 @@ func (r *EngineReconciler) isTargetNotFound(ctx context.Context, log logr.Logger
 
 // hasTargetConflict checks whether another Engine in the same namespace already
 // targets the same Gateway. The oldest Engine wins (by creationTimestamp; ties
-// broken by lexicographic name). Returns true if this Engine loses the conflict.
-func (r *EngineReconciler) hasTargetConflict(ctx context.Context, log logr.Logger, req ctrl.Request, engine *wafv1alpha1.Engine) (bool, error) {
+// broken by lexicographic name). Returns (true, winnerName, nil) if this Engine
+// loses the conflict. This function only detects the condition — it does not
+// patch status.
+func (r *EngineReconciler) hasTargetConflict(ctx context.Context, log logr.Logger, req ctrl.Request, engine *wafv1alpha1.Engine) (bool, string, error) {
 	if !hasGatewayTarget(engine) {
-		return false, nil
+		return false, "", nil
 	}
 
 	var engineList wafv1alpha1.EngineList
@@ -168,7 +167,7 @@ func (r *EngineReconciler) hasTargetConflict(ctx context.Context, log logr.Logge
 		client.MatchingFields{engineTargetIndex: engineTargetKey(engine.Spec.Target.Type, engine.Spec.Target.Name)},
 	); err != nil {
 		logAPIError(log, req, "Engine", err, "Failed to list Engines for conflict detection", engine)
-		return false, fmt.Errorf("failed to list Engines: %w", err)
+		return false, "", fmt.Errorf("failed to list Engines: %w", err)
 	}
 
 	// Filter out Engines that are being deleted; the index does not
@@ -181,7 +180,7 @@ func (r *EngineReconciler) hasTargetConflict(ctx context.Context, log logr.Logge
 	}
 
 	if len(candidates) <= 1 {
-		return false, nil
+		return false, "", nil
 	}
 
 	// Sort: oldest first, tiebreak by name.
@@ -196,14 +195,9 @@ func (r *EngineReconciler) hasTargetConflict(ctx context.Context, log logr.Logge
 
 	winnerName := candidates[0].Name
 	if winnerName == engine.Name {
-		return false, nil
+		return false, "", nil
 	}
 
-	msg := fmt.Sprintf("Target %s %q is already claimed by Engine %q", engine.Spec.Target.Type, engine.Spec.Target.Name, winnerName)
-	logInfo(log, req, "Engine", "Target conflict detected; marking Engine not accepted", "winner", winnerName, "gateway", engine.Spec.Target.Name)
-	if patchErr := patchNotAccepted(ctx, r.Status(), r.Recorder, log, req, "Engine", engine, &engine.Status.Conditions, engine.Generation, "TargetConflict", msg); patchErr != nil {
-		return true, patchErr
-	}
-
-	return true, nil
+	logInfo(log, req, "Engine", "Target conflict detected", "winner", winnerName, "gateway", engine.Spec.Target.Name)
+	return true, winnerName, nil
 }

@@ -214,27 +214,23 @@ func (r *EngineReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	}
 
 	logDebug(log, req, "Engine", "Checking target availability")
-	wasNotAcceptedTargetNotFound := isAlreadyNotAccepted(engine.Status.Conditions, engine.Generation, "TargetNotFound")
 	if notFound, err := r.isTargetNotFound(ctx, log, req, &engine); err != nil {
 		return ctrl.Result{}, err
 	} else if notFound {
-		if !wasNotAcceptedTargetNotFound {
-			if err := r.cleanupNotAccepted(ctx, log, req, &engine); err != nil {
-				return ctrl.Result{}, err
-			}
+		msg := fmt.Sprintf("Gateway %q not found in namespace %q", engine.Spec.Target.Name, engine.Namespace)
+		if err := r.rejectTarget(ctx, log, req, &engine, "TargetNotFound", msg); err != nil {
+			return ctrl.Result{}, err
 		}
 		return ctrl.Result{}, nil
 	}
 
 	logDebug(log, req, "Engine", "Checking target conflict")
-	wasNotAcceptedTargetConflict := isAlreadyNotAccepted(engine.Status.Conditions, engine.Generation, "TargetConflict")
-	if conflict, err := r.hasTargetConflict(ctx, log, req, &engine); err != nil {
+	if conflict, winnerName, err := r.hasTargetConflict(ctx, log, req, &engine); err != nil {
 		return ctrl.Result{}, err
 	} else if conflict {
-		if !wasNotAcceptedTargetConflict {
-			if err := r.cleanupNotAccepted(ctx, log, req, &engine); err != nil {
-				return ctrl.Result{}, err
-			}
+		msg := fmt.Sprintf("Target %s %q is already claimed by Engine %q", engine.Spec.Target.Type, engine.Spec.Target.Name, winnerName)
+		if err := r.rejectTarget(ctx, log, req, &engine, "TargetConflict", msg); err != nil {
+			return ctrl.Result{}, err
 		}
 		return ctrl.Result{}, nil
 	}
