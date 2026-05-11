@@ -161,7 +161,7 @@ func (r *RuleSetReconciler) loadSources(
 			name:           src.Name,
 			rules:          rs.Spec.Rules,
 			shouldValidate: shouldValidate,
-			source:         &rs,
+			source:         ptrRuleSource(rs),
 		})
 	}
 
@@ -204,6 +204,12 @@ func (r *RuleSetReconciler) loadSources(
 	}
 
 	return aggregatedRules.String(), aggregatedErrors, false, nil
+}
+
+// ptrRuleSource returns a pointer to a distinct copy of rs. Do not use &rs
+// directly inside a for-loop body: rs is a single variable reused each iteration.
+func ptrRuleSource(rs wafv1alpha1.RuleSource) *wafv1alpha1.RuleSource {
+	return &rs
 }
 
 // validateRuleSourceRules validates a single RuleSource's rules via Coraza.
