@@ -10,6 +10,7 @@ import (
 
 	wafv1alpha1 "github.com/networking-incubator/coraza-kubernetes-operator/api/v1alpha1"
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/rulesets"
+	"github.com/networking-incubator/coraza-kubernetes-operator/internal/rulesets/validation"
 )
 
 // -----------------------------------------------------------------------------
@@ -24,18 +25,13 @@ func (r *RuleSetReconciler) validateAggregatedRules(
 	req ctrl.Request,
 	ruleset *wafv1alpha1.RuleSet,
 	conf coraza.WAFConfig,
-	aggregatedErrors []error,
 ) error {
 	if _, err := coraza.NewWAF(conf); err != nil {
-		msg := fmt.Sprintf("Ruleset is invalid\n%v", sanitizeErrorMessage(err))
-		for _, srcErr := range aggregatedErrors {
-			r.Recorder.Eventf(ruleset, nil, "Warning", "InvalidRuleSource", "Reconcile", truncateEventNote(srcErr.Error()))
-			msg = fmt.Sprintf("%s\n%v", msg, srcErr)
-		}
+		msg := fmt.Sprintf("Ruleset is invalid\n%v", validation.SanitizeErrorMessage(err))
 		if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "RuleSet", ruleset, &ruleset.Status.Conditions, ruleset.Generation, "InvalidRuleSet", msg); patchErr != nil {
 			return patchErr
 		}
-		return sanitizeErrorMessage(err)
+		return validation.SanitizeErrorMessage(err)
 	}
 	return nil
 }

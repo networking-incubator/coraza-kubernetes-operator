@@ -18,11 +18,13 @@ package controller
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -37,6 +39,46 @@ import (
 const (
 	testNamespace = "default"
 )
+
+func ruleSourceTestReconciler() *RuleSourceReconciler {
+	return &RuleSourceReconciler{
+		Client:   k8sClient,
+		Recorder: utils.NewTestRecorder(),
+	}
+}
+
+// reconcileRuleSetWithRuleSources runs RuleSourceReconciler for each referenced
+// RuleSource whenever the RuleSet requests a requeue waiting on source
+// validation, until the RuleSet returns without a requeue interval.
+func reconcileRuleSetWithRuleSources(ctx context.Context, t *testing.T, nn types.NamespacedName, rec *RuleSetReconciler) (ctrl.Result, error) {
+	rsRec := ruleSourceTestReconciler()
+	var last ctrl.Result
+	for range 16 {
+		var err error
+		last, err = rec.Reconcile(ctx, ctrl.Request{NamespacedName: nn})
+		if err != nil {
+			return last, err
+		}
+		if last.RequeueAfter == 0 {
+			return last, nil
+		}
+		var rs wafv1alpha1.RuleSet
+		require.NoError(t, k8sClient.Get(ctx, nn, &rs))
+		for _, src := range rs.Spec.Sources {
+			var chk wafv1alpha1.RuleSource
+			if err := k8sClient.Get(ctx, types.NamespacedName{Namespace: rs.Namespace, Name: src.Name}, &chk); err != nil {
+				if apierrors.IsNotFound(err) {
+					continue
+				}
+				require.NoError(t, err)
+			}
+			_, err := rsRec.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Namespace: rs.Namespace, Name: src.Name}})
+			require.NoError(t, err)
+		}
+	}
+	require.FailNow(t, "RuleSet reconciliation did not settle", "namespace=%s name=%s", nn.Namespace, nn.Name)
+	return last, fmt.Errorf("did not settle")
+}
 
 func TestRuleSetReconciler_ReconcileNotFound(t *testing.T) {
 	ctx, cleanup := setupTest(t)
@@ -167,12 +209,8 @@ func TestRuleSetReconciler_ReconcileRuleSources(t *testing.T) {
 				Recorder: recorder,
 				Cache:    ruleSetCache,
 			}
-			result, err := reconciler.Reconcile(ctx, ctrl.Request{
-				NamespacedName: types.NamespacedName{
-					Name:      ruleSet.Name,
-					Namespace: ruleSet.Namespace,
-				},
-			})
+			nn := types.NamespacedName{Name: ruleSet.Name, Namespace: ruleSet.Namespace}
+			result, err := reconcileRuleSetWithRuleSources(ctx, t, nn, reconciler)
 
 			t.Log("Verifying cache was populated with combined rules")
 			require.NoError(t, err)
@@ -325,12 +363,8 @@ func TestRuleSetReconciler_UpdateCache(t *testing.T) {
 		Recorder: utils.NewTestRecorder(),
 		Cache:    ruleSetCache,
 	}
-	_, err = reconciler.Reconcile(ctx, ctrl.Request{
-		NamespacedName: types.NamespacedName{
-			Name:      ruleSet.Name,
-			Namespace: ruleSet.Namespace,
-		},
-	})
+	nn := types.NamespacedName{Name: ruleSet.Name, Namespace: ruleSet.Namespace}
+	_, err = reconcileRuleSetWithRuleSources(ctx, t, nn, reconciler)
 	require.NoError(t, err)
 
 	t.Log("Updating RuleSource with new rules")
@@ -345,12 +379,7 @@ func TestRuleSetReconciler_UpdateCache(t *testing.T) {
 	require.NoError(t, err)
 
 	t.Log("Reconciling after RuleSource update to refresh cache")
-	_, err = reconciler.Reconcile(ctx, ctrl.Request{
-		NamespacedName: types.NamespacedName{
-			Name:      ruleSet.Name,
-			Namespace: ruleSet.Namespace,
-		},
-	})
+	_, err = reconcileRuleSetWithRuleSources(ctx, t, nn, reconciler)
 	require.NoError(t, err)
 
 	t.Log("Verifying cache was updated with new rules and UUID changed")
@@ -395,9 +424,7 @@ func TestRuleSetReconciler_MissingRuleData(t *testing.T) {
 		Recorder: recorder,
 		Cache:    ruleSetCache,
 	}
-	result, err := reconciler.Reconcile(ctx, ctrl.Request{
-		NamespacedName: types.NamespacedName{Name: ruleSet.Name, Namespace: ruleSet.Namespace},
-	})
+	result, err := reconcileRuleSetWithRuleSources(ctx, t, types.NamespacedName{Name: ruleSet.Name, Namespace: ruleSet.Namespace}, reconciler)
 	require.NoError(t, err)
 	assert.Equal(t, reconcile.Result{}, result)
 
@@ -473,9 +500,7 @@ func TestRuleSetReconciler_DataSourcesDuplicateFileKeysLastListedWins(t *testing
 		Recorder: utils.NewTestRecorder(),
 		Cache:    ruleSetCache,
 	}
-	_, err := reconciler.Reconcile(ctx, ctrl.Request{
-		NamespacedName: types.NamespacedName{Name: ruleSet.Name, Namespace: ruleSet.Namespace},
-	})
+	_, err := reconcileRuleSetWithRuleSources(ctx, t, types.NamespacedName{Name: ruleSet.Name, Namespace: ruleSet.Namespace}, reconciler)
 	require.NoError(t, err)
 
 	cacheKey := testNamespace + "/dup-key-ruleset"
@@ -560,12 +585,8 @@ func TestRuleSetReconciler_ValidateRules(t *testing.T) {
 		})
 		t.Log("Performing initial reconciliation to populate cache")
 
-		_, err = reconciler.Reconcile(ctx, ctrl.Request{
-			NamespacedName: types.NamespacedName{
-				Name:      ruleSet.Name,
-				Namespace: ruleSet.Namespace,
-			},
-		})
+		nn := types.NamespacedName{Name: ruleSet.Name, Namespace: ruleSet.Namespace}
+		_, err = reconcileRuleSetWithRuleSources(ctx, t, nn, reconciler)
 		require.NoError(t, err)
 	})
 
@@ -591,20 +612,20 @@ func TestRuleSetReconciler_ValidateRules(t *testing.T) {
 			Namespace: ruleSet.Namespace,
 		}
 
-		_, err = reconciler.Reconcile(ctx, ctrl.Request{
-			NamespacedName: resource,
-		})
-		assert.ErrorContains(t, err, "invalid WAF config from string: unknown directive \"secdefaultactionxpto\"")
+		_, err = reconcileRuleSetWithRuleSources(ctx, t, resource, reconciler)
+		require.NoError(t, err)
 		err = k8sClient.Get(ctx, resource, ruleSet)
 		require.NoError(t, err)
 		ready := apimeta.FindStatusCondition(ruleSet.Status.Conditions, "Ready")
+		require.NotNil(t, ready)
 		assert.Equal(t, metav1.ConditionFalse, ready.Status)
-		assert.Equal(t, "InvalidRuleSet", ready.Reason)
-		assert.Contains(t, ready.Message, "RuleSource invalid-rule-src doesn't contain valid rules: invalid WAF config from string: unknown directive \"secdefaultactionxpto\"")
+		assert.Equal(t, "ReferencedRuleSourceInvalid", ready.Reason)
+		assert.Contains(t, ready.Message, "invalid-rule-src")
 		degraded := apimeta.FindStatusCondition(ruleSet.Status.Conditions, "Degraded")
+		require.NotNil(t, degraded)
 		assert.Equal(t, metav1.ConditionTrue, degraded.Status)
-		assert.Equal(t, "InvalidRuleSet", degraded.Reason)
-		assert.Contains(t, degraded.Message, "RuleSource invalid-rule-src doesn't contain valid rules: invalid WAF config from string: unknown directive \"secdefaultactionxpto\"")
+		assert.Equal(t, "ReferencedRuleSourceInvalid", degraded.Reason)
+		assert.Contains(t, degraded.Message, "invalid-rule-src")
 	})
 
 	t.Run("ruleset referring other rules should pass", func(t *testing.T) {
@@ -630,9 +651,7 @@ func TestRuleSetReconciler_ValidateRules(t *testing.T) {
 			Namespace: ruleSet.Namespace,
 		}
 
-		_, err = reconciler.Reconcile(ctx, ctrl.Request{
-			NamespacedName: resource,
-		})
+		_, err = reconcileRuleSetWithRuleSources(ctx, t, resource, reconciler)
 		require.NoError(t, err)
 		err = k8sClient.Get(ctx, resource, ruleSet)
 		require.NoError(t, err)
@@ -665,9 +684,7 @@ func TestRuleSetReconciler_ValidateRules(t *testing.T) {
 			Namespace: ruleSet.Namespace,
 		}
 
-		_, err = reconciler.Reconcile(ctx, ctrl.Request{
-			NamespacedName: resource,
-		})
+		_, err = reconcileRuleSetWithRuleSources(ctx, t, resource, reconciler)
 		require.NoError(t, err)
 		err = k8sClient.Get(ctx, resource, ruleSet)
 		require.NoError(t, err)
@@ -698,9 +715,7 @@ func TestRuleSetReconciler_ValidateRules(t *testing.T) {
 			Namespace: ruleSet.Namespace,
 		}
 
-		_, err = reconciler.Reconcile(ctx, ctrl.Request{
-			NamespacedName: resource,
-		})
+		_, err = reconcileRuleSetWithRuleSources(ctx, t, resource, reconciler)
 		require.NoError(t, err)
 		err = k8sClient.Get(ctx, resource, ruleSet)
 		require.NoError(t, err)
@@ -731,16 +746,14 @@ func TestRuleSetReconciler_ValidateRules(t *testing.T) {
 			Namespace: ruleSet.Namespace,
 		}
 
-		_, err = reconciler.Reconcile(ctx, ctrl.Request{
-			NamespacedName: resource,
-		})
-		assert.ErrorContains(t, err, "open rule1.data: data does not exist")
+		_, err = reconcileRuleSetWithRuleSources(ctx, t, resource, reconciler)
+		require.NoError(t, err)
 		err = k8sClient.Get(ctx, resource, ruleSet)
 		require.NoError(t, err)
 		ready := apimeta.FindStatusCondition(ruleSet.Status.Conditions, "Ready")
 		assert.Equal(t, metav1.ConditionFalse, ready.Status)
-		assert.Equal(t, "InvalidRuleSet", ready.Reason)
-		assert.Contains(t, ready.Message, "open rule1.data: data does not exist")
+		assert.Equal(t, "ReferencedRuleSourceInvalid", ready.Reason)
+		assert.Contains(t, ready.Message, "withdata-src")
 	})
 }
 
@@ -782,12 +795,10 @@ func TestRuleSetReconciler_UnsupportedRules(t *testing.T) {
 			Cache:    ruleSetCache,
 		}
 
-		result, err := reconciler.Reconcile(ctx, ctrl.Request{
-			NamespacedName: types.NamespacedName{
-				Name:      ruleSet.Name,
-				Namespace: ruleSet.Namespace,
-			},
-		})
+		result, err := reconcileRuleSetWithRuleSources(ctx, t, types.NamespacedName{
+			Name:      ruleSet.Name,
+			Namespace: ruleSet.Namespace,
+		}, reconciler)
 
 		require.NoError(t, err, "should not return error (non-retriable)")
 		assert.Equal(t, reconcile.Result{}, result)
@@ -854,12 +865,10 @@ func TestRuleSetReconciler_UnsupportedRules(t *testing.T) {
 			Cache:    ruleSetCache,
 		}
 
-		result, err := reconciler.Reconcile(ctx, ctrl.Request{
-			NamespacedName: types.NamespacedName{
-				Name:      ruleSet.Name,
-				Namespace: ruleSet.Namespace,
-			},
-		})
+		result, err := reconcileRuleSetWithRuleSources(ctx, t, types.NamespacedName{
+			Name:      ruleSet.Name,
+			Namespace: ruleSet.Namespace,
+		}, reconciler)
 
 		require.NoError(t, err)
 		assert.Equal(t, reconcile.Result{}, result)
@@ -928,12 +937,10 @@ func TestRuleSetReconciler_UnsupportedRules(t *testing.T) {
 			Cache:    ruleSetCache,
 		}
 
-		result, err := reconciler.Reconcile(ctx, ctrl.Request{
-			NamespacedName: types.NamespacedName{
-				Name:      ruleSet.Name,
-				Namespace: ruleSet.Namespace,
-			},
-		})
+		result, err := reconcileRuleSetWithRuleSources(ctx, t, types.NamespacedName{
+			Name:      ruleSet.Name,
+			Namespace: ruleSet.Namespace,
+		}, reconciler)
 
 		require.NoError(t, err)
 		assert.Equal(t, reconcile.Result{}, result)
@@ -987,9 +994,7 @@ func TestRuleSetReconciler_UnsupportedRules(t *testing.T) {
 			Recorder: recorder,
 			Cache:    ruleSetCache,
 		}
-		result, err := reconciler.Reconcile(ctx, ctrl.Request{
-			NamespacedName: types.NamespacedName{Name: ruleSet.Name, Namespace: ruleSet.Namespace},
-		})
+		result, err := reconcileRuleSetWithRuleSources(ctx, t, types.NamespacedName{Name: ruleSet.Name, Namespace: ruleSet.Namespace}, reconciler)
 		require.NoError(t, err)
 		assert.Equal(t, reconcile.Result{}, result)
 
@@ -1036,12 +1041,10 @@ func TestRuleSetReconciler_UnsupportedRules(t *testing.T) {
 			Cache:    ruleSetCache,
 		}
 
-		result, err := reconciler.Reconcile(ctx, ctrl.Request{
-			NamespacedName: types.NamespacedName{
-				Name:      ruleSet.Name,
-				Namespace: ruleSet.Namespace,
-			},
-		})
+		result, err := reconcileRuleSetWithRuleSources(ctx, t, types.NamespacedName{
+			Name:      ruleSet.Name,
+			Namespace: ruleSet.Namespace,
+		}, reconciler)
 
 		require.NoError(t, err)
 		assert.Equal(t, reconcile.Result{}, result)
@@ -1223,9 +1226,8 @@ func TestRuleSetReconciler_RuleSourceStatusValidated(t *testing.T) {
 		Recorder: utils.NewTestRecorder(),
 		Cache:    ruleSetCache,
 	}
-	_, err := reconciler.Reconcile(ctx, ctrl.Request{
-		NamespacedName: types.NamespacedName{Name: ruleSet.Name, Namespace: ruleSet.Namespace},
-	})
+	nn := types.NamespacedName{Name: ruleSet.Name, Namespace: ruleSet.Namespace}
+	_, err := reconcileRuleSetWithRuleSources(ctx, t, nn, reconciler)
 	require.NoError(t, err)
 
 	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: rs.Name, Namespace: rs.Namespace}, rs))
@@ -1268,9 +1270,8 @@ func TestRuleSetReconciler_RuleSourceStatusInvalidRules(t *testing.T) {
 		Recorder: utils.NewTestRecorder(),
 		Cache:    ruleSetCache,
 	}
-	_, _ = reconciler.Reconcile(ctx, ctrl.Request{
-		NamespacedName: types.NamespacedName{Name: ruleSet.Name, Namespace: ruleSet.Namespace},
-	})
+	_, err := reconcileRuleSetWithRuleSources(ctx, t, types.NamespacedName{Name: ruleSet.Name, Namespace: ruleSet.Namespace}, reconciler)
+	require.NoError(t, err)
 
 	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: "status-ok-src", Namespace: testNamespace}, validSrc))
 	validReady := apimeta.FindStatusCondition(validSrc.Status.Conditions, "Ready")
@@ -1314,9 +1315,7 @@ func TestRuleSetReconciler_RuleSourceStatusValidationSkipped(t *testing.T) {
 		Recorder: utils.NewTestRecorder(),
 		Cache:    ruleSetCache,
 	}
-	_, err := reconciler.Reconcile(ctx, ctrl.Request{
-		NamespacedName: types.NamespacedName{Name: ruleSet.Name, Namespace: ruleSet.Namespace},
-	})
+	_, err := reconcileRuleSetWithRuleSources(ctx, t, types.NamespacedName{Name: ruleSet.Name, Namespace: ruleSet.Namespace}, reconciler)
 	require.NoError(t, err)
 
 	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: rs.Name, Namespace: rs.Namespace}, rs))
@@ -1356,9 +1355,7 @@ func TestRuleSetReconciler_RuleDataStatusLoaded(t *testing.T) {
 		Recorder: utils.NewTestRecorder(),
 		Cache:    ruleSetCache,
 	}
-	_, err := reconciler.Reconcile(ctx, ctrl.Request{
-		NamespacedName: types.NamespacedName{Name: ruleSet.Name, Namespace: ruleSet.Namespace},
-	})
+	_, err := reconcileRuleSetWithRuleSources(ctx, t, types.NamespacedName{Name: ruleSet.Name, Namespace: ruleSet.Namespace}, reconciler)
 	require.NoError(t, err)
 
 	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: rd.Name, Namespace: rd.Namespace}, rd))
@@ -1398,10 +1395,8 @@ func TestRuleSetReconciler_RuleSourceStatusRecoversAfterRulesFixed(t *testing.T)
 		Recorder: utils.NewTestRecorder(),
 		Cache:    ruleSetCache,
 	}
-	// Aggregate validation still fails when any fragment is invalid; fragment status is patched first.
-	_, _ = reconciler.Reconcile(ctx, ctrl.Request{
-		NamespacedName: types.NamespacedName{Name: ruleSet.Name, Namespace: ruleSet.Namespace},
-	})
+	_, err := reconcileRuleSetWithRuleSources(ctx, t, types.NamespacedName{Name: ruleSet.Name, Namespace: ruleSet.Namespace}, reconciler)
+	require.NoError(t, err)
 
 	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: rs.Name, Namespace: rs.Namespace}, rs))
 	degraded := apimeta.FindStatusCondition(rs.Status.Conditions, "Degraded")
@@ -1413,9 +1408,7 @@ func TestRuleSetReconciler_RuleSourceStatusRecoversAfterRulesFixed(t *testing.T)
 	updated.Spec.Rules = `SecRule REQUEST_URI "@contains /ok" "id:1,phase:1,pass,nolog"`
 	require.NoError(t, k8sClient.Update(ctx, &updated))
 
-	_, err := reconciler.Reconcile(ctx, ctrl.Request{
-		NamespacedName: types.NamespacedName{Name: ruleSet.Name, Namespace: ruleSet.Namespace},
-	})
+	_, err = reconcileRuleSetWithRuleSources(ctx, t, types.NamespacedName{Name: ruleSet.Name, Namespace: ruleSet.Namespace}, reconciler)
 	require.NoError(t, err)
 
 	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: rs.Name, Namespace: rs.Namespace}, rs))
@@ -1459,9 +1452,7 @@ func TestRuleSetReconciler_RuleDataStatusRefreshesAfterSpecUpdate(t *testing.T) 
 		Recorder: utils.NewTestRecorder(),
 		Cache:    ruleSetCache,
 	}
-	_, err := reconciler.Reconcile(ctx, ctrl.Request{
-		NamespacedName: types.NamespacedName{Name: ruleSet.Name, Namespace: ruleSet.Namespace},
-	})
+	_, err := reconcileRuleSetWithRuleSources(ctx, t, types.NamespacedName{Name: ruleSet.Name, Namespace: ruleSet.Namespace}, reconciler)
 	require.NoError(t, err)
 
 	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: rd.Name, Namespace: rd.Namespace}, rd))
@@ -1475,9 +1466,7 @@ func TestRuleSetReconciler_RuleDataStatusRefreshesAfterSpecUpdate(t *testing.T) 
 	updatedRD.Spec.Files["refresh.data"] = "two"
 	require.NoError(t, k8sClient.Update(ctx, &updatedRD))
 
-	_, err = reconciler.Reconcile(ctx, ctrl.Request{
-		NamespacedName: types.NamespacedName{Name: ruleSet.Name, Namespace: ruleSet.Namespace},
-	})
+	_, err = reconcileRuleSetWithRuleSources(ctx, t, types.NamespacedName{Name: ruleSet.Name, Namespace: ruleSet.Namespace}, reconciler)
 	require.NoError(t, err)
 
 	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: rd.Name, Namespace: rd.Namespace}, rd))

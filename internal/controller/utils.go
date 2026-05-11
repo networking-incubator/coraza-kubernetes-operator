@@ -20,8 +20,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io/fs"
-	"path/filepath"
 
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
@@ -404,55 +402,6 @@ func serverSideApply(ctx context.Context, c client.Client, desired *unstructured
 		return fmt.Errorf("server-side apply %s %s/%s: %w", gvk.Kind, desired.GetNamespace(), desired.GetName(), err)
 	}
 	return nil
-}
-
-// -----------------------------------------------------------------------------
-// Error Messaging Helpers
-// -----------------------------------------------------------------------------
-
-// extractMissingFileBasename extracts the base filename from a missing-file
-// error by walking the error chain for *fs.PathError with fs.ErrNotExist.
-// Returns the basename and true when a structured PathError is found; ("", false)
-// otherwise.
-func extractMissingFileBasename(err error) (string, bool) {
-	var pathErr *fs.PathError
-	if errors.As(err, &pathErr) && errors.Is(pathErr.Err, fs.ErrNotExist) {
-		return filepath.Base(pathErr.Path), true
-	}
-	return "", false
-}
-
-// sanitizeErrorMessage replaces filesystem paths in missing-file errors with
-// just the base filename to prevent disclosure of container-internal paths.
-//
-// Detection order:
-//  1. Structured: walk error chain for *fs.PathError + fs.ErrNotExist.
-//  2. Fail-safe: if errors.Is(err, fs.ErrNotExist) but no PathError found,
-//     return a generic redacted message.
-//  3. Non-file errors pass through unchanged.
-func sanitizeErrorMessage(err error) error {
-	if basename, ok := extractMissingFileBasename(err); ok {
-		return fmt.Errorf("open %s: data does not exist", basename)
-	}
-	if errors.Is(err, fs.ErrNotExist) {
-		return errors.New("validation failed: referenced file does not exist (path redacted)")
-	}
-	return err
-}
-
-// shouldSkipMissingFileError reports whether a missing-file validation error
-// should be skipped because the file is present in secretData. Uses the same
-// structured extraction as sanitizeErrorMessage for consistency.
-func shouldSkipMissingFileError(err error, secretData map[string][]byte) bool {
-	if secretData == nil {
-		return false
-	}
-	basename, ok := extractMissingFileBasename(err)
-	if !ok {
-		return false
-	}
-	_, exists := secretData[basename]
-	return exists
 }
 
 // buildCacheReadyMessage constructs the Ready condition message after successful

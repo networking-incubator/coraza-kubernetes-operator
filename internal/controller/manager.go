@@ -62,6 +62,13 @@ func SetupControllers(mgr ctrl.Manager, rulesetCache *cache.RuleSetCache, envoyC
 		return fmt.Errorf("unable to create controller RuleSet: %w", err)
 	}
 
+	if err := (&RuleSourceReconciler{
+		Client:   mgr.GetClient(),
+		Recorder: mgr.GetEventRecorder("rulesource-controller"),
+	}).SetupWithManager(mgr); err != nil {
+		return fmt.Errorf("unable to create controller RuleSource: %w", err)
+	}
+
 	if err := (&EngineReconciler{
 		Client:                    mgr.GetClient(),
 		Scheme:                    mgr.GetScheme(),

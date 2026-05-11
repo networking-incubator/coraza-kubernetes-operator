@@ -63,20 +63,20 @@ The Engine could not reach its desired state. Common reasons:
 
 ## RuleSource Conditions
 
-RuleSource status is updated by the RuleSet reconciler when a RuleSet references the source. If a RuleSource is not referenced by any RuleSet, its status reflects the last reconciliation that touched it.
+RuleSource status is updated by the **RuleSource** reconciler whenever the object’s spec generation changes (or the per-source validation annotation changes). Per-source validation does not load RuleSet-scoped **RuleData**; aggregate validation on the RuleSet still runs with the merged virtual filesystem when a RuleSet references this source.
 
 ### Ready
 
-The RuleSource has been loaded and validated (or validation was skipped) by a RuleSet reconciliation.
+The operator has validated `spec.rules` with Coraza, or validation was skipped via annotation.
 
 | Reason | Description |
 |--------|-------------|
-| `Validated` | Per-fragment Coraza rule validation passed. |
+| `Validated` | Per-source Coraza rule validation passed (without RuleSet-scoped RuleData). |
 | `ValidationSkipped` | Validation was skipped via the `waf.k8s.coraza.io/rule-validation: "false"` annotation. |
 
 ### Degraded
 
-Per-fragment rule validation failed.
+Per-source rule validation failed.
 
 | Reason | Description | Resolution |
 |--------|-------------|------------|
@@ -104,7 +104,7 @@ The rules have been compiled, validated, and cached. When the `Ready` condition 
 
 ### Progressing
 
-The RuleSet is being processed. This happens when the **RuleSet** or a referenced **RuleSource** or **RuleData** changes.
+The RuleSet is being processed. This happens when the **RuleSet** or a referenced **RuleSource** or **RuleData** changes. While waiting for **RuleSource** validation status to match the current source generation, the **reason** may be `AwaitingRuleSourceValidation` (the message lists pending source names).
 
 ### Degraded
 
@@ -113,7 +113,8 @@ The RuleSet could not be compiled or cached. Common reasons:
 | Reason | Description | Resolution |
 |--------|-------------|------------|
 | `UnsupportedRules` | The RuleSet contains rules not supported in the current execution environment. | Remove the unsupported rules, or add the annotation `waf.k8s.coraza.io/skip-unsupported-rules-check: "true"` to the RuleSet. |
-| `InvalidRuleSet` | Rule validation or compilation failed (e.g. syntax or validation error in a RuleSource or in the aggregate). | Check the condition message. Fix the SecLang in the **RuleSource** (or the RuleSet’s ordering / references) as indicated. |
+| `InvalidRuleSet` | Aggregate rule validation or compilation failed after all referenced sources were individually valid. | Check the condition message. Fix SecLang ordering, references, or RuleData-backed directives as indicated. |
+| `ReferencedRuleSourceInvalid` | A referenced **RuleSource** is in `Degraded` with `InvalidRules` for its current spec generation. | Fix the **RuleSource** `spec.rules` (see that object’s status message). |
 | `RuleSourceNotFound` | A RuleSource named in `spec.sources` does not exist. | Create the RuleSource or correct the name; it must be in the same namespace as the RuleSet. |
 | `RuleSourceAccessError` | The operator could not read a referenced RuleSource. | Check RBAC and API errors in operator logs. |
 | `RuleDataNotFound` | A RuleData named in `spec.data` does not exist. | Create the RuleData or correct the name. |
@@ -154,10 +155,11 @@ logging:
 
 **RuleSet stays in Progressing state**
 
-The operator may be waiting for referenced **RuleSource** or **RuleData** objects. Verify they exist in the same namespace as the RuleSet:
+The operator may be waiting for referenced **RuleSource** or **RuleData** objects, or for **RuleSource** validation to complete (`AwaitingRuleSourceValidation`). Verify sources and data exist in the same namespace as the RuleSet and inspect RuleSource status:
 
 ```bash
 kubectl get rulesource,ruledata -n my-namespace
+kubectl describe rulesource <name> -n my-namespace
 ```
 
 **Engine is Ready but traffic is not filtered**

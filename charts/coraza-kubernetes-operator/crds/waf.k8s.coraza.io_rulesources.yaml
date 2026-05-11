@@ -65,8 +65,8 @@ spec:
                   Each condition has a unique type and reflects the status of a specific aspect of the resource.
 
                   Standard condition types include:
-                  - "Ready": the RuleSource has been loaded and validated by at least one RuleSet
-                  - "Degraded": per-fragment rule validation failed
+                  - "Ready": the operator has validated the RuleSource spec.rules (Coraza), or validation was skipped by annotation
+                  - "Degraded": per-source rule validation failed
 
                   The status of each condition is one of True, False, or Unknown.
                 items:

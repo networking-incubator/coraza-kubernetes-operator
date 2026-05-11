@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 A Kubernetes operator that manages Web Application Firewall (WAF) deployments using Coraza, integrated with Istio via WASM plugins. CRDs include **RuleSource** (stores SecLang rule text), **RuleData** (stores data files for `@pmFromFile`), **RuleSet** (ordered `spec.sources` listing RuleSource names + optional `spec.data` listing RuleData names), and **Engine** (attaches a RuleSet to a Gateway via Istio WasmPlugin).
 
-Data flow: `RuleSources + RuleData + RuleSet → RuleSetReconciler → RuleSetCache (HTTP server) → WASM plugin in Envoy → traffic filtering`
+Data flow: `RuleSource (validated by RuleSourceReconciler) + RuleData + RuleSet → RuleSetReconciler → RuleSetCache (HTTP server) → WASM plugin in Envoy → traffic filtering`
 
 ## Build, test, and lint commands
 
@@ -47,12 +47,13 @@ make clean.cluster.kind     # Destroy it
 
 ## Architecture
 
-### Two controllers, shared cache
+### Controllers and shared cache
 
-- **RuleSetReconciler** — watches RuleSet + referenced RuleSources + referenced RuleData (`get`/`list`/`watch` on `rulesources` and `ruledata` in its namespace only). Aggregates rules from RuleSources and data files from RuleData, validates via Coraza, checks for WASM-unsupported rules, stores in RuleSetCache.
+- **RuleSourceReconciler** — watches `RuleSource` (spec generation and validation annotation). Validates `spec.rules` with Coraza (without RuleSet-scoped RuleData; aggregate validation on the RuleSet remains authoritative for `@pmFromFile`) and patches **RuleSource** status (`Validated`, `InvalidRules`, or `ValidationSkipped`).
+- **RuleSetReconciler** — watches RuleSet + referenced RuleSources + referenced RuleData. Gates on **RuleSource** status before aggregating; merges rules and RuleData, runs aggregate Coraza validation, checks for WASM-unsupported rules, stores in RuleSetCache.
 - **EngineReconciler** — watches Engine + referenced RuleSet + Gateways + Pods. When RuleSet is ready, applies a WasmPlugin resource (server-side apply) and discovers matched Gateway pods.
 
-Both are initialized in `internal/controller/manager.go` with a shared `RuleSetCache`.
+RuleSet and Engine reconcilers are initialized in `internal/controller/manager.go` with a shared `RuleSetCache`; the RuleSource reconciler shares the same manager client.
 
 ### RuleSet cache server
 
@@ -66,7 +67,7 @@ When `--operator-name` is set, the manager creates a ServiceEntry + DestinationR
 
 - `api/v1alpha1/` — CRD types (Engine, RuleSet, RuleSource, RuleData, DriverConfig)
 - `internal/controller/` — reconcilers and watch setup
-- `internal/rulesets/` — cache, memfs (virtual FS for rule validation), unsupported rule detection
+- `internal/rulesets/` — cache, memfs (virtual FS for rule validation), unsupported rule detection, `validation/` (shared Coraza helpers for rule text)
 - `cmd/manager/` — operator entry point
 - `cmd/kubectl-coraza/` — CLI plugin for rule generation
 - `test/framework/` — integration test helpers (Scenario pattern, port-forwarding, assertions)

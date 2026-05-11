@@ -47,13 +47,16 @@ import (
 // +kubebuilder:rbac:groups=waf.k8s.coraza.io,resources=rulesets,verbs=get;list;watch;patch;update
 // +kubebuilder:rbac:groups=waf.k8s.coraza.io,resources=rulesets/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=waf.k8s.coraza.io,resources=rulesources,verbs=get;list;watch
-// +kubebuilder:rbac:groups=waf.k8s.coraza.io,resources=rulesources/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=waf.k8s.coraza.io,resources=ruledata,verbs=get;list;watch
 // +kubebuilder:rbac:groups=waf.k8s.coraza.io,resources=ruledata/status,verbs=get;update;patch
 
 // -----------------------------------------------------------------------------
 // RuleSetReconciler
 // -----------------------------------------------------------------------------
+
+// ruleSourceValidationRequeue is used when a RuleSet is waiting on RuleSource
+// validation status before aggregate validation can run.
+const ruleSourceValidationRequeue = 3 * time.Second
 
 // RuleSetReconciler reconciles a RuleSet object
 type RuleSetReconciler struct {
@@ -95,10 +98,7 @@ func (r *RuleSetReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(
 			&wafv1alpha1.RuleSource{},
 			handler.EnqueueRequestsFromMapFunc(r.findRuleSetsForRuleSource),
-			builder.WithPredicates(predicate.Or(
-				predicate.GenerationChangedPredicate{},
-				annotationChangedPredicate(wafv1alpha1.AnnotationSkipValidation),
-			)),
+			builder.WithPredicates(ruleSourceWatchPredicate()),
 		).
 		Watches(
 			&wafv1alpha1.RuleData{},
@@ -159,9 +159,12 @@ func (r *RuleSetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	}
 
 	logDebug(log, req, "RuleSet", "Loading RuleSource objects")
-	aggregatedRules, aggregatedErrors, done, err := r.loadSources(ctx, log, req, &ruleset, dataFiles)
-	if done || err != nil {
+	aggregatedRules, done, requeueAfter, err := r.loadSources(ctx, log, req, &ruleset)
+	if err != nil {
 		return ctrl.Result{}, err
+	}
+	if done {
+		return ctrl.Result{RequeueAfter: requeueAfter}, nil
 	}
 
 	logInfo(log, req, "RuleSet", "Validating aggregated rules")
@@ -170,7 +173,7 @@ func (r *RuleSetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	if fsRules != nil {
 		conf = conf.WithRootFS(fsRules)
 	}
-	if err := r.validateAggregatedRules(ctx, log, req, &ruleset, conf, aggregatedErrors); err != nil {
+	if err := r.validateAggregatedRules(ctx, log, req, &ruleset, conf); err != nil {
 		return ctrl.Result{}, err
 	}
 
@@ -203,6 +206,20 @@ func (r *RuleSetReconciler) initializeStatus(ctx context.Context, log logr.Logge
 	applyStatusProgressing(&ruleset.Status.Conditions, ruleset.Generation, "Reconciling", "Starting reconciliation")
 	if err := r.Status().Patch(ctx, ruleset, patch); err != nil {
 		logAPIError(log, req, "RuleSet", err, "Failed to patch initial status", ruleset)
+		return err
+	}
+	logConditionTransitions(log, req, "RuleSet", before, ruleset.Status.Conditions)
+	return nil
+}
+
+// patchRuleSetAwaitingRuleSources marks the RuleSet as Progressing while
+// referenced RuleSources are not yet validated by the RuleSource controller.
+func (r *RuleSetReconciler) patchRuleSetAwaitingRuleSources(ctx context.Context, log logr.Logger, req ctrl.Request, ruleset *wafv1alpha1.RuleSet, message string) error {
+	patch := client.MergeFrom(ruleset.DeepCopy())
+	before := snapshotConditions(ruleset.Status.Conditions)
+	applyStatusProgressing(&ruleset.Status.Conditions, ruleset.Generation, "AwaitingRuleSourceValidation", message)
+	if err := r.Status().Patch(ctx, ruleset, patch); err != nil {
+		logAPIError(log, req, "RuleSet", err, "Failed to patch status", ruleset)
 		return err
 	}
 	logConditionTransitions(log, req, "RuleSet", before, ruleset.Status.Conditions)
