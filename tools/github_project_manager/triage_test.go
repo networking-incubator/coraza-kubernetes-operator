@@ -183,11 +183,11 @@ func TestComputeSizeLabels(t *testing.T) {
 		{
 			name:   "accepted without size adds needs-sizing",
 			labels: []string{"triage/accepted"},
-			want:   []string{"size/needs-sizing"},
+			want:   []string{"tshirt-size/needs-sizing"},
 		},
 		{
 			name:   "accepted with size label is a no-op",
-			labels: []string{"triage/accepted", "size/M"},
+			labels: []string{"triage/accepted", "tshirt-size/M"},
 			want:   nil,
 		},
 		{

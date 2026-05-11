@@ -167,11 +167,11 @@ func computeAreaLabels(labels []string, body string) []string {
 	return out
 }
 
-// computeSizeLabels returns "size/needs-sizing" when the issue is
-// triage/accepted but has no size/* label.
+// computeSizeLabels returns "tshirt-size/needs-sizing" when the issue is
+// triage/accepted but has no tshirt-size/* label.
 func computeSizeLabels(labels []string) []string {
-	if slices.Contains(labels, "triage/accepted") && !hasLabelPrefix(labels, "size/") {
-		return []string{"size/needs-sizing"}
+	if slices.Contains(labels, "triage/accepted") && !hasLabelPrefix(labels, "tshirt-size/") {
+		return []string{"tshirt-size/needs-sizing"}
 	}
 
 	return nil
