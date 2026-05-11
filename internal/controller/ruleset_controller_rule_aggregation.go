@@ -9,7 +9,6 @@ import (
 	"github.com/corazawaf/coraza/v3"
 	"github.com/go-logr/logr"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 
@@ -95,7 +94,7 @@ func (r *RuleSetReconciler) loadData(
 			return nil, true, err
 		}
 
-		if !isConditionCurrent(rd.Status.Conditions, conditionReady, metav1.ConditionTrue, "Loaded", rd.Generation) {
+		if !isConditionCurrent(rd.Status.Conditions, conditionReady, "Loaded", rd.Generation) {
 			rdReq := ctrl.Request{NamespacedName: types.NamespacedName{Name: rd.Name, Namespace: rd.Namespace}}
 			if patchErr := patchReady(ctx, r.Status(), r.Recorder, log, rdReq, "RuleData", &rd, &rd.Status.Conditions, rd.Generation, "Loaded", "Data loaded successfully"); patchErr != nil {
 				return nil, true, patchErr
@@ -174,14 +173,14 @@ func (r *RuleSetReconciler) loadSources(
 				logDebug(log, req, "RuleSet", "RuleSource validation issue recorded", "ruleSourceName", frag.name, "error", validationErr.Error())
 				aggregatedErrors = append(aggregatedErrors, validationErr)
 
-				if !isConditionCurrent(frag.source.Status.Conditions, conditionDegraded, metav1.ConditionTrue, "InvalidRules", frag.source.Generation) {
+				if !isConditionCurrent(frag.source.Status.Conditions, conditionDegraded, "InvalidRules", frag.source.Generation) {
 					srcReq := ctrl.Request{NamespacedName: types.NamespacedName{Name: frag.source.Name, Namespace: frag.source.Namespace}}
 					if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, srcReq, "RuleSource", frag.source, &frag.source.Status.Conditions, frag.source.Generation, "InvalidRules", validationErr.Error()); patchErr != nil {
 						return "", nil, true, patchErr
 					}
 				}
 			} else {
-				if !isConditionCurrent(frag.source.Status.Conditions, conditionReady, metav1.ConditionTrue, "Validated", frag.source.Generation) {
+				if !isConditionCurrent(frag.source.Status.Conditions, conditionReady, "Validated", frag.source.Generation) {
 					srcReq := ctrl.Request{NamespacedName: types.NamespacedName{Name: frag.source.Name, Namespace: frag.source.Namespace}}
 					if patchErr := patchReady(ctx, r.Status(), r.Recorder, log, srcReq, "RuleSource", frag.source, &frag.source.Status.Conditions, frag.source.Generation, "Validated", "Rules validated successfully"); patchErr != nil {
 						return "", nil, true, patchErr
@@ -189,7 +188,7 @@ func (r *RuleSetReconciler) loadSources(
 				}
 			}
 		} else {
-			if !isConditionCurrent(frag.source.Status.Conditions, conditionReady, metav1.ConditionTrue, "ValidationSkipped", frag.source.Generation) {
+			if !isConditionCurrent(frag.source.Status.Conditions, conditionReady, "ValidationSkipped", frag.source.Generation) {
 				srcReq := ctrl.Request{NamespacedName: types.NamespacedName{Name: frag.source.Name, Namespace: frag.source.Namespace}}
 				if patchErr := patchReady(ctx, r.Status(), r.Recorder, log, srcReq, "RuleSource", frag.source, &frag.source.Status.Conditions, frag.source.Generation, "ValidationSkipped", "Per-fragment validation skipped by annotation"); patchErr != nil {
 					return "", nil, true, patchErr
