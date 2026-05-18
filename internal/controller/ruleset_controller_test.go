@@ -523,8 +523,9 @@ func TestRuleSetReconciler_ValidateRules(t *testing.T) {
 	}
 
 	ruleSources := []struct {
-		name    string
-		content string
+		name        string
+		content     string
+		annotations map[string]string
 	}{
 		{
 			name:    "update-rules-src",
@@ -541,6 +542,9 @@ func TestRuleSetReconciler_ValidateRules(t *testing.T) {
 		{
 			name:    "referother-src",
 			content: "SecRuleUpdateTargetById 12345 \"REMOTE_ADDR\"",
+			// Directive only compiles once rule 12345 exists in the aggregated
+			// RuleSet; per-source Coraza validation cannot see other sources.
+			annotations: map[string]string{wafv1alpha1.AnnotationSkipValidation: "false"},
 		},
 		{
 			name:    "withdata-src",
@@ -549,6 +553,12 @@ func TestRuleSetReconciler_ValidateRules(t *testing.T) {
 	}
 	for _, rule := range ruleSources {
 		rs := utils.NewTestRuleSource(rule.name, "default", rule.content)
+		if rule.annotations != nil {
+			rs.Annotations = make(map[string]string, len(rule.annotations))
+			for k, v := range rule.annotations {
+				rs.Annotations[k] = v
+			}
+		}
 		err := k8sClient.Create(ctx, rs)
 		require.NoError(t, err)
 		t.Cleanup(func() {
@@ -752,8 +762,8 @@ func TestRuleSetReconciler_ValidateRules(t *testing.T) {
 		require.NoError(t, err)
 		ready := apimeta.FindStatusCondition(ruleSet.Status.Conditions, "Ready")
 		assert.Equal(t, metav1.ConditionFalse, ready.Status)
-		assert.Equal(t, "ReferencedRuleSourceInvalid", ready.Reason)
-		assert.Contains(t, ready.Message, "withdata-src")
+		assert.Equal(t, "InvalidRuleSet", ready.Reason)
+		assert.Contains(t, ready.Message, "rule1.data")
 	})
 }
 

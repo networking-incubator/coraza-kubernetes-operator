@@ -31,7 +31,7 @@ func (r *RuleSetReconciler) validateAggregatedRules(
 		if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "RuleSet", ruleset, &ruleset.Status.Conditions, ruleset.Generation, "InvalidRuleSet", msg); patchErr != nil {
 			return patchErr
 		}
-		return validation.SanitizeErrorMessage(err)
+		return nil
 	}
 	return nil
 }

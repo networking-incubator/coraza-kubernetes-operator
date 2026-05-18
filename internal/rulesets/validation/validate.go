@@ -49,23 +49,29 @@ func SanitizeErrorMessage(err error) error {
 }
 
 // ShouldSkipMissingFileError reports whether a missing-file validation error
-// should be skipped because the file is present in dataFiles.
+// should be skipped. When dataFiles is nil (RuleSource reconciler path, no
+// RuleSet-scoped RuleData merged), any missing-file error is skipped so
+// aggregate RuleSet validation remains authoritative for @pmFromFile. When
+// dataFiles is non-nil, the error is skipped only if basename exists in the
+// map (use an empty non-nil map to require resolution without providing files).
 func ShouldSkipMissingFileError(err error, dataFiles map[string][]byte) bool {
-	if dataFiles == nil {
-		return false
-	}
 	basename, ok := ExtractMissingFileBasename(err)
 	if !ok {
 		return false
+	}
+	if dataFiles == nil {
+		return true
 	}
 	_, exists := dataFiles[basename]
 	return exists
 }
 
 // ValidateRuleSourceRules validates SecLang rule text via Coraza. dataFiles
-// supplies filenames for @pmFromFile; nil means no files (RuleSource
-// controller path). RuleSet aggregate validation remains authoritative when
-// RuleData is only attached at RuleSet scope.
+// supplies in-memory files for @pmFromFile resolution. nil means no files are
+// provided: missing-file errors are skipped (RuleSource controller path).
+// Pass a non-nil map (including an empty map) to require that missing files
+// appear in the map. RuleSet aggregate validation remains authoritative for
+// cross-source and full RuleData-backed rules.
 func ValidateRuleSourceRules(rules, ruleSourceName string, dataFiles map[string][]byte) error {
 	conf := coraza.NewWAFConfig().WithDirectives(rules)
 	if _, err := coraza.NewWAF(conf); err != nil {

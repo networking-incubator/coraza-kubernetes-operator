@@ -172,10 +172,10 @@ func TestShouldSkipMissingFileError(t *testing.T) {
 		want       bool
 	}{
 		{
-			name:       "nil secretData always returns false",
+			name:       "nil secretData skips missing file (defer to aggregate)",
 			err:        &fs.PathError{Op: "open", Path: "/path/to/rule.data", Err: fs.ErrNotExist},
 			secretData: nil,
-			want:       false,
+			want:       true,
 		},
 		{
 			name:       "basename found in secretData",
@@ -246,10 +246,10 @@ func TestValidateRuleSourceRules(t *testing.T) {
 		assert.NoError(t, err)
 	})
 
-	t.Run("missing file error is reported when file not in dataFiles", func(t *testing.T) {
+	t.Run("missing file error is reported when file not in non-nil dataFiles", func(t *testing.T) {
 		err := ValidateRuleSourceRules(
 			`SecRule REQUEST_URI "@pmFromFile missing.data" "id:1,phase:1,deny"`,
-			"data-rs", nil,
+			"data-rs", map[string][]byte{},
 		)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "data-rs")
@@ -259,5 +259,13 @@ func TestValidateRuleSourceRules(t *testing.T) {
 				assert.NotContains(t, msg, leak, "validation error leaked a filesystem path segment")
 			}
 		}
+	})
+
+	t.Run("nil dataFiles skips missing file for operator validation path", func(t *testing.T) {
+		err := ValidateRuleSourceRules(
+			`SecRule REQUEST_URI "@pmFromFile only-at-ruleset.data" "id:1,phase:1,deny"`,
+			"defer-rs", nil,
+		)
+		assert.NoError(t, err)
 	})
 }

@@ -113,7 +113,7 @@ The RuleSet could not be compiled or cached. Common reasons:
 | Reason | Description | Resolution |
 |--------|-------------|------------|
 | `UnsupportedRules` | The RuleSet contains rules not supported in the current execution environment. | Remove the unsupported rules, or add the annotation `waf.k8s.coraza.io/skip-unsupported-rules-check: "true"` to the RuleSet. |
-| `InvalidRuleSet` | Aggregate rule validation or compilation failed after all referenced sources were individually valid. | Check the condition message. Fix SecLang ordering, references, or RuleData-backed directives as indicated. |
+| `InvalidRuleSet` | Aggregate validation failed (including `@pmFromFile` references that are not backed by a key in merged **RuleData**). | Add or fix `spec.data` so every `@pmFromFile` basename exists in the referenced RuleData objects; fix other SecLang issues in the message. |
 | `ReferencedRuleSourceInvalid` | A referenced **RuleSource** is in `Degraded` with `InvalidRules` for its current spec generation. | Fix the **RuleSource** `spec.rules` (see that object’s status message). |
 | `RuleSourceNotFound` | A RuleSource named in `spec.sources` does not exist. | Create the RuleSource or correct the name; it must be in the same namespace as the RuleSet. |
 | `RuleSourceAccessError` | The operator could not read a referenced RuleSource. | Check RBAC and API errors in operator logs. |

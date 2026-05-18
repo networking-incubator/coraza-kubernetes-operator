@@ -38,6 +38,7 @@ import (
 
 	wafv1alpha1 "github.com/networking-incubator/coraza-kubernetes-operator/api/v1alpha1"
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/rulesets/cache"
+	"github.com/networking-incubator/coraza-kubernetes-operator/internal/rulesets/validation"
 )
 
 // -----------------------------------------------------------------------------
@@ -168,6 +169,13 @@ func (r *RuleSetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	}
 
 	logInfo(log, req, "RuleSet", "Validating aggregated rules")
+	if err := validation.ValidatePMFromFileData(aggregatedRules, dataFiles); err != nil {
+		msg := fmt.Sprintf("Ruleset is invalid\n%v", err)
+		if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "RuleSet", &ruleset, &ruleset.Status.Conditions, ruleset.Generation, "InvalidRuleSet", msg); patchErr != nil {
+			return ctrl.Result{}, patchErr
+		}
+		return ctrl.Result{}, nil
+	}
 	fsRules := getDataFilesystem(dataFiles)
 	conf := coraza.NewWAFConfig().WithDirectives(aggregatedRules)
 	if fsRules != nil {
