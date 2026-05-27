@@ -40,6 +40,7 @@ import (
 	"github.com/networking-incubator/coraza-kubernetes-operator/test/framework"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/require"
+	"gopkg.in/yaml.v3"
 )
 
 const (
@@ -48,6 +49,9 @@ const (
 
 	// gwName defines the gateway name for this test
 	gwName = "gateway-conformance"
+
+	// request999RuleSource is the CRS patch-only RuleSource annotated for skip-validation.
+	request999RuleSource = "request-999-common-exceptions-after"
 )
 
 // TestCoreRuleSetConformance executes a Coreruleset conformance test. It will use the
@@ -118,6 +122,8 @@ func TestCoreRuleSetConformance(t *testing.T) {
 	// -------------------------------------------------------------------------
 
 	s.Step("deploy coreruleset-compatible rules")
+	requireRuleSourceAnnotationInManifest(t, ruleLocation, request999RuleSource,
+		wafv1alpha1.AnnotationSkipValidation, "false")
 	// CRS contains rules that the operator flags as unsupported in WASM mode
 	// (see LIMITATIONS.md). Inject the skip annotation into the RuleSet manifest
 	// BEFORE applying so the very first reconciliation sees it. Annotating after
@@ -126,6 +132,8 @@ func TestCoreRuleSetConformance(t *testing.T) {
 		wafv1alpha1.AnnotationSkipUnsupportedRulesCheck, "true")
 	s.OnCleanup(func() { _ = os.Remove(annotatedManifest) })
 	s.ApplyManifest(ns, annotatedManifest)
+	s.ExpectRuleSourceAnnotation(ns, request999RuleSource,
+		wafv1alpha1.AnnotationSkipValidation, "false")
 	s.ExpectRuleSetReady(ns, rulesetName)
 
 	// -------------------------------------------------------------------------
@@ -319,6 +327,41 @@ func buildOutput(t *testing.T) *output.Output {
 		})
 	}
 	return output.NewOutput(outputFormat, outputFile)
+}
+
+// requireRuleSourceAnnotationInManifest asserts a RuleSource document in the
+// manifest has the expected metadata annotation before apply.
+func requireRuleSourceAnnotationInManifest(t *testing.T, path, ruleSourceName, key, value string) {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	require.NoError(t, err, "read manifest %s", path)
+
+	found := false
+	for _, doc := range strings.Split(string(data), "---") {
+		doc = strings.TrimSpace(doc)
+		if doc == "" {
+			continue
+		}
+		var m map[string]any
+		if err := yaml.Unmarshal([]byte(doc), &m); err != nil {
+			continue
+		}
+		if m["kind"] != "RuleSource" {
+			continue
+		}
+		meta, _ := m["metadata"].(map[string]any)
+		if meta == nil || meta["name"] != ruleSourceName {
+			continue
+		}
+		found = true
+		anns, _ := meta["annotations"].(map[string]any)
+		require.NotNil(t, anns, "RuleSource %q missing annotations", ruleSourceName)
+		got, ok := anns[key]
+		require.True(t, ok, "RuleSource %q missing annotation %q", ruleSourceName, key)
+		require.Equal(t, value, fmt.Sprint(got), "RuleSource %q annotation %q", ruleSourceName, key)
+		break
+	}
+	require.True(t, found, "RuleSource %q not found in manifest %s", ruleSourceName, path)
 }
 
 // injectRuleSetAnnotation reads a multi-document YAML manifest file and adds

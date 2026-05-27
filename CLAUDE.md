@@ -49,7 +49,7 @@ make clean.cluster.kind     # Destroy it
 
 ### Controllers and shared cache
 
-- **RuleSourceReconciler** — watches `RuleSource` (spec generation and validation annotation). Validates `spec.rules` with Coraza (without RuleSet-scoped RuleData; aggregate validation on the RuleSet remains authoritative for `@pmFromFile`) and patches **RuleSource** status (`Validated`, `InvalidRules`, or `ValidationSkipped`).
+- **RuleSourceReconciler** — watches `RuleSource` (spec generation and validation annotation). Validates `spec.rules` with Coraza per fragment (skips patch-only fragments that contain only `SecRuleUpdate*` / `SecRuleRemove*`; without RuleSet-scoped RuleData; aggregate validation on the RuleSet remains authoritative for `@pmFromFile`) and patches **RuleSource** status (`Validated`, `InvalidRules`, or `ValidationSkipped`).
 - **RuleSetReconciler** — watches RuleSet + referenced RuleSources + referenced RuleData. Gates on **RuleSource** status before aggregating; merges rules and RuleData, runs aggregate Coraza validation, checks for WASM-unsupported rules, stores in RuleSetCache.
 - **EngineReconciler** — watches Engine + referenced RuleSet + Gateways + Pods. When RuleSet is ready, applies a WasmPlugin resource (server-side apply) and discovers matched Gateway pods.
 
@@ -157,5 +157,5 @@ s.Step("verify behavior")
 - `framework.DefaultTimeout` / `framework.DefaultInterval` — never hardcode durations
 
 ### Skip validation annotations
-- RuleSources: `waf.k8s.coraza.io/rule-validation: "false"` — skips per-source Coraza rule validation
+- RuleSources: `waf.k8s.coraza.io/rule-validation: "false"` — skips per-source Coraza rule validation (also emitted by `kubectl coraza generate coreruleset --skip-validation-rulesource`); patch-only fragments (`SecRuleUpdate*` / `SecRuleRemove*` only) are accepted without this annotation via `IsPatchOnlyFragment` in validation
 - RuleSets: `waf.k8s.coraza.io/skip-unsupported-rules-check: "true"` — prevents degrading on unsupported rules

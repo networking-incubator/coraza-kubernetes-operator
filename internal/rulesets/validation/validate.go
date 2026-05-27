@@ -73,6 +73,9 @@ func ShouldSkipMissingFileError(err error, dataFiles map[string][]byte) bool {
 // appear in the map. RuleSet aggregate validation remains authoritative for
 // cross-source and full RuleData-backed rules.
 func ValidateRuleSourceRules(rules, ruleSourceName string, dataFiles map[string][]byte) error {
+	if IsPatchOnlyFragment(rules) {
+		return nil
+	}
 	conf := coraza.NewWAFConfig().WithDirectives(rules)
 	if _, err := coraza.NewWAF(conf); err != nil {
 		if ShouldSkipMissingFileError(err, dataFiles) {

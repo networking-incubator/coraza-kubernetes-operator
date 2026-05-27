@@ -198,13 +198,18 @@ func rulesetYAML(sourceNames []string, opts Options, includeData bool) string {
 	return formatRuleSetYAML(opts.RuleSetName, opts.Namespace, sourceNames, dataSourceName)
 }
 
-func formatRuleSourceYAML(name, namespace, indentedRules string) string {
+func formatRuleSourceYAML(name, namespace, indentedRules string, skipValidation bool) string {
 	var b strings.Builder
 	b.WriteString("apiVersion: waf.k8s.coraza.io/v1alpha1\nkind: RuleSource\nmetadata:\n")
 	if namespace != "" {
 		fmt.Fprintf(&b, "  namespace: %s\n", namespace)
 	}
-	fmt.Fprintf(&b, "  name: %s\nspec:\n  rules: |\n%s\n", name, indentedRules)
+	fmt.Fprintf(&b, "  name: %s\n", name)
+	if skipValidation {
+		b.WriteString("  annotations:\n")
+		fmt.Fprintf(&b, "    %s: \"false\"\n", ruleValidationAnnotationKey())
+	}
+	fmt.Fprintf(&b, "spec:\n  rules: |\n%s\n", indentedRules)
 	return b.String()
 }
 

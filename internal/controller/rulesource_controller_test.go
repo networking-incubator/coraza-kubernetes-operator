@@ -66,6 +66,27 @@ func TestRuleSourceReconciler_InvalidRules(t *testing.T) {
 	assert.Equal(t, ruleSourceDegradedReasonInvalidRules, deg.Reason)
 }
 
+func TestRuleSourceReconciler_PatchOnlyFragment(t *testing.T) {
+	ctx := context.Background()
+	rs := utils.NewTestRuleSource("rs-ctrl-patch-only", testNamespace,
+		`SecRuleUpdateTargetById 932240 "!REQUEST_COOKIES:/^_ga(?:_\w+)?$/"`)
+	require.NoError(t, k8sClient.Create(ctx, rs))
+	t.Cleanup(func() { _ = k8sClient.Delete(ctx, rs) })
+
+	rec := &RuleSourceReconciler{Client: k8sClient, Recorder: utils.NewTestRecorder()}
+	_, err := rec.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: rs.Name, Namespace: rs.Namespace}})
+	require.NoError(t, err)
+
+	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: rs.Name, Namespace: rs.Namespace}, rs))
+	ready := apimeta.FindStatusCondition(rs.Status.Conditions, conditionReady)
+	require.NotNil(t, ready)
+	assert.Equal(t, metav1.ConditionTrue, ready.Status)
+	assert.Equal(t, ruleSourceReadyReasonValidated, ready.Reason)
+
+	deg := apimeta.FindStatusCondition(rs.Status.Conditions, conditionDegraded)
+	assert.Nil(t, deg)
+}
+
 func TestRuleSourceReconciler_ValidationSkipped(t *testing.T) {
 	ctx := context.Background()
 	rs := utils.NewTestRuleSource("rs-ctrl-skip", testNamespace, "SecCollectionTimeout 1")

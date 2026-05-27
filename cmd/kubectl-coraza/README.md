@@ -36,6 +36,7 @@ Reads `*.conf` and optional `*.data` from a single directory (non-recursive). Ou
 | `--data-source-name` | `RuleData` name for `*.data` files (default `coreruleset-data`) |
 | `--ignore-rules` | Comma-separated rule IDs to drop |
 | `--ignore-unsupported-rules` | Unsupported-rule profile to exclude (default `wasm`); set to `none` to emit full CRS (see `LIMITATIONS.md`) |
+| `--skip-validation-rulesource` | Comma-separated RuleSource names (final name after prefix/suffix) to annotate with `rule-validation: "false"` |
 | `--ignore-pmFromFile` | Strip `SecRule` lines using `@pmFromFile` |
 | `--include-test-rule` | Append X-CRS-Test block to `base-rules` |
 | `--name-prefix` / `--name-suffix` | Prefix/suffix for `RuleSource` names derived from `*.conf` filenames |

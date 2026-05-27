@@ -42,6 +42,10 @@ type Options struct {
 	// can be added without changing the flag surface.
 	IgnoreUnsupportedRules string
 
+	// SkipValidationRuleSources lists final RuleSource names (after prefix/suffix)
+	// that receive waf.k8s.coraza.io/rule-validation: "false".
+	SkipValidationRuleSources map[string]struct{}
+
 	// autoIgnoredIDs is populated by Build/mergeUnsupportedIDs: rule IDs
 	// dropped due to a profile merge but not present in the user's
 	// --ignore-rules. Used for clearer warnings in processFileContent.

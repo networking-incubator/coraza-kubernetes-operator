@@ -83,6 +83,7 @@ namespace as the RuleSet; set --namespace when you need metadata.namespace on ev
 	flags.String("dry-run", "", "if set to client, print the same manifests and annotate stderr (no cluster access is performed either way)")
 	flags.Bool("skip-size-check", false, "allow very large rules payloads (not recommended; etcd limits may still reject applies)")
 	flags.String("ignore-unsupported-rules", "wasm", "unsupported-rule profile to exclude (e.g. wasm); set to \"none\" to emit the full CRS (see LIMITATIONS.md)")
+	flags.String("skip-validation-rulesource", "", "comma-separated RuleSource names (final name after prefix/suffix) to annotate with rule-validation: \"false\"")
 
 	root.AddCommand(generate)
 	generate.AddCommand(coreruleset)
@@ -112,6 +113,7 @@ func genCRS(cmd *cobra.Command, _ []string) error {
 	dry, _ := flags.GetString("dry-run")
 	skipSize, _ := flags.GetBool("skip-size-check")
 	ignoreUnsupported, _ := flags.GetString("ignore-unsupported-rules")
+	skipValidationCSV, _ := flags.GetString("skip-validation-rulesource")
 
 	ignoreSet := map[string]struct{}{}
 	if strings.TrimSpace(ignoreCSV) != "" {
@@ -131,21 +133,32 @@ func genCRS(cmd *cobra.Command, _ []string) error {
 		}
 	}
 
+	skipValidationSet := map[string]struct{}{}
+	if strings.TrimSpace(skipValidationCSV) != "" {
+		for p := range strings.SplitSeq(skipValidationCSV, ",") {
+			n := strings.TrimSpace(p)
+			if n != "" {
+				skipValidationSet[n] = struct{}{}
+			}
+		}
+	}
+
 	opts := corerulesetgen.Options{
-		RulesDir:               rulesDir,
-		Version:                ver,
-		IgnoreRuleIDs:          ignoreSet,
-		IgnorePMFromFile:       ignorePM,
-		IncludeTestRule:        includeTest,
-		RuleSetName:            rulesetName,
-		Namespace:              namespace,
-		DataSourceName:         dataSourceName,
-		NamePrefix:             namePrefix,
-		NameSuffix:             nameSuffix,
-		DryRun:                 strings.EqualFold(strings.TrimSpace(dry), "client"),
-		SkipSizeCheck:          skipSize,
-		IgnoreUnsupportedRules: ignoreUnsupported,
-		Stderr:                 cmd.ErrOrStderr(),
+		RulesDir:                  rulesDir,
+		Version:                   ver,
+		IgnoreRuleIDs:             ignoreSet,
+		IgnorePMFromFile:          ignorePM,
+		IncludeTestRule:           includeTest,
+		RuleSetName:               rulesetName,
+		Namespace:                 namespace,
+		DataSourceName:            dataSourceName,
+		NamePrefix:                namePrefix,
+		NameSuffix:                nameSuffix,
+		DryRun:                    strings.EqualFold(strings.TrimSpace(dry), "client"),
+		SkipSizeCheck:             skipSize,
+		IgnoreUnsupportedRules:    ignoreUnsupported,
+		SkipValidationRuleSources: skipValidationSet,
+		Stderr:                    cmd.ErrOrStderr(),
 	}
 
 	_, err := corerulesetgen.Generate(cmd.OutOrStdout(), opts)

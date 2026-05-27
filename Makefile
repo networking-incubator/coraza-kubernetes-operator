@@ -331,7 +331,7 @@ FTW_OVERRIDES ?= $(shell pwd)/test/conformance/.ftw-overrides.yml
 # Conformance needs --ignore-unsupported-rules=none so output matches the pre-exclusion golden hash and FTW exercises the full rule set.
 .PHONY: coreruleset.verify-parity
 coreruleset.verify-parity:
-	@$(MAKE) CORERULESET_EXTRA_FLAGS="--include-test-rule --ignore-unsupported-rules=none" coraza.generaterules
+	@$(MAKE) CORERULESET_EXTRA_FLAGS="--include-test-rule --ignore-unsupported-rules=none --skip-validation-rulesource=request-999-common-exceptions-after" coraza.generaterules
 	sha256sum -c tools/corerulesetgen/testdata/coreruleset_parity.sha256
 
 .PHONY: test.conformance

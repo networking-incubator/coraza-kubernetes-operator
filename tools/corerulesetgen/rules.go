@@ -6,7 +6,13 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	wafv1alpha1 "github.com/networking-incubator/coraza-kubernetes-operator/api/v1alpha1"
 )
+
+func ruleValidationAnnotationKey() string {
+	return wafv1alpha1.AnnotationSkipValidation
+}
 
 var (
 	secDirectiveLine = regexp.MustCompile(`^(SecRule|SecAction|SecMarker)\b`)
@@ -242,6 +248,10 @@ func buildRuleSourceYAML(path string, opts Options) (name, yamlOut, skipReason s
 	if err := checkPayloadSize(payload, name, opts); err != nil {
 		return "", "", "", warns, err
 	}
-	yamlOut = formatRuleSourceYAML(name, opts.Namespace, indented)
+	skipValidation := false
+	if opts.SkipValidationRuleSources != nil {
+		_, skipValidation = opts.SkipValidationRuleSources[name]
+	}
+	yamlOut = formatRuleSourceYAML(name, opts.Namespace, indented, skipValidation)
 	return name, yamlOut, "", warns, nil
 }

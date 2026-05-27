@@ -214,7 +214,7 @@ This runs `kubectl-coraza` (`go run ./cmd/kubectl-coraza generate coreruleset` v
 5. Create a RuleSet resource referencing RuleSources via `spec.sources` and RuleData via `spec.data`
 6. Output everything to `tmp/rules/rules.yaml`
 
-Conformance CI runs `make coreruleset.verify-parity`, which regenerates that manifest (see the `coreruleset.verify-parity` target in the Makefile for the exact `kubectl-coraza` flags) and checks `sha256sum` against `tools/corerulesetgen/testdata/coreruleset_parity.sha256`. After bumping `CORERULESET_VERSION` or changing generator output, refresh the checksum with `make coreruleset.verify-parity` (it will fail until you run `sha256sum tmp/rules/rules.yaml` and replace the hash line in `tools/corerulesetgen/testdata/coreruleset_parity.sha256`).
+Conformance CI runs `make coreruleset.verify-parity`, which regenerates that manifest with `--include-test-rule --ignore-unsupported-rules=none --skip-validation-rulesource=request-999-common-exceptions-after` (see the `coreruleset.verify-parity` target in the Makefile) and checks `sha256sum` against `tools/corerulesetgen/testdata/coreruleset_parity.sha256`. After bumping `CORERULESET_VERSION` or changing generator output, refresh the checksum with `make coreruleset.verify-parity` (it will fail until you run `sha256sum tmp/rules/rules.yaml` and replace the hash line in `tools/corerulesetgen/testdata/coreruleset_parity.sha256`).
 
 Install the plugin for ad hoc use: build `bin/kubectl-coraza` (`make build`) and ensure it is on your `PATH` as `kubectl-coraza` so `kubectl coraza …` resolves it ([plugin discovery](https://kubernetes.io/docs/tasks/extend-kubectl/kubectl-plugins/)).
 
@@ -228,6 +228,8 @@ Install the plugin for ad hoc use: build `bin/kubectl-coraza` (`make build`) and
 - `--version` - CoreRuleSet version (required); accepts `4.24.1` and `v4.24.1`
 - `--ignore-rules` - Comma-separated rule IDs to exclude (e.g. `949110,949111,980130`)
 - `--ignore-pmFromFile` - Strip rules containing `@pmFromFile` (not supported by Coraza WASM paths)
+- `--ignore-unsupported-rules` - Profile to drop WASM-unsupported rule IDs (`wasm` default; `none` for full CRS)
+- `--skip-validation-rulesource` - Comma-separated RuleSource names to annotate with `rule-validation: "false"`
 - `--include-test-rule` - Append the X-CRS-Test block to the bundled `base-rules` RuleSource
 - `--ruleset-name`, `--namespace` / `-n`, `--data-source-name`, `--name-prefix`, `--name-suffix`
 - `--dry-run=client` - Same stdout output; stderr notes dry-run (no cluster writes are performed in either case)
