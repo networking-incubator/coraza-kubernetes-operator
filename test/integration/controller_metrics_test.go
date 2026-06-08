@@ -98,9 +98,13 @@ func TestCorazaControllerMetrics(t *testing.T) {
 		if !assert.NoError(collect, err) {
 			return ""
 		}
-		defer func() { _ = resp.Body.Close() }()
-
+		// Always drain then close the body so the keep-alive connection is reused
+		// across EventuallyWithT iterations. Without draining, each iteration opens
+		// a new TCP connection and the port-forward connection backlog can be exhausted.
 		body, _ := io.ReadAll(resp.Body)
+		_, _ = io.Copy(io.Discard, resp.Body)
+		_ = resp.Body.Close()
+
 		assert.Equal(collect, http.StatusOK, resp.StatusCode,
 			"expected 200 for authenticated metrics request, got %d", resp.StatusCode)
 		return string(body)
@@ -117,11 +121,14 @@ func TestCorazaControllerMetrics(t *testing.T) {
 			if body == "" {
 				return
 			}
-			// CorazaCollector from PR #397 exposes coraza_engine_info or coraza_engines.
-			hasEngineMetric := strings.Contains(body, "coraza_engine_info") ||
-				strings.Contains(body, "coraza_engines")
-			assert.True(collect, hasEngineMetric,
-				"expected coraza_engine_info or coraza_engines metric family in response")
+			// The CorazaCollector always sends descriptors via Describe, so the
+			// HELP lines appear in every scrape even when no Engine resources exist.
+			// Assert descriptor presence rather than data-point presence to avoid
+			// false failures on a clean cluster with no Engines.
+			hasEngineDescriptor := strings.Contains(body, "# HELP coraza_engine_info") ||
+				strings.Contains(body, "# HELP coraza_engines")
+			assert.True(collect, hasEngineDescriptor,
+				"expected # HELP coraza_engine_info or # HELP coraza_engines descriptor in response")
 		}, framework.DefaultTimeout, framework.DefaultInterval)
 	})
 
@@ -132,11 +139,12 @@ func TestCorazaControllerMetrics(t *testing.T) {
 			if body == "" {
 				return
 			}
-			// CorazaCollector exposes coraza_ruleset_info or coraza_rulesets.
-			hasRulesetMetric := strings.Contains(body, "coraza_ruleset_info") ||
-				strings.Contains(body, "coraza_rulesets")
-			assert.True(collect, hasRulesetMetric,
-				"expected coraza_ruleset_info or coraza_rulesets metric family in response")
+			// The CorazaCollector always sends descriptors via Describe, so the
+			// HELP lines appear in every scrape even when no RuleSet resources exist.
+			hasRulesetDescriptor := strings.Contains(body, "# HELP coraza_ruleset_info") ||
+				strings.Contains(body, "# HELP coraza_rulesets")
+			assert.True(collect, hasRulesetDescriptor,
+				"expected # HELP coraza_ruleset_info or # HELP coraza_rulesets descriptor in response")
 		}, framework.DefaultTimeout, framework.DefaultInterval)
 	})
 

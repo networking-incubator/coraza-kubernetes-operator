@@ -1,4 +1,4 @@
-{{- if .Values.metrics.podMonitor.enabled }}
+{{- if and .Values.metrics.enabled .Values.metrics.podMonitor.enabled }}
 {{- if not .Values.metrics.podMonitor.gatewaySelector }}
 {{- fail "metrics.podMonitor.gatewaySelector must be set when metrics.podMonitor.enabled=true" }}
 {{- end }}
@@ -10,17 +10,24 @@ metadata:
   labels:
     {{- include "coraza-operator.labels" . | nindent 4 }}
 spec:
+  namespaceSelector:
+    any: true
   selector:
     matchLabels:
       {{- toYaml .Values.metrics.podMonitor.gatewaySelector | nindent 6 }}
   podMetricsEndpoints:
     - port: http-envoy-prom
       path: /stats/prometheus
-      interval: 30s
-      scrapeTimeout: 10s
+      interval: {{ .Values.metrics.podMonitor.interval | default "30s" | quote }}
+      scrapeTimeout: {{ .Values.metrics.podMonitor.scrapeTimeout | default "10s" | quote }}
       metricRelabelings:
-        # Keep only Coraza WAF metrics to control cardinality.
+        # Mandatory cardinality guard: keep ONLY coraza_waf_* metrics.
+        # Envoy emits thousands of internal stats; without this filter a single
+        # Gateway pod scrape can produce 10,000+ time series.
         - sourceLabels: [__name__]
           regex: "coraza_waf_.*"
           action: keep
+        {{- with .Values.metrics.podMonitor.metricRelabelings }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
 {{- end }}

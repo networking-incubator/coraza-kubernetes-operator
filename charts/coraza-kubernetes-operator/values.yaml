@@ -49,6 +49,12 @@ metrics:
     # Label selector for Gateway pods that expose WASM plugin metrics.
     # Must be set when podMonitor.enabled=true; leave empty to trigger a validation error.
     gatewaySelector: {}
+    # Scrape interval for Gateway pod metrics. Defaults to 30s.
+    interval: "30s"
+    # Scrape timeout for Gateway pod metrics. Must be less than interval. Defaults to 10s.
+    scrapeTimeout: "10s"
+    # Additional metric relabelings appended after the mandatory cardinality keep rule.
+    metricRelabelings: []
 
 logging:
   # When true, uses console encoder with debug level (development mode).

@@ -34,7 +34,7 @@ echo "$out" | grep -q "kind: ServiceMonitor" && fail "ServiceMonitor should not 
 
 # ── Test 2: ServiceMonitor enabled ───────────────────────────────────────────
 section "ServiceMonitor enabled"
-out=$(render --set metrics.serviceMonitor.enabled=true)
+out=$(render --set metrics.enabled=true --set metrics.serviceMonitor.enabled=true)
 echo "$out" | grep -q "kind: ServiceMonitor" && pass "ServiceMonitor rendered" || fail "ServiceMonitor missing"
 echo "$out" | grep -q "monitoring.coreos.com" && pass "monitoring.coreos.com API group" || fail "Wrong API group"
 
@@ -58,11 +58,15 @@ echo "$out" | grep -q "coraza_waf_" && pass "cardinality filter present" || fail
 
 # ── Test 6: PodMonitor with empty selector fails ──────────────────────────────
 section "PodMonitor rejects empty gatewaySelector"
-render_out=$(render --set metrics.podMonitor.enabled=true || true)
-if echo "$render_out" | grep -q "gatewaySelector"; then
-  pass "Empty gatewaySelector rejected with descriptive error"
+render_err=""
+if ! render_err=$(render --set metrics.enabled=true --set metrics.podMonitor.enabled=true 2>&1); then
+  if echo "$render_err" | grep -q "gatewaySelector"; then
+    pass "Empty gatewaySelector rejected with descriptive error"
+  else
+    fail "Render failed but error did not mention gatewaySelector: $render_err"
+  fi
 else
-  fail "Empty gatewaySelector should fail with descriptive error"
+  fail "Empty gatewaySelector should have caused a render failure"
 fi
 
 # ── Test 7: additionalLabels merged into PrometheusRule ──────────────────────

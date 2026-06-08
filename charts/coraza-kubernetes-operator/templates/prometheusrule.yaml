@@ -14,7 +14,7 @@ spec:
     - name: coraza.operator.engines
       rules:
         - alert: CorazaEngineNotReady
-          expr: coraza_engines_not_ready > 0
+          expr: count(coraza_engine_condition{condition="Ready"} == 0) > 0
           for: 5m
           labels:
             severity: warning
@@ -22,11 +22,11 @@ spec:
             summary: "Coraza Engine(s) not ready"
             description: "{{ "{{" }} $value {{ "}}" }} Coraza Engine(s) are not in the Ready state for more than 5 minutes."
         - record: coraza:engines_not_ready:count
-          expr: coraza_engines_not_ready
+          expr: count(coraza_engine_condition{condition="Ready"} == 0) or vector(0)
     - name: coraza.operator.recording
       rules:
         - record: coraza:engines_ready:count
-          expr: coraza_engines_ready
+          expr: sum(coraza_engine_condition{condition="Ready"} == 1) or vector(0)
         - record: coraza:rulesets_ready:count
-          expr: coraza_rulesets_ready
+          expr: sum(coraza_ruleset_condition{condition="Ready"} == 1) or vector(0)
 {{- end }}
