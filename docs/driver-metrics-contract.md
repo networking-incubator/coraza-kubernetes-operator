@@ -79,6 +79,7 @@ Description: Total rule match events, partitioned by rule ID, severity, and outc
 Labels:
 - `engine` — injected from pluginConfig
 - `namespace` — injected from pluginConfig
+- `driver_type` — one of `wasm`, `dynamic_module`
 - `rule_id` — numeric rule ID string (e.g., `"941100"`) or `"other"` for overflow
 - `severity` — one of `CRITICAL`, `ERROR`, `WARNING`, `NOTICE`, `INFO`
 - `outcome` — one of `block`, `detect`, `pass`
@@ -91,9 +92,9 @@ Prometheus text format example:
 ```
 # HELP coraza_waf_rule_hits_total Total rule match events by rule ID, severity, and outcome.
 # TYPE coraza_waf_rule_hits_total counter
-coraza_waf_rule_hits_total{engine="gw-waf",namespace="prod",rule_id="941100",severity="CRITICAL",outcome="block"} 17
-coraza_waf_rule_hits_total{engine="gw-waf",namespace="prod",rule_id="942100",severity="ERROR",outcome="detect"} 9
-coraza_waf_rule_hits_total{engine="gw-waf",namespace="prod",rule_id="other",severity="ERROR",outcome="detect"} 2341
+coraza_waf_rule_hits_total{engine="gw-waf",namespace="prod",driver_type="wasm",rule_id="941100",severity="CRITICAL",outcome="block"} 17
+coraza_waf_rule_hits_total{engine="gw-waf",namespace="prod",driver_type="wasm",rule_id="942100",severity="ERROR",outcome="detect"} 9
+coraza_waf_rule_hits_total{engine="gw-waf",namespace="prod",driver_type="wasm",rule_id="other",severity="ERROR",outcome="detect"} 2341
 ```
 
 ### coraza_waf_request_anomaly_score
@@ -105,6 +106,7 @@ Description: Distribution of per-request anomaly scores after full transaction e
 Labels:
 - `engine` — injected from pluginConfig
 - `namespace` — injected from pluginConfig
+- `driver_type` — one of `wasm`, `dynamic_module`
 
 Buckets: `0, 5, 10, 15, 20, 30, 40, 50, 75, 100, +Inf`
 
@@ -118,46 +120,54 @@ Prometheus text format example:
 ```
 # HELP coraza_waf_request_anomaly_score Distribution of per-request anomaly scores.
 # TYPE coraza_waf_request_anomaly_score histogram
-coraza_waf_request_anomaly_score_bucket{engine="gw-waf",namespace="prod",le="0"} 890
-coraza_waf_request_anomaly_score_bucket{engine="gw-waf",namespace="prod",le="5"} 950
-coraza_waf_request_anomaly_score_bucket{engine="gw-waf",namespace="prod",le="10"} 970
-coraza_waf_request_anomaly_score_bucket{engine="gw-waf",namespace="prod",le="15"} 980
-coraza_waf_request_anomaly_score_bucket{engine="gw-waf",namespace="prod",le="20"} 990
-coraza_waf_request_anomaly_score_bucket{engine="gw-waf",namespace="prod",le="30"} 998
-coraza_waf_request_anomaly_score_bucket{engine="gw-waf",namespace="prod",le="40"} 999
-coraza_waf_request_anomaly_score_bucket{engine="gw-waf",namespace="prod",le="50"} 1000
-coraza_waf_request_anomaly_score_bucket{engine="gw-waf",namespace="prod",le="75"} 1000
-coraza_waf_request_anomaly_score_bucket{engine="gw-waf",namespace="prod",le="100"} 1000
-coraza_waf_request_anomaly_score_bucket{engine="gw-waf",namespace="prod",le="+Inf"} 1000
-coraza_waf_request_anomaly_score_sum{engine="gw-waf",namespace="prod"} 4321
-coraza_waf_request_anomaly_score_count{engine="gw-waf",namespace="prod"} 1000
+coraza_waf_request_anomaly_score_bucket{engine="gw-waf",namespace="prod",driver_type="wasm",le="0"} 890
+coraza_waf_request_anomaly_score_bucket{engine="gw-waf",namespace="prod",driver_type="wasm",le="5"} 950
+coraza_waf_request_anomaly_score_bucket{engine="gw-waf",namespace="prod",driver_type="wasm",le="10"} 970
+coraza_waf_request_anomaly_score_bucket{engine="gw-waf",namespace="prod",driver_type="wasm",le="15"} 980
+coraza_waf_request_anomaly_score_bucket{engine="gw-waf",namespace="prod",driver_type="wasm",le="20"} 990
+coraza_waf_request_anomaly_score_bucket{engine="gw-waf",namespace="prod",driver_type="wasm",le="30"} 998
+coraza_waf_request_anomaly_score_bucket{engine="gw-waf",namespace="prod",driver_type="wasm",le="40"} 999
+coraza_waf_request_anomaly_score_bucket{engine="gw-waf",namespace="prod",driver_type="wasm",le="50"} 1000
+coraza_waf_request_anomaly_score_bucket{engine="gw-waf",namespace="prod",driver_type="wasm",le="75"} 1000
+coraza_waf_request_anomaly_score_bucket{engine="gw-waf",namespace="prod",driver_type="wasm",le="100"} 1000
+coraza_waf_request_anomaly_score_bucket{engine="gw-waf",namespace="prod",driver_type="wasm",le="+Inf"} 1000
+coraza_waf_request_anomaly_score_sum{engine="gw-waf",namespace="prod",driver_type="wasm"} 4321
+coraza_waf_request_anomaly_score_count{engine="gw-waf",namespace="prod",driver_type="wasm"} 1000
 ```
 
 ### coraza_waf_rule_overrides_total
 
-Type: counter
+Type: gauge
 
-Description: Count of rule override directives applied at plugin load time, partitioned by type.
+Description: Current count of rule override directives in effect, partitioned by type. The value reflects the live state after the most recent plugin load — it is set once at load time, not incremented per request.
 
 Labels:
 - `engine` — injected from pluginConfig
 - `namespace` — injected from pluginConfig
+- `driver_type` — one of `wasm`, `dynamic_module`
 - `rule_id` — numeric rule ID string of the overridden rule
 - `type` — one of `disabled`, `action_changed`, `tag_removed`, `threshold_changed`
 
-**Timing:** This counter MUST be incremented **once at plugin load** per override directive. It MUST NOT be incremented per request. The counter only resets on plugin reload.
+**Timing:** This gauge MUST be set **once at plugin load** per override directive. It MUST NOT be modified per request. On plugin reload the gauge values are reset to reflect the new configuration — a gauge correctly represents the current override state even if overrides are removed between loads.
 
-**Security note:** An unexpected increase in this metric signals a WAF posture change — a rule was disabled or its action was altered. Operators SHOULD configure an alert on:
+**Why gauge, not counter:** Rule overrides are a load-time configuration snapshot, not a monotonically increasing event stream. A counter cannot decrease when overrides are removed on reload, making the old value misleading. A gauge accurately reflects the current WAF posture at any point in time.
+
+**Security note:** A change in this metric signals a WAF posture change — a rule was disabled or its action was altered. Operators SHOULD configure an alert on posture changes between scrapes:
 ```
-increase(coraza_waf_rule_overrides_total[1h]) > 0
+changes(coraza_waf_rule_overrides_total[1h]) > 0
+```
+
+This alert fires when the gauge value changes (override added or removed), not on every scrape. Use `sum by (engine, namespace, driver_type)` if you want to alert on the total override count exceeding a threshold:
+```
+sum by (engine, namespace, driver_type) (coraza_waf_rule_overrides_total) > 10
 ```
 
 Prometheus text format example:
 ```
-# HELP coraza_waf_rule_overrides_total Count of rule override directives applied at plugin load.
-# TYPE coraza_waf_rule_overrides_total counter
-coraza_waf_rule_overrides_total{engine="gw-waf",namespace="prod",rule_id="941100",type="disabled"} 1
-coraza_waf_rule_overrides_total{engine="gw-waf",namespace="prod",rule_id="942150",type="action_changed"} 1
+# HELP coraza_waf_rule_overrides_total Current count of rule override directives in effect by type.
+# TYPE coraza_waf_rule_overrides_total gauge
+coraza_waf_rule_overrides_total{engine="gw-waf",namespace="prod",driver_type="wasm",rule_id="941100",type="disabled"} 1
+coraza_waf_rule_overrides_total{engine="gw-waf",namespace="prod",driver_type="wasm",rule_id="942150",type="action_changed"} 1
 ```
 
 ### coraza_waf_plugin_loads_total
@@ -207,8 +217,11 @@ Description: Blocked requests partitioned by attack category and severity. Deriv
 Labels:
 - `engine` — injected from pluginConfig
 - `namespace` — injected from pluginConfig
+- `driver_type` — one of `wasm`, `dynamic_module`
 - `category` — attack category (see CRS tag mapping below)
-- `severity` — one of `CRITICAL`, `ERROR`, `WARNING`, `NOTICE`
+- `severity` — one of `CRITICAL`, `ERROR`, `WARNING`, `NOTICE`, `INFO`
+
+**Severity note:** INFO-severity rules do not produce blocking actions in standard Coraza/CRS configurations. However, `SecRuleUpdateActionById` can elevate an INFO rule's action to `block`. If the driver encounters a block attributed to an INFO-severity rule, it MUST emit the counter with `severity="INFO"` — it MUST NOT silently remap to `NOTICE` or drop the increment.
 
 **CRS tag to category mapping:**
 
@@ -231,24 +244,26 @@ Prometheus text format example:
 ```
 # HELP coraza_waf_blocked_requests_total Blocked requests by attack category and severity.
 # TYPE coraza_waf_blocked_requests_total counter
-coraza_waf_blocked_requests_total{engine="gw-waf",namespace="prod",category="sqli",severity="CRITICAL"} 12
-coraza_waf_blocked_requests_total{engine="gw-waf",namespace="prod",category="xss",severity="ERROR"} 5
-coraza_waf_blocked_requests_total{engine="gw-waf",namespace="prod",category="other",severity="WARNING"} 3
+coraza_waf_blocked_requests_total{engine="gw-waf",namespace="prod",driver_type="wasm",category="sqli",severity="CRITICAL"} 12
+coraza_waf_blocked_requests_total{engine="gw-waf",namespace="prod",driver_type="wasm",category="xss",severity="ERROR"} 5
+coraza_waf_blocked_requests_total{engine="gw-waf",namespace="prod",driver_type="wasm",category="other",severity="WARNING"} 3
 ```
 
 ## Cardinality Budget Table
 
-| Metric | Worst-case series (10 engines) | Mitigation strategy |
+> **Per-pod vs. per-engine:** Values below count unique label combinations per unique `(engine, namespace)` tuple. Prometheus stores separate time series per scrape target (pod). Multiply each value by the number of Gateway pod replicas to get the total series stored in Prometheus. For example, with 3 replicas per engine, `coraza_waf_rule_hits_total` worst case is 30,150 × 3 = 90,450 series. Consider this when sizing Prometheus storage and setting the top-N limit (see `coraza_waf_rule_hits_total` below).
+
+| Metric | Worst-case series (10 engines, per pod) | Mitigation strategy |
 |---|---|---|
 | `coraza_waf_requests_total` | 10 × 5 outcomes × 2 driver types = 100 | Fixed label set; no unbounded dimension |
-| `coraza_waf_rule_hits_total` | 10 × 201 rule slots × 5 severities × 3 outcomes = 30,150 | top-N bound (N≤200) with `rule_id="other"` overflow |
-| `coraza_waf_request_anomaly_score` | 10 × 12 buckets + sum + count = 140 | Fixed bucket set; no additional labels |
-| `coraza_waf_rule_overrides_total` | 10 × (overrides per engine) × 4 types; overrides are operator-controlled | Alert on increase, not on cardinality |
+| `coraza_waf_rule_hits_total` | 10 × 201 rule slots × 5 severities × 3 outcomes × 2 driver types = 60,300 | top-N bound (N≤200) with `rule_id="other"` overflow; lower N in multi-replica deployments |
+| `coraza_waf_request_anomaly_score` | 10 × (11 buckets + sum + count) × 2 driver types = 260 | Fixed bucket set; bounded by driver types |
+| `coraza_waf_rule_overrides_total` | 10 × (overrides per engine) × 4 types × 2 driver types; overrides are operator-controlled | Gauge reflects current state; alert on `changes()`, not cardinality |
 | `coraza_waf_plugin_loads_total` | 10 × 2 driver types × 2 statuses = 40 | Fixed label set |
 | `coraza_waf_plugin_rule_count` | 10 × 2 driver types = 20 | Gauge; no unbounded dimension |
-| `coraza_waf_blocked_requests_total` | 10 × 9 categories × 4 severities = 360 | Fixed category set via CRS tag mapping |
+| `coraza_waf_blocked_requests_total` | 10 × 9 categories × 5 severities × 2 driver types = 900 | Fixed category and severity set |
 
-The dominant cardinality risk is `coraza_waf_rule_hits_total`. The top-N bound with `rule_id="other"` overflow is the primary mitigation and is non-negotiable.
+The dominant cardinality risk is `coraza_waf_rule_hits_total`. The top-N bound with `rule_id="other"` overflow is the primary mitigation and is non-negotiable. In deployments with many Gateway replicas, consider reducing N below 200 to keep total Prometheus series within budget.
 
 ## Implementation Checklist
 
@@ -257,7 +272,7 @@ A driver PR MUST satisfy all of the following before merge:
 - [ ] All 7 metrics implemented with the exact names defined in this document
 - [ ] `engine` and `namespace` labels injected from `pluginConfig` JSON at initialization
 - [ ] `coraza_waf_rule_hits_total` bounded by top-N (N≤200) with overflow aggregated to `rule_id="other"`
-- [ ] `coraza_waf_rule_overrides_total` incremented at load time, not per request
+- [ ] `coraza_waf_rule_overrides_total` set (gauge) at load time, not per request; value reset on plugin reload to reflect new configuration
 - [ ] Metric names match exactly (Prometheus is case-sensitive, exact-match)
 - [ ] Integration test validates that all 7 metrics appear after a test HTTP request is processed
 - [ ] `promtool check metrics` passes on the raw exposition output from the driver
@@ -312,10 +327,10 @@ histogram_quantile(0.95,
 )
 ```
 
-### Engines with overridden rules (any override in the last hour)
+### Engines with changed override posture (any override added or removed in the last hour)
 
 ```promql
-increase(coraza_waf_rule_overrides_total[1h]) > 0
+changes(coraza_waf_rule_overrides_total[1h]) > 0
 ```
 
 ### WAF error rate (fraction of requests resulting in evaluation errors)
