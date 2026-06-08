@@ -35,7 +35,14 @@ metrics:
   caName: ""
   serviceMonitor:
     enabled: false
-    # Additional metric relabelings to apply to scraped samples.
+    # Additional metric relabelings applied to scraped samples.
+    # See docs/metrics-cardinality.md for worked examples and a full
+    # cardinality budget analysis.
+    # Example — drop info metrics to reduce series count in large clusters:
+    #   metricRelabelings:
+    #     - sourceLabels: [__name__]
+    #       regex: 'coraza_(engine|ruleset)_info'
+    #       action: drop
     metricRelabelings: []
     # Additional relabelings to apply to the scrape targets.
     relabelings: []
