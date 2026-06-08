@@ -1,0 +1,26 @@
+{{- if .Values.metrics.podMonitor.enabled }}
+{{- if not .Values.metrics.podMonitor.gatewaySelector }}
+{{- fail "metrics.podMonitor.gatewaySelector must be set when metrics.podMonitor.enabled=true" }}
+{{- end }}
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: {{ include "coraza-operator.fullname" . }}-gateway
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "coraza-operator.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- toYaml .Values.metrics.podMonitor.gatewaySelector | nindent 6 }}
+  podMetricsEndpoints:
+    - port: http-envoy-prom
+      path: /stats/prometheus
+      interval: 30s
+      scrapeTimeout: 10s
+      metricRelabelings:
+        # Keep only Coraza WAF metrics to control cardinality.
+        - sourceLabels: [__name__]
+          regex: "coraza_waf_.*"
+          action: keep
+{{- end }}

@@ -464,6 +464,17 @@ helm.sync-rbac: manifests ## Sync generated RBAC rules into the Helm chart Clust
 .PHONY: helm.sync
 helm.sync: helm.sync-crds helm.sync-rbac ## Sync all generated resources into the Helm chart
 
+##@ Testing - Helm
+
+.PHONY: helm.validate
+helm.validate: ## Validate Helm templates render correctly for key flag combinations
+	hack/test-helm-manifests.sh
+
+.PHONY: test.metrics
+test.metrics: ## Run unit tests for metrics (controller package only)
+	ISTIO_VERSION=$$(grep '^ISTIO_VERSION' Makefile | head -1 | cut -d'=' -f2 | tr -d ' ') \
+	  go test -v -run TestCoraza ./internal/controller/...
+
 # -------------------------------------------------------------------------------
 # Documentation
 # -------------------------------------------------------------------------------

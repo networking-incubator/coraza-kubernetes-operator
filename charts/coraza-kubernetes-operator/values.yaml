@@ -39,6 +39,16 @@ metrics:
     metricRelabelings: []
     # Additional relabelings to apply to the scrape targets.
     relabelings: []
+  prometheusRule:
+    enabled: false
+    # Additional labels to add to the PrometheusRule resource.
+    # Useful for selecting the rule by a Prometheus operator instance (e.g. release=prometheus).
+    additionalLabels: {}
+  podMonitor:
+    enabled: false
+    # Label selector for Gateway pods that expose WASM plugin metrics.
+    # Must be set when podMonitor.enabled=true; leave empty to trigger a validation error.
+    gatewaySelector: {}
 
 logging:
   # When true, uses console encoder with debug level (development mode).

@@ -1,0 +1,32 @@
+{{- if and .Values.metrics.enabled .Values.metrics.prometheusRule.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "coraza-operator.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "coraza-operator.labels" . | nindent 4 }}
+    {{- with .Values.metrics.prometheusRule.additionalLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  groups:
+    - name: coraza.operator.engines
+      rules:
+        - alert: CorazaEngineNotReady
+          expr: coraza_engines_not_ready > 0
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Coraza Engine(s) not ready"
+            description: "{{ "{{" }} $value {{ "}}" }} Coraza Engine(s) are not in the Ready state for more than 5 minutes."
+        - record: coraza:engines_not_ready:count
+          expr: coraza_engines_not_ready
+    - name: coraza.operator.recording
+      rules:
+        - record: coraza:engines_ready:count
+          expr: coraza_engines_ready
+        - record: coraza:rulesets_ready:count
+          expr: coraza_rulesets_ready
+{{- end }}
