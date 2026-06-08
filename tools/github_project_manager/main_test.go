@@ -204,7 +204,7 @@ func TestRunUpdateLabels(t *testing.T) {
 	})
 
 	t.Run("no changes needed", func(t *testing.T) {
-		err := runUpdateLabels(nil, 1, []string{"triage/accepted", "size/M", "area/testing"}, true, "", false, noopLogger)
+		err := runUpdateLabels(nil, 1, []string{"triage/accepted", "tshirt-size/M", "area/testing"}, true, "", false, noopLogger)
 
 		require.NoError(t, err)
 	})
@@ -446,8 +446,11 @@ func TestApplyLabels(t *testing.T) {
 			}
 		})
 
-		err := applyLabels(client, 1, []string{"area/testing"}, []string{"triage/needs-triage"}, false, noopLogger)
+		// Test first with null client, should error but not panic
+		err := applyLabels(nil, 1, []string{"area/testing"}, []string{"triage/needs-triage"}, false, noopLogger)
+		assert.ErrorContains(t, err, "client cannot be nil to perform these operations")
 
+		err = applyLabels(client, 1, []string{"area/testing"}, []string{"triage/needs-triage"}, false, noopLogger)
 		require.NoError(t, err)
 		assert.Equal(t, []string{"area/testing"}, addedLabels)
 		assert.Equal(t, []string{"triage/needs-triage"}, removedLabels)

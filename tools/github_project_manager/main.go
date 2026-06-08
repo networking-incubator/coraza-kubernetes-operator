@@ -298,7 +298,14 @@ func applyLabels(client *GitHubClient, number int, toAdd, toRemove []string, dry
 		return nil
 	}
 
-	if len(toAdd) > 0 {
+	toAddLen := len(toAdd)
+	toRemoveLen := len(toRemove)
+
+	if client == nil && (toAddLen > 0 || toRemoveLen > 0) {
+		return fmt.Errorf("client cannot be nil to perform these operations")
+	}
+
+	if toAddLen > 0 {
 		if err := client.AddLabels(number, toAdd); err != nil {
 			return err
 		}
