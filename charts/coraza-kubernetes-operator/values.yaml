@@ -39,6 +39,17 @@ metrics:
     metricRelabelings: []
     # Additional relabelings to apply to the scrape targets.
     relabelings: []
+  prometheusRule:
+    # When true, deploys a PrometheusRule CR with WAF alerting and recording rules.
+    # Requires the monitoring.coreos.com/v1 CRD (Prometheus Operator).
+    # Disabled by default — not all clusters have Prometheus Operator installed.
+    enabled: false
+    # Labels merged into PrometheusRule metadata.labels.
+    # Use this to match your Prometheus instance's ruleSelector.
+    # Example: additionalLabels: {release: prometheus}
+    additionalLabels: {}
+    # Additional alerting rules appended after the default rules.
+    rules: []
 
 logging:
   # When true, uses console encoder with debug level (development mode).
