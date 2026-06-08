@@ -39,6 +39,23 @@ metrics:
     metricRelabelings: []
     # Additional relabelings to apply to the scrape targets.
     relabelings: []
+  podMonitor:
+    # When true, deploys a PodMonitor CR to scrape coraza_waf_* metrics
+    # from Envoy stats on Gateway pods. Requires:
+    # - monitoring.coreos.com/v1 CRD (Prometheus Operator)
+    # - Istio with Envoy stats port 15090 (http-envoy-prom) exposed on Gateway pods
+    # Disabled by default.
+    enabled: false
+    # Scrape interval for WAF data-plane metrics.
+    interval: "30s"
+    scrapeTimeout: "10s"
+    # Label selector for Gateway pods. An empty selector matches ALL pods
+    # in all namespaces — narrow this in production environments.
+    # Example: gatewaySelector: {gateway.networking.k8s.io/gateway-name: my-gateway}
+    gatewaySelector: {}
+    # Additional metricRelabelings appended AFTER the mandatory cardinality guard.
+    # The guard (keep only coraza_waf_.*) is always enforced first.
+    metricRelabelings: []
 
 logging:
   # When true, uses console encoder with debug level (development mode).
