@@ -1,6 +1,8 @@
 ---
 title: "Metrics Cardinality Reference"
+linkTitle: "Metrics Cardinality"
 weight: 50
+description: "Cardinality reference and metricRelabelings examples for the Coraza operator."
 ---
 
 ## Overview
@@ -23,10 +25,12 @@ for counters by Prometheus convention).
 | `coraza_cache_instances` | gauge | (none) | 1 | |
 | `coraza_cache_total_entries` | gauge | (none) | 1 | |
 | `coraza_cache_config_max_size_bytes` | gauge | (none) | 1 | |
-| `coraza_cache_gc_pruned_entries_total` | counter | (none) | 1 | |
+| `coraza_cache_gc_pruned_entries_total` | counter | `reason` | 2 | `reason` ∈ {`age`, `size`} |
 | `coraza_cache_gc_size_limit_exceeded_total` | counter | (none) | 1 | |
 
 ### Controller Observability (PR #397 — `internal/controller/metrics.go`)
+
+> **Note:** The metrics in this section are defined in PR #397, which is not yet merged into `main`. These metrics do not exist in the current codebase. This section applies only once PR #397 is merged.
 
 | Metric | Type | Labels | Worst-case series/cluster | Notes |
 |--------|------|--------|--------------------------|-------|
@@ -60,9 +64,10 @@ for the full list.
 50 Engines × (1 info + 4 conditions)                              =  250 Engine series
 50 Engines grouped in 5 namespaces: 5 namespace aggregates         =    5 series
 50 RuleSets × (1 info + 3 conditions + 1 sources + 1 data_files)  =  300 RuleSet series
-Cache server: ~30 series
+50 RuleSets in 5 namespaces: 5 namespace aggregates              =    5 series
+Cache server: ~98 series
                                                                    ─────────────────
-Total coraza_* operator series:                                    ~585
+Total coraza_* operator series:                                    ~658
 ```
 
 Well within the 5,000 series budget.
@@ -100,8 +105,7 @@ Data-plane metrics are emitted directly from the Coraza WASM driver running insi
 Envoy sidecars. They are NOT scraped from the operator.
 
 For the full specification of data-plane metric names, labels, and cardinality
-constraints (including the top-N rule limit that bounds per-rule series), see
-[driver-metrics-contract.md]({{< ref "driver-metrics-contract" >}}).
+constraints (including the top-N rule limit that bounds per-rule series), see the driver metrics contract documentation (available once the `feat/metrics-driver-contract` branch is merged).
 
 **Key differences from operator metrics:**
 
@@ -153,10 +157,10 @@ metrics:
   serviceMonitor:
     metricRelabelings:
       - sourceLabels: [__name__]
-        regex: 'coraza_cache_server_request_duration_seconds'
+        regex: 'coraza_cache_server_request_duration_seconds.*'
         action: drop
 ```
 
-The histogram generates ~66 series (6 label combinations × 11 buckets). Dropping it
-reduces operator-side series by ~66 while retaining the counter for request rate
+The histogram generates ~84 series (6 label combinations × 14 series each: n explicit buckets + 1 `+Inf` bucket + `_count` + `_sum`). Dropping it
+reduces operator-side series by ~84 while retaining the counter for request rate
 calculations.

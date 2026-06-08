@@ -36,7 +36,7 @@ metrics:
   serviceMonitor:
     enabled: false
     # Additional metric relabelings applied to scraped samples.
-    # See docs/metrics-cardinality.md for worked examples and a full
+    # See docs/content/reference/metrics-cardinality.md for worked examples and a full
     # cardinality budget analysis.
     # Example — drop info metrics to reduce series count in large clusters:
     #   metricRelabelings:
