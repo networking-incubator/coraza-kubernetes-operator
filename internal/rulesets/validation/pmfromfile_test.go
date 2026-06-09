@@ -54,4 +54,41 @@ func TestValidatePMFromFileData(t *testing.T) {
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "want.data")
 	})
+
+	populatedData := map[string][]byte{"overlap.data": []byte("x")}
+
+	t.Run("CRS comment prose ignored", func(t *testing.T) {
+		err := ValidatePMFromFileData(
+			"# For performance reasons, the @pmFromFile operator is used",
+			populatedData,
+		)
+		assert.NoError(t, err)
+	})
+
+	t.Run("CRS multi-line comment block ignored", func(t *testing.T) {
+		err := ValidatePMFromFileData(
+			"# - Rule 933150: ~234 words highly common to PHP injection payloads\n"+
+				"#		These words are detected as a match directly using @pmFromFile.\n"+
+				"#		For performance reasons, the @pmFromFile operator is used, and many functions from lesser",
+			populatedData,
+		)
+		assert.NoError(t, err)
+	})
+
+	t.Run("CRS comment for ignored", func(t *testing.T) {
+		err := ValidatePMFromFileData(
+			"# @pmFromFile for flexibility and performance.",
+			populatedData,
+		)
+		assert.NoError(t, err)
+	})
+
+	t.Run("multiline SecRule with pmFromFile preserved", func(t *testing.T) {
+		err := ValidatePMFromFileData(
+			"SecRule BODY \"@pmFromFile overlap.data\" \\\n"+
+				" \"id:1,phase:1,pass\"",
+			populatedData,
+		)
+		assert.NoError(t, err)
+	})
 }
