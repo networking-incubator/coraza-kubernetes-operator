@@ -25,7 +25,7 @@ spec:
             severity: warning
           annotations:
             summary: "Coraza operator reconcile error rate is high"
-            description: "Controller {{ $labels.controller }} has reconcile error ratio {{ $value | humanizePercentage }} over the last 5 minutes."
+            description: 'Controller {{ "{{" }} $labels.controller {{ "}}" }} has reconcile error ratio {{ "{{" }} $value | humanizePercentage {{ "}}" }} over the last 5 minutes.'
 
         # Engine not ready for 5 minutes
         - alert: CorazaEngineNotReady
@@ -35,7 +35,7 @@ spec:
             severity: critical
           annotations:
             summary: "One or more Coraza Engines are not ready"
-            description: "{{ $value }} Engine resource(s) have been in non-Ready state for more than 5 minutes."
+            description: '{{ "{{" }} $value {{ "}}" }} Engine resource(s) have been in non-Ready state for more than 5 minutes.'
 
         # RuleSet not ready for 5 minutes
         - alert: CorazaRuleSetNotReady
@@ -45,7 +45,7 @@ spec:
             severity: warning
           annotations:
             summary: "One or more Coraza RuleSets are not ready"
-            description: "{{ $value }} RuleSet resource(s) have been in non-Ready state for more than 5 minutes."
+            description: '{{ "{{" }} $value {{ "}}" }} RuleSet resource(s) have been in non-Ready state for more than 5 minutes.'
 
         # Cache server absent from metrics (down or not scraped).
         # coraza_cache_server_in_flight_requests is a GaugeVec with label {handler}.
@@ -71,7 +71,7 @@ spec:
             severity: warning
           annotations:
             summary: "Coraza ruleset cache is near capacity"
-            description: "Cache utilization is {{ $value | humanizePercentage }} of the configured maximum."
+            description: 'Cache utilization is {{ "{{" }} $value | humanizePercentage {{ "}}" }} of the configured maximum.'
 
         # GC pruning more than 10 entries per second — indicates cache pressure.
         # rate() returns per-second values, so > 10 means more than 10 entries/sec
@@ -84,7 +84,7 @@ spec:
             severity: warning
           annotations:
             summary: "Coraza cache GC is pruning entries at a high rate"
-            description: "Cache GC is pruning {{ $value | humanize }} entries/sec — consider increasing cache size limits."
+            description: 'Cache GC is pruning {{ "{{" }} $value | humanize {{ "}}" }} entries/sec — consider increasing cache size limits.'
 
         # Workqueue depth above 100 for 10 minutes
         - alert: CorazaWorkqueueDepthHigh
@@ -94,7 +94,7 @@ spec:
             severity: warning
           annotations:
             summary: "Coraza operator workqueue depth is high"
-            description: "Workqueue {{ $labels.name }} has {{ $value }} items pending — reconciliation may be lagging."
+            description: 'Workqueue {{ "{{" }} $labels.name {{ "}}" }} has {{ "{{" }} $value {{ "}}" }} items pending — reconciliation may be lagging.'
 
         {{- with .Values.metrics.prometheusRule.rules }}
         {{- toYaml . | nindent 8 }}
