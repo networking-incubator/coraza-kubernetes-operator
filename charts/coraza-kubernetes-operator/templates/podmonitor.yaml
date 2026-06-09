@@ -1,11 +1,8 @@
 {{- if and .Values.metrics.enabled .Values.metrics.podMonitor.enabled }}
-{{- if not .Values.metrics.podMonitor.gatewaySelector }}
-{{- fail "metrics.podMonitor.gatewaySelector must be set when metrics.podMonitor.enabled=true" }}
-{{- end }}
 apiVersion: monitoring.coreos.com/v1
 kind: PodMonitor
 metadata:
-  name: {{ include "coraza-operator.fullname" . }}-gateway
+  name: {{ include "coraza-operator.fullname" . }}-waf-dataplane
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "coraza-operator.labels" . | nindent 4 }}
@@ -13,8 +10,12 @@ spec:
   namespaceSelector:
     any: true
   selector:
+    {{- if .Values.metrics.podMonitor.gatewaySelector }}
     matchLabels:
       {{- toYaml .Values.metrics.podMonitor.gatewaySelector | nindent 6 }}
+    {{- else }}
+    {{- fail "metrics.podMonitor.gatewaySelector must be set when podMonitor is enabled; an empty selector matches ALL pods in the cluster and causes thousands of failed scrape attempts" }}
+    {{- end }}
   podMetricsEndpoints:
     - port: http-envoy-prom
       path: /stats/prometheus
@@ -24,8 +25,9 @@ spec:
         # Mandatory cardinality guard: keep ONLY coraza_waf_* metrics.
         # Envoy emits thousands of internal stats; without this filter a single
         # Gateway pod scrape can produce 10,000+ time series.
+        # This rule is always first and cannot be overridden by user config.
         - sourceLabels: [__name__]
-          regex: "coraza_waf_.*"
+          regex: 'coraza_waf_.*'
           action: keep
         {{- with .Values.metrics.podMonitor.metricRelabelings }}
         {{- toYaml . | nindent 8 }}
