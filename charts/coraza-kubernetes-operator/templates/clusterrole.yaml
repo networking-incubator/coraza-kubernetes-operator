@@ -118,7 +118,9 @@ rules:
   - waf.k8s.coraza.io
   resources:
   - engines/status
+  - ruledata/status
   - rulesets/status
+  - rulesources/status
   verbs:
   - get
   - patch

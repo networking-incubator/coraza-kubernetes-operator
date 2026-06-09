@@ -255,6 +255,24 @@ func TestGenCRS_ignoreUnsupportedRulesWASMAllowsMixedCase(t *testing.T) {
 	assert.NotContains(t, stdout.String(), "id:922110,")
 }
 
+func TestGenCRS_skipValidationRuleSourceFlag(t *testing.T) {
+	dir := t.TempDir()
+	confPath := filepath.Join(dir, "patch.conf")
+	require.NoError(t, os.WriteFile(confPath, []byte(
+		"SecRuleUpdateTargetById 1 \"!ARGS:x\"\n"), 0o644))
+
+	cmd, stdout, _ := newTestCommand(t)
+	cmd.SetArgs([]string{
+		"generate", "coreruleset",
+		"--rules-dir", dir,
+		"--version", "4.24.1",
+		"--skip-validation-rulesource=patch",
+	})
+
+	require.NoError(t, cmd.Execute())
+	assert.Contains(t, stdout.String(), "rule-validation: \"false\"")
+}
+
 func TestGenCRS_missingRequiredFlags(t *testing.T) {
 	cmd, _, _ := newTestCommand(t)
 	cmd.SetArgs([]string{"generate", "coreruleset"})
@@ -358,6 +376,7 @@ func newTestCommand(t *testing.T) (*cobra.Command, *bytes.Buffer, *bytes.Buffer)
 	flags.String("dry-run", "", "")
 	flags.Bool("skip-size-check", false, "")
 	flags.String("ignore-unsupported-rules", "wasm", "")
+	flags.String("skip-validation-rulesource", "", "")
 
 	root.AddCommand(generate)
 	generate.AddCommand(coreruleset)

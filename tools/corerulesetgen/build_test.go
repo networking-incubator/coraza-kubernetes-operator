@@ -422,3 +422,26 @@ func TestBuild_wasmProfileTrimmedAndCaseInsensitive(t *testing.T) {
 	require.NotContains(t, bundle.ExtraRuleSources[0].Doc, "id:922110,")
 	require.Contains(t, bundle.ExtraRuleSources[0].Doc, "id:42,")
 }
+
+func TestBuild_explicitSkipValidationRuleSourceAnnotation(t *testing.T) {
+	tmp := t.TempDir()
+	path := filepath.Join(tmp, "simple.conf")
+	require.NoError(t, os.WriteFile(path, []byte(
+		"SecRule ARGS \"@rx a\" \"id:42,phase:2,pass,nolog\"\n"), 0o644))
+
+	ver := mustParseCRSVersion(t, "4.24.1")
+	scan, err := Scan(tmp)
+	require.NoError(t, err)
+
+	bundle, err := Build(Options{
+		RulesDir:                  tmp,
+		Version:                   "4.24.1",
+		RuleSetName:               "rs",
+		DataSourceName:            "ds",
+		SkipValidationRuleSources: map[string]struct{}{"simple": {}},
+	}, scan, ver)
+	require.NoError(t, err)
+	require.Len(t, bundle.ExtraRuleSources, 1)
+	require.Contains(t, bundle.ExtraRuleSources[0].Doc, "rule-validation: \"false\"")
+	require.Contains(t, bundle.ExtraRuleSources[0].Doc, "id:42,")
+}

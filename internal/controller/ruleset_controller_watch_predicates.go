@@ -19,8 +19,11 @@ package controller
 import (
 	"context"
 
+	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	wafv1alpha1 "github.com/networking-incubator/coraza-kubernetes-operator/api/v1alpha1"
@@ -57,4 +60,28 @@ func (r *RuleSetReconciler) findRuleSetsBy(ctx context.Context, namespace, index
 	}
 
 	return collectRequests(ruleSetList.Items, func(_ *wafv1alpha1.RuleSet) bool { return true })
+}
+
+// ruleSourceWatchPredicate enqueues referencing RuleSets when a RuleSource's
+// spec changes (generation), validation annotation changes, or status changes
+// (e.g. RuleSourceReconciler validation outcome) without a spec bump.
+func ruleSourceWatchPredicate() predicate.Predicate {
+	statusChanged := predicate.Funcs{
+		CreateFunc: func(event.CreateEvent) bool { return true },
+		DeleteFunc: func(event.DeleteEvent) bool { return true },
+		UpdateFunc: func(e event.UpdateEvent) bool {
+			oldRS, ok1 := e.ObjectOld.(*wafv1alpha1.RuleSource)
+			newRS, ok2 := e.ObjectNew.(*wafv1alpha1.RuleSource)
+			if !ok1 || !ok2 {
+				return false
+			}
+			return !apiequality.Semantic.DeepEqual(oldRS.Status, newRS.Status)
+		},
+		GenericFunc: func(event.GenericEvent) bool { return false },
+	}
+	return predicate.Or(
+		predicate.GenerationChangedPredicate{},
+		annotationChangedPredicate(wafv1alpha1.AnnotationSkipValidation),
+		statusChanged,
+	)
 }

@@ -177,6 +177,26 @@ func (s *Scenario) ExpectResourceGone(namespace, name string, gvr schema.GroupVe
 	)
 }
 
+// ExpectRuleSourceAnnotation polls until the RuleSource has the given metadata annotation.
+func (s *Scenario) ExpectRuleSourceAnnotation(namespace, name, key, value string) {
+	s.T.Helper()
+	s.T.Logf("Waiting for RuleSource %s/%s annotation %s=%q", namespace, name, key, value)
+	require.EventuallyWithT(s.T, func(collect *assert.CollectT) {
+		obj, err := s.F.DynamicClient.Resource(RuleSourceGVR).Namespace(namespace).Get(
+			s.T.Context(), name, metav1.GetOptions{},
+		)
+		if !assert.NoError(collect, err, "get RuleSource %s/%s", namespace, name) {
+			return
+		}
+		anns, _, _ := unstructured.NestedStringMap(obj.Object, "metadata", "annotations")
+		got, ok := anns[key]
+		assert.True(collect, ok && got == value,
+			"RuleSource %s/%s: expected annotation %s=%q, got %q (present=%v)",
+			namespace, name, key, value, got, ok,
+		)
+	}, DefaultTimeout, DefaultInterval)
+}
+
 // -----------------------------------------------------------------------------
 // Validation Assertions
 // -----------------------------------------------------------------------------
