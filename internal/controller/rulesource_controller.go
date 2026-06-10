@@ -51,6 +51,7 @@ import (
 type RuleSourceReconciler struct {
 	client.Client
 	Recorder events.EventRecorder
+	Metrics  *CorazaMetrics
 }
 
 // SetupWithManager sets up the RuleSource controller.
@@ -77,11 +78,27 @@ func (r *RuleSourceReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	var rs wafv1alpha1.RuleSource
 	if err := r.Get(ctx, req.NamespacedName, &rs); err != nil {
 		if apierrors.IsNotFound(err) {
+			r.Metrics.ForgetRuleSource(req.Namespace, req.Name)
+			var list wafv1alpha1.RuleSourceList
+			if listErr := r.List(ctx, &list, client.InNamespace(req.Namespace)); listErr == nil {
+				r.Metrics.SetRuleSourcesTotal(req.Namespace, len(list.Items))
+			}
 			return ctrl.Result{}, nil
 		}
 		logAPIError(log, req, "RuleSource", err, "Failed to GET", nil)
 		return ctrl.Result{}, err
 	}
+
+	defer func() {
+		if r.Metrics == nil {
+			return
+		}
+		r.Metrics.RecordRuleSource(&rs)
+		var list wafv1alpha1.RuleSourceList
+		if err := r.List(ctx, &list, client.InNamespace(req.Namespace)); err == nil {
+			r.Metrics.SetRuleSourcesTotal(req.Namespace, len(list.Items))
+		}
+	}()
 
 	skipValidation := rs.Annotations[wafv1alpha1.AnnotationSkipValidation] == "false"
 	if skipValidation {

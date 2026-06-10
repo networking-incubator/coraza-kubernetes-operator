@@ -80,6 +80,7 @@ func (r *RuleSetReconciler) loadData(
 		}, &rd); err != nil {
 			if apierrors.IsNotFound(err) {
 				logInfo(log, req, "RuleSet", "Referenced RuleData not found; waiting for it to appear", "ruleDataName", ref.Name)
+				r.Metrics.ForgetRuleData(ruleset.Namespace, ref.Name)
 				msg := fmt.Sprintf("Referenced RuleData %s does not exist", ref.Name)
 				if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "RuleSet", ruleset, &ruleset.Status.Conditions, ruleset.Generation, "RuleDataNotFound", msg); patchErr != nil {
 					return nil, true, patchErr
@@ -100,6 +101,7 @@ func (r *RuleSetReconciler) loadData(
 				return nil, true, patchErr
 			}
 		}
+		r.Metrics.RecordRuleData(&rd)
 
 		for k, v := range rd.Spec.Files {
 			dataFiles[k] = []byte(v)

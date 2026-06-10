@@ -65,6 +65,7 @@ type RuleSetReconciler struct {
 	Scheme   *runtime.Scheme
 	Recorder events.EventRecorder
 	Cache    *cache.RuleSetCache
+	Metrics  *CorazaMetrics
 }
 
 // SetupWithManager sets up the controller with the Manager.
@@ -134,11 +135,21 @@ func (r *RuleSetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 			} else {
 				logDebug(log, req, "RuleSet", "Resource not found, no cache entry to remove")
 			}
+			r.Metrics.ForgetRuleSet(req.Namespace, req.Name)
+			r.reconcileRuleDataMetrics(ctx, req.Namespace)
 			return ctrl.Result{}, nil
 		}
 		logAPIError(log, req, "RuleSet", err, "Failed to GET", nil)
 		return ctrl.Result{}, err
 	}
+
+	defer func() {
+		if r.Metrics == nil {
+			return
+		}
+		r.Metrics.RecordRuleSet(&ruleset)
+		r.reconcileRuleDataMetrics(ctx, req.Namespace)
+	}()
 
 	logDebug(log, req, "RuleSet", "Initializing status")
 	if err := r.initializeStatus(ctx, log, req, &ruleset); err != nil {
@@ -195,7 +206,56 @@ func (r *RuleSetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	}
 
 	logInfo(log, req, "RuleSet", "Caching rules")
-	return r.cacheRules(ctx, log, req, &ruleset, aggregatedRules, dataFiles, unsupportedMsg)
+	if err := r.cacheRules(ctx, log, req, &ruleset, aggregatedRules, dataFiles, unsupportedMsg); err != nil {
+		return ctrl.Result{}, err
+	}
+	return ctrl.Result{}, nil
+}
+
+// -----------------------------------------------------------------------------
+// RuleSetReconciler - Metrics Helpers
+// -----------------------------------------------------------------------------
+
+// reconcileRuleDataMetrics updates namespace-level RuleData metrics: the total
+// count of all RuleData objects, and cleanup of per-object series for RuleData
+// not referenced by any RuleSet. Called from both the not-found path (RuleSet
+// deleted) and the defer block (normal reconcile).
+//
+// Because there is no dedicated RuleData reconciler, these counts only refresh
+// when a RuleSet in the same namespace reconciles. Orphaned RuleData created or
+// deleted without a corresponding RuleSet change will appear stale until the
+// next RuleSet reconciliation in that namespace.
+func (r *RuleSetReconciler) reconcileRuleDataMetrics(ctx context.Context, ns string) {
+	if r.Metrics == nil {
+		return
+	}
+	var rsList wafv1alpha1.RuleSetList
+	if err := r.List(ctx, &rsList, client.InNamespace(ns)); err != nil {
+		return
+	}
+	r.Metrics.SetRuleSetsTotal(ns, len(rsList.Items))
+
+	referencedData := make(map[string]struct{})
+	for i := range rsList.Items {
+		for _, d := range rsList.Items[i].Spec.Data {
+			referencedData[d.Name] = struct{}{}
+		}
+	}
+
+	// coraza_ruledatas = raw count of ALL RuleData objects in the namespace.
+	// This intentionally differs from coraza_ruledata_info, which only covers
+	// RuleData objects referenced by at least one RuleSet. The raw total is
+	// useful for detecting unreferenced (orphaned) RuleData objects.
+	var rdList wafv1alpha1.RuleDataList
+	if err := r.List(ctx, &rdList, client.InNamespace(ns)); err != nil {
+		return
+	}
+	r.Metrics.SetRuleDatasTotal(ns, len(rdList.Items))
+	for i := range rdList.Items {
+		if _, referenced := referencedData[rdList.Items[i].Name]; !referenced {
+			r.Metrics.ForgetRuleData(ns, rdList.Items[i].Name)
+		}
+	}
 }
 
 // -----------------------------------------------------------------------------

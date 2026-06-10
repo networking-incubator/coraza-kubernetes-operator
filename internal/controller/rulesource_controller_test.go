@@ -20,6 +20,8 @@ import (
 	"context"
 	"testing"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
@@ -85,6 +87,65 @@ func TestRuleSourceReconciler_PatchOnlyFragment(t *testing.T) {
 
 	deg := apimeta.FindStatusCondition(rs.Status.Conditions, conditionDegraded)
 	assert.Nil(t, deg)
+}
+
+// TestRuleSourceReconciler_MetricsRecordOnSuccess verifies that after a
+// successful reconcile the RecordRuleSource path fires and coraza_rulesource_info
+// is set to 1 for the resource.
+func TestRuleSourceReconciler_MetricsRecordOnSuccess(t *testing.T) {
+	ctx := context.Background()
+	rs := utils.NewTestRuleSource("rs-metrics-ok", testNamespace,
+		`SecRule REQUEST_URI "@contains /test" "id:10,phase:1,pass,nolog"`)
+	require.NoError(t, k8sClient.Create(ctx, rs))
+	t.Cleanup(func() { _ = k8sClient.Delete(ctx, rs) })
+
+	reg := prometheus.NewRegistry()
+	m, err := NewCorazaMetrics(reg)
+	require.NoError(t, err)
+
+	rec := &RuleSourceReconciler{
+		Client:   k8sClient,
+		Recorder: utils.NewTestRecorder(),
+		Metrics:  m,
+	}
+	_, err = rec.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: rs.Name, Namespace: rs.Namespace}})
+	require.NoError(t, err)
+
+	// The defer in Reconcile fires RecordRuleSource: info gauge must be 1.
+	assert.Equal(t, 1, testutil.CollectAndCount(reg, "coraza_rulesource_info"),
+		"coraza_rulesource_info must be emitted after successful reconcile")
+}
+
+// TestRuleSourceReconciler_MetricsForgetOnNotFound verifies that reconciling a
+// deleted RuleSource calls ForgetRuleSource and the info series is cleared.
+func TestRuleSourceReconciler_MetricsForgetOnNotFound(t *testing.T) {
+	ctx := context.Background()
+
+	reg := prometheus.NewRegistry()
+	m, err := NewCorazaMetrics(reg)
+	require.NoError(t, err)
+
+	// Pre-populate the series to simulate a previously-recorded RuleSource.
+	m.RecordRuleSource(minimalRuleSource(testNamespace, "rs-metrics-gone"))
+	assert.Equal(t, 1, testutil.CollectAndCount(reg, "coraza_rulesource_info"),
+		"pre-condition: info series must exist before reconcile")
+
+	rec := &RuleSourceReconciler{
+		Client:   k8sClient,
+		Recorder: utils.NewTestRecorder(),
+		Metrics:  m,
+	}
+	// Reconcile a resource that does not exist in the cluster.
+	_, err = rec.Reconcile(ctx, ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "rs-metrics-gone", Namespace: testNamespace},
+	})
+	require.NoError(t, err)
+
+	// ForgetRuleSource must have deleted the series.
+	assert.Equal(t, 0, testutil.CollectAndCount(reg, "coraza_rulesource_info"),
+		"coraza_rulesource_info must be gone after not-found reconcile")
+	assert.Equal(t, 0, testutil.CollectAndCount(reg, "coraza_rulesource_condition"),
+		"coraza_rulesource_condition must be gone after not-found reconcile")
 }
 
 func TestRuleSourceReconciler_ValidationSkipped(t *testing.T) {

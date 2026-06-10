@@ -22,6 +22,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
@@ -756,7 +758,7 @@ func TestEngineReconciler_SelectDriver_NilDriverDefaultsToWasm(t *testing.T) {
 			Name:      fetched.Name,
 			Namespace: fetched.Namespace,
 		},
-	}, fetched)
+	}, &fetched)
 	require.NoError(t, err)
 }
 
@@ -805,7 +807,7 @@ func TestEngineReconciler_NilTargetRef_MarksDegraded(t *testing.T) {
 	// Call provisionWasmDriver directly — it should detect the empty
 	// TargetRef and mark the Engine Degraded instead of creating a
 	// WasmPlugin that matches all workloads.
-	_, err := reconciler.provisionWasmDriver(ctx, ctrl.Log, engineReq, fetched)
+	_, err := reconciler.provisionWasmDriver(ctx, ctrl.Log, engineReq, &fetched)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "target is required")
 
@@ -2124,4 +2126,106 @@ func TestEngineReconciler_ReadyToTargetNotFound(t *testing.T) {
 	tokenKey := fmt.Sprintf("%s/%s/%s", engine.Namespace, engine.Name, engine.Spec.RuleSet.Name)
 	_, found := reconciler.tokenStore.Load(tokenKey)
 	assert.False(t, found, "token store entry should be removed when Engine is not accepted")
+}
+
+// -----------------------------------------------------------------------------
+// Engine reconciler — metrics integration tests
+// -----------------------------------------------------------------------------
+
+// TestEngineReconciler_MetricsRecordOnSuccess verifies that after a successful
+// reconcile the RecordEngine path fires and coraza_engine_info is emitted.
+// Because EngineReconciler uses a finalizer, two Reconcile calls are required:
+// the first adds the finalizer, the second does the actual work.
+func TestEngineReconciler_MetricsRecordOnSuccess(t *testing.T) {
+	ctx, cleanup := setupTest(t)
+	defer cleanup()
+
+	createTestGateway(t, ctx, k8sClient, "metrics-gw", testNamespace)
+
+	ruleSet := utils.NewTestRuleSet(utils.RuleSetOptions{
+		Name:      "metrics-engine-rs",
+		Namespace: testNamespace,
+		Sources:   []wafv1alpha1.SourceReference{{Name: "non-existent-src"}},
+	})
+	require.NoError(t, k8sClient.Create(ctx, ruleSet))
+	t.Cleanup(func() { _ = k8sClient.Delete(ctx, ruleSet) })
+
+	engine := utils.NewTestEngine(utils.EngineOptions{
+		Name:        "metrics-engine",
+		Namespace:   testNamespace,
+		GatewayName: "metrics-gw",
+		RuleSetName: "metrics-engine-rs",
+	})
+	require.NoError(t, k8sClient.Create(ctx, engine))
+	t.Cleanup(func() { _ = k8sClient.Delete(ctx, engine) })
+
+	reg := prometheus.NewRegistry()
+	m, err := NewCorazaMetrics(reg)
+	require.NoError(t, err)
+
+	reconciler := &EngineReconciler{
+		Client:                    k8sClient,
+		Scheme:                    scheme,
+		Recorder:                  utils.NewTestRecorder(),
+		Metrics:                   m,
+		kubeClient:                testKubeClient,
+		ruleSetCacheServerCluster: "test-cluster",
+		defaultWasmImage:          defaults.DefaultCorazaWasmOCIReference,
+		operatorNamespace:         testNamespace,
+	}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: engine.Name, Namespace: engine.Namespace}}
+
+	// First reconcile adds the finalizer.
+	result, err := reconciler.Reconcile(ctx, req)
+	require.NoError(t, err)
+	assert.NotZero(t, result.RequeueAfter, "first reconcile must requeue after finalizer add")
+
+	// Second reconcile performs the actual work and fires the defer RecordEngine.
+	_, err = reconciler.Reconcile(ctx, req)
+	require.NoError(t, err)
+
+	// The defer in Reconcile fires RecordEngine: info gauge must be 1.
+	assert.Equal(t, 1, testutil.CollectAndCount(reg, "coraza_engine_info"),
+		"coraza_engine_info must be emitted after successful Engine reconcile")
+	// All engineConditionTypes must be emitted (Ready, Progressing, Degraded, Accepted).
+	assert.Equal(t, len(engineConditionTypes), testutil.CollectAndCount(reg, "coraza_engine_condition"),
+		"coraza_engine_condition must emit one series per engineConditionType")
+}
+
+// TestEngineReconciler_MetricsForgetOnNotFound verifies that a not-found
+// reconcile (simulating deletion) calls ForgetEngine and removes the info and
+// condition series from the registry.
+func TestEngineReconciler_MetricsForgetOnNotFound(t *testing.T) {
+	ctx, cleanup := setupTest(t)
+	defer cleanup()
+
+	reg := prometheus.NewRegistry()
+	m, err := NewCorazaMetrics(reg)
+	require.NoError(t, err)
+
+	// Pre-populate the series to simulate a previously-recorded Engine.
+	m.RecordEngine(minimalEngine(testNamespace, "engine-gone", "gw"))
+	assert.Equal(t, 1, testutil.CollectAndCount(reg, "coraza_engine_info"),
+		"pre-condition: info series must exist before reconcile")
+
+	reconciler := &EngineReconciler{
+		Client:                    k8sClient,
+		Scheme:                    scheme,
+		Recorder:                  utils.NewTestRecorder(),
+		Metrics:                   m,
+		ruleSetCacheServerCluster: "test-cluster",
+		defaultWasmImage:          defaults.DefaultCorazaWasmOCIReference,
+		operatorNamespace:         testNamespace,
+	}
+
+	// Resource does not exist — should trigger the ForgetEngine path.
+	_, err = reconciler.Reconcile(ctx, ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "engine-gone", Namespace: testNamespace},
+	})
+	require.NoError(t, err)
+
+	assert.Equal(t, 0, testutil.CollectAndCount(reg, "coraza_engine_info"),
+		"coraza_engine_info must be gone after not-found reconcile")
+	assert.Equal(t, 0, testutil.CollectAndCount(reg, "coraza_engine_condition"),
+		"coraza_engine_condition must be gone after not-found reconcile")
 }
