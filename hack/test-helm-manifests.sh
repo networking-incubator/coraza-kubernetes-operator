@@ -81,7 +81,20 @@ out=$(render --set metrics.enabled=true --set metrics.prometheusRule.enabled=tru
   --set 'metrics.prometheusRule.additionalLabels.release=prometheus')
 echo "$out" | grep -q "release: prometheus" && pass "additionalLabels merged" || fail "additionalLabels not merged"
 
-# ── Test 9: promtool check rules (optional) ──────────────────────────────────
+# ── Test 9: PodMonitor port name override ────────────────────────────────────
+section "PodMonitor portName override"
+out=$(render --set metrics.podMonitor.enabled=true \
+  --set 'metrics.podMonitor.gatewaySelector.app=my-gateway' \
+  --set metrics.podMonitor.portName=custom-stats-port)
+echo "$out" | grep -q "custom-stats-port" && pass "Custom portName rendered" || fail "Custom portName not rendered"
+
+# ── Test 10: PrometheusRule custom rules injection ───────────────────────────
+section "PrometheusRule custom rules"
+out=$(render --set metrics.enabled=true --set metrics.prometheusRule.enabled=true \
+  --set-json 'metrics.prometheusRule.rules=[{"alert":"CustomAlert","expr":"up == 0","for":"1m","labels":{"severity":"info"},"annotations":{"summary":"custom"}}]')
+echo "$out" | grep -q "CustomAlert" && pass "Custom alert rule injected" || fail "Custom alert rule missing"
+
+# ── Test 11: promtool check rules (optional) ─────────────────────────────────
 if command -v promtool &>/dev/null; then
   section "promtool check rules"
   prom_yaml=$(render --set metrics.enabled=true --set metrics.prometheusRule.enabled=true \
