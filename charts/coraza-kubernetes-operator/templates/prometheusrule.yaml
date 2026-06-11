@@ -16,9 +16,9 @@ spec:
         # Reconcile error ratio above 10% over 5m window (errors / total reconciles)
         - alert: CorazaReconcileErrorRateHigh
           expr: >-
-            rate(controller_runtime_reconcile_errors_total{controller=~"ruleset|engine"}[5m])
+            rate(controller_runtime_reconcile_errors_total{controller=~"ruleset|engine|rulesource"}[5m])
             /
-            rate(controller_runtime_reconcile_total{controller=~"ruleset|engine"}[5m])
+            rate(controller_runtime_reconcile_total{controller=~"ruleset|engine|rulesource"}[5m])
             > 0.1
           for: 10m
           labels:
@@ -88,7 +88,7 @@ spec:
 
         # Workqueue depth above 100 for 10 minutes
         - alert: CorazaWorkqueueDepthHigh
-          expr: workqueue_depth{name=~"ruleset|engine"} > 100
+          expr: workqueue_depth{name=~"ruleset|engine|rulesource"} > 100
           for: 10m
           labels:
             severity: warning

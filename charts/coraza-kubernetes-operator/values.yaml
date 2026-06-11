@@ -71,6 +71,9 @@ metrics:
     # in all namespaces — narrow this in production environments.
     # Example: gatewaySelector: {gateway.networking.k8s.io/gateway-name: my-gateway}
     gatewaySelector: {}
+    # Port name on Gateway pods that exposes Envoy stats.
+    # Default is the Istio convention; override for non-Istio service meshes.
+    portName: "http-envoy-prom"
     # Additional metricRelabelings appended AFTER the mandatory cardinality guard.
     # The guard (keep only coraza_waf_.*) is always enforced first.
     metricRelabelings: []

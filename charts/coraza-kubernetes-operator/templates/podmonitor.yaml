@@ -17,7 +17,7 @@ spec:
     {{- fail "metrics.podMonitor.gatewaySelector must be set when podMonitor is enabled; an empty selector matches ALL pods in the cluster and causes thousands of failed scrape attempts" }}
     {{- end }}
   podMetricsEndpoints:
-    - port: http-envoy-prom
+    - port: {{ .Values.metrics.podMonitor.portName | default "http-envoy-prom" | quote }}
       path: /stats/prometheus
       interval: {{ .Values.metrics.podMonitor.interval | default "30s" | quote }}
       scrapeTimeout: {{ .Values.metrics.podMonitor.scrapeTimeout | default "10s" | quote }}

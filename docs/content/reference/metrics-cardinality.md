@@ -42,6 +42,12 @@ for counters by Prometheus convention).
 | `coraza_rulesets` | gauge | `namespace` | 1 per namespace | |
 | `coraza_ruleset_sources` | gauge | `namespace`, `name` | 1 per RuleSet | |
 | `coraza_ruleset_data_files` | gauge | `namespace`, `name` | 1 per RuleSet | |
+| `coraza_rulesource_info` | gauge=1 | `namespace`, `name` | 1 per RuleSource | Info pattern |
+| `coraza_rulesource_condition` | gauge | `namespace`, `name`, `condition` | 2 per RuleSource (Ready/Degraded) | |
+| `coraza_rulesources` | gauge | `namespace` | 1 per namespace | |
+| `coraza_ruledata_info` | gauge=1 | `namespace`, `name` | 1 per referenced RuleData | Only RuleDatas referenced by a RuleSet |
+| `coraza_ruledata_condition` | gauge | `namespace`, `name`, `condition` | 1 per referenced RuleData (Ready) | |
+| `coraza_ruledatas` | gauge | `namespace` | 1 per namespace | Refreshed on RuleSet reconciliation |
 
 ### Controller-Runtime Built-ins (not `coraza_` prefixed)
 
@@ -64,10 +70,14 @@ for the full list.
 50 Engines × (1 info + 4 conditions)                              =  250 Engine series
 50 Engines grouped in 5 namespaces: 5 namespace aggregates         =    5 series
 50 RuleSets × (1 info + 3 conditions + 1 sources + 1 data_files)  =  300 RuleSet series
-50 RuleSets in 5 namespaces: 5 namespace aggregates              =    5 series
+50 RuleSets in 5 namespaces: 5 namespace aggregates                =    5 series
+200 RuleSources × (1 info + 2 conditions)                          =  600 RuleSource series
+200 RuleSources in 5 namespaces: 5 namespace aggregates            =    5 series
+50 referenced RuleData × (1 info + 1 condition)                    =  100 RuleData series
+50 RuleData in 5 namespaces: 5 namespace aggregates                =    5 series
 Cache server: ~98 series
                                                                    ─────────────────
-Total coraza_* operator series:                                    ~658
+Total coraza_* operator series:                                   ~1368
 ```
 
 Well within the 5,000 series budget.
@@ -130,12 +140,13 @@ metrics:
   serviceMonitor:
     metricRelabelings:
       - sourceLabels: [__name__]
-        regex: 'coraza_(engine|ruleset)_info'
+        regex: 'coraza_(engine|ruleset|rulesource|ruledata)_info'
         action: drop
 ```
 
-This reduces series by 1 per Engine and 1 per RuleSet. Useful when you have many
-short-lived resources and do not need the identity labels captured in info metrics.
+This reduces series by 1 per Engine, 1 per RuleSet, 1 per RuleSource, and 1 per
+referenced RuleData. Useful when you have many short-lived resources and do not
+need the identity labels captured in info metrics.
 
 **Example 2 — keep only `coraza_` prefixed metrics (drop controller-runtime built-ins from this scrape job):**
 

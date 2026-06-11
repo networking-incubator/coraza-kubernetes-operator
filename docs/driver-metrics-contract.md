@@ -35,11 +35,13 @@ Drivers that do not implement this contract cannot be merged into the coraza-kub
 
 ## Label Injection
 
-The operator injects `engine` and `namespace` labels into the driver at load time via the WasmPlugin `pluginConfig` JSON field:
+The operator will inject `engine` and `namespace` labels into the driver at load time via the WasmPlugin `pluginConfig` JSON field:
 
 ```json
 {"engine": "my-engine", "namespace": "my-ns"}
 ```
+
+> **Not yet implemented:** The operator does not currently inject `engine` and `namespace` into `pluginConfig`. This injection will be added in a future PR alongside the first driver implementation. Until then, driver prototypes should use hardcoded test values for these fields.
 
 The driver MUST read these fields at initialization and apply them as Prometheus labels to **all** emitted metrics. Drivers that fail to read `pluginConfig` at startup MUST log an error and refuse to process traffic — a driver emitting metrics without the `engine` and `namespace` labels cannot be correlated to a specific Engine CRD instance, defeating the purpose of multi-tenant observability.
 
