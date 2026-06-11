@@ -58,12 +58,13 @@ func wasmPluginName(engineName string) string {
 // -----------------------------------------------------------------------------
 
 // provisionWasmDriver provisions the Istio WasmPlugin resource for the Engine.
-func (r *EngineReconciler) provisionWasmDriver(ctx context.Context, log logr.Logger, req ctrl.Request, engine wafv1alpha1.Engine) (ctrl.Result, error) {
-	ws := targetLabelSelector(&engine)
+// engine is passed by pointer so that status patches are visible to the caller.
+func (r *EngineReconciler) provisionWasmDriver(ctx context.Context, log logr.Logger, req ctrl.Request, engine *wafv1alpha1.Engine) (ctrl.Result, error) {
+	ws := targetLabelSelector(engine)
 	if ws == nil {
 		err := fmt.Errorf("target is required: cannot derive workload selector")
 		logError(log, req, "Engine", err, "Invalid target configuration")
-		if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "Engine", &engine, &engine.Status.Conditions, engine.Generation, "InvalidConfiguration", err.Error()); patchErr != nil {
+		if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "Engine", engine, &engine.Status.Conditions, engine.Generation, "InvalidConfiguration", err.Error()); patchErr != nil {
 			return ctrl.Result{}, patchErr
 		}
 		return ctrl.Result{}, err
@@ -73,17 +74,17 @@ func (r *EngineReconciler) provisionWasmDriver(ctx context.Context, log logr.Log
 	// before the WasmPlugin starts running. This prevents a partially-provisioned
 	// state where the plugin is active without the intended cache-server network
 	// restrictions.
-	if err := r.applyNetworkPolicy(ctx, log, req, &engine); err != nil {
-		if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "Engine", &engine, &engine.Status.Conditions, engine.Generation, "NetworkPolicyFailed", fmt.Sprintf("Failed to apply NetworkPolicy: %v", err)); patchErr != nil {
+	if err := r.applyNetworkPolicy(ctx, log, req, engine); err != nil {
+		if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "Engine", engine, &engine.Status.Conditions, engine.Generation, "NetworkPolicyFailed", fmt.Sprintf("Failed to apply NetworkPolicy: %v", err)); patchErr != nil {
 			return ctrl.Result{}, patchErr
 		}
 		return ctrl.Result{}, err
 	}
 
 	logDebug(log, req, "Engine", "Ensuring cache client ServiceAccount")
-	saName, err := r.ensureCacheClientServiceAccount(ctx, log, req, &engine)
+	saName, err := r.ensureCacheClientServiceAccount(ctx, log, req, engine)
 	if err != nil {
-		if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "Engine", &engine, &engine.Status.Conditions, engine.Generation, "ServiceAccountFailed", fmt.Sprintf("Failed to ensure cache client ServiceAccount: %v", err)); patchErr != nil {
+		if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "Engine", engine, &engine.Status.Conditions, engine.Generation, "ServiceAccountFailed", fmt.Sprintf("Failed to ensure cache client ServiceAccount: %v", err)); patchErr != nil {
 			return ctrl.Result{}, patchErr
 		}
 		return ctrl.Result{}, err
@@ -94,25 +95,25 @@ func (r *EngineReconciler) provisionWasmDriver(ctx context.Context, log logr.Log
 	logDebug(log, req, "Engine", "Ensuring cache client token")
 	cacheToken, renewAt, err := r.ensureCacheToken(ctx, log, req, saName, engine.Spec.RuleSet.Name)
 	if err != nil {
-		if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "Engine", &engine, &engine.Status.Conditions, engine.Generation, "TokenFailed", fmt.Sprintf("Failed to ensure cache client token: %v", err)); patchErr != nil {
+		if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "Engine", engine, &engine.Status.Conditions, engine.Generation, "TokenFailed", fmt.Sprintf("Failed to ensure cache client token: %v", err)); patchErr != nil {
 			return ctrl.Result{}, patchErr
 		}
 		return ctrl.Result{}, err
 	}
 
-	wasmPlugin, err := r.applyWasmPlugin(ctx, log, req, &engine, cacheToken)
+	wasmPlugin, err := r.applyWasmPlugin(ctx, log, req, engine, cacheToken)
 	if err != nil {
-		if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "Engine", &engine, &engine.Status.Conditions, engine.Generation, "ProvisioningFailed", fmt.Sprintf("Failed to create or update WasmPlugin: %v", err)); patchErr != nil {
+		if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "Engine", engine, &engine.Status.Conditions, engine.Generation, "ProvisioningFailed", fmt.Sprintf("Failed to create or update WasmPlugin: %v", err)); patchErr != nil {
 			return ctrl.Result{}, patchErr
 		}
 		return ctrl.Result{}, err
 	}
 
 	logDebug(log, req, "Engine", "Updating status after successful provisioning")
-	if patchErr := patchReady(ctx, r.Status(), r.Recorder, log, req, "Engine", &engine, &engine.Status.Conditions, engine.Generation, "Configured", "WasmPlugin successfully created/updated"); patchErr != nil {
+	if patchErr := patchReady(ctx, r.Status(), r.Recorder, log, req, "Engine", engine, &engine.Status.Conditions, engine.Generation, "Configured", "WasmPlugin successfully created/updated"); patchErr != nil {
 		return ctrl.Result{}, patchErr
 	}
-	r.Recorder.Eventf(&engine, nil, "Normal", "WasmPluginCreated", "Provision", "Created WasmPlugin %s/%s", wasmPlugin.GetNamespace(), wasmPlugin.GetName())
+	r.Recorder.Eventf(engine, nil, "Normal", "WasmPluginCreated", "Provision", "Created WasmPlugin %s/%s", wasmPlugin.GetNamespace(), wasmPlugin.GetName())
 
 	// Schedule re-reconciliation at the token's renewal deadline. This is a
 	// single requeue that fires exactly when the token needs refreshing,

@@ -24,15 +24,11 @@ func (r *RuleSetReconciler) cacheRules(
 	aggregatedRules string,
 	dataFiles map[string][]byte,
 	unsupportedMsg string,
-) (ctrl.Result, error) {
+) error {
 	cacheKey := fmt.Sprintf("%s/%s", ruleset.Namespace, ruleset.Name)
 	r.Cache.Put(cacheKey, aggregatedRules, dataFiles)
 	logInfo(log, req, "RuleSet", "Stored rules in cache", "cacheKey", cacheKey)
 
 	statusMsg := buildCacheReadyMessage(ruleset.Namespace, ruleset.Name, unsupportedMsg)
-	if err := patchReady(ctx, r.Status(), r.Recorder, log, req, "RuleSet", ruleset, &ruleset.Status.Conditions, ruleset.Generation, "RulesCached", statusMsg); err != nil {
-		return ctrl.Result{}, err
-	}
-
-	return ctrl.Result{}, nil
+	return patchReady(ctx, r.Status(), r.Recorder, log, req, "RuleSet", ruleset, &ruleset.Status.Conditions, ruleset.Generation, "RulesCached", statusMsg)
 }

@@ -22,6 +22,8 @@ import (
 	"sort"
 	"testing"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -164,14 +166,14 @@ func TestRuleSetReconciler_ReconcileRuleSources(t *testing.T) {
 			ruleSetCache := cache.NewRuleSetCache()
 
 			t.Logf("Creating %d RuleSource(s)", len(tt.ruleSources))
-			var refs []wafv1alpha1.SourceReference
-			var names []string
+			names := make([]string, 0, len(tt.ruleSources))
 			for name := range tt.ruleSources {
 				names = append(names, name)
 			}
 			sort.Strings(names)
 
 			t.Logf("Creating RuleSources: %v", names)
+			refs := make([]wafv1alpha1.SourceReference, 0, len(names))
 			for _, name := range names {
 				data := tt.ruleSources[name]
 				rs := utils.NewTestRuleSource(name, testNamespace, data)
@@ -1487,4 +1489,381 @@ func TestRuleSetReconciler_RuleDataStatusRefreshesAfterSpecUpdate(t *testing.T) 
 	assert.Equal(t, gen2, ready2.ObservedGeneration)
 	assert.Equal(t, metav1.ConditionTrue, ready2.Status)
 	assert.Equal(t, "Loaded", ready2.Reason)
+}
+
+// -----------------------------------------------------------------------------
+// RuleSet reconciler — metrics integration tests
+// -----------------------------------------------------------------------------
+
+// TestRuleSetReconciler_MetricsRecordOnSuccess verifies that after a successful
+// reconcile the RecordRuleSet path fires and coraza_ruleset_info is set to 1.
+func TestRuleSetReconciler_MetricsRecordOnSuccess(t *testing.T) {
+	ctx, cleanup := setupTest(t)
+	t.Cleanup(cleanup)
+
+	// Create a RuleSource that the RuleSet references.
+	src := utils.NewTestRuleSource("metrics-src", testNamespace,
+		`SecRule REQUEST_URI "@contains /m" "id:900,phase:1,pass,nolog"`)
+	require.NoError(t, k8sClient.Create(ctx, src))
+	t.Cleanup(func() { _ = k8sClient.Delete(ctx, src) })
+
+	ruleSet := utils.NewTestRuleSet(utils.RuleSetOptions{
+		Name:      "metrics-rs",
+		Namespace: testNamespace,
+		Sources:   []wafv1alpha1.SourceReference{{Name: "metrics-src"}},
+	})
+	require.NoError(t, k8sClient.Create(ctx, ruleSet))
+	t.Cleanup(func() { _ = k8sClient.Delete(ctx, ruleSet) })
+
+	reg := prometheus.NewRegistry()
+	m, err := NewCorazaMetrics(reg)
+	require.NoError(t, err)
+
+	reconciler := &RuleSetReconciler{
+		Client:   k8sClient,
+		Scheme:   scheme,
+		Recorder: utils.NewTestRecorder(),
+		Cache:    cache.NewRuleSetCache(),
+		Metrics:  m,
+	}
+
+	_, err = reconcileRuleSetWithRuleSources(ctx, t, types.NamespacedName{Name: ruleSet.Name, Namespace: ruleSet.Namespace}, reconciler)
+	require.NoError(t, err)
+
+	// The defer in Reconcile fires RecordRuleSet: info gauge must be 1.
+	assert.Equal(t, 1, testutil.CollectAndCount(reg, "coraza_ruleset_info"),
+		"coraza_ruleset_info must be emitted after successful RuleSet reconcile")
+}
+
+// TestRuleSetReconciler_MetricsForgetOnNotFound verifies that a not-found
+// reconcile calls ForgetRuleSet and removes all series from the registry.
+func TestRuleSetReconciler_MetricsForgetOnNotFound(t *testing.T) {
+	ctx, cleanup := setupTest(t)
+	t.Cleanup(cleanup)
+
+	reg := prometheus.NewRegistry()
+	m, err := NewCorazaMetrics(reg)
+	require.NoError(t, err)
+
+	// Pre-populate the series to simulate a previously-recorded RuleSet.
+	m.RecordRuleSet(minimalRuleSet(testNamespace, "rs-metrics-gone", 1, 0))
+	assert.Equal(t, 1, testutil.CollectAndCount(reg, "coraza_ruleset_info"),
+		"pre-condition: info series must exist before reconcile")
+
+	reconciler := &RuleSetReconciler{
+		Client:   k8sClient,
+		Scheme:   scheme,
+		Recorder: utils.NewTestRecorder(),
+		Cache:    cache.NewRuleSetCache(),
+		Metrics:  m,
+	}
+
+	// Reconcile a resource that does not exist in the cluster.
+	_, err = reconciler.Reconcile(ctx, ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "rs-metrics-gone", Namespace: testNamespace},
+	})
+	require.NoError(t, err)
+
+	assert.Equal(t, 0, testutil.CollectAndCount(reg, "coraza_ruleset_info"),
+		"coraza_ruleset_info must be gone after not-found reconcile")
+	assert.Equal(t, 0, testutil.CollectAndCount(reg, "coraza_ruleset_condition"),
+		"coraza_ruleset_condition must be gone after not-found reconcile")
+}
+
+// TestRuleSetReconciler_MetricsSourceDataCountsUpdateOnSpecChange verifies that
+// coraza_ruleset_sources and coraza_ruleset_data_files update when the RuleSet
+// spec.sources or spec.data counts change between reconciles. This exercises the
+// RecordRuleSet path in the reconciler defer for spec mutations.
+func TestRuleSetReconciler_MetricsSourceDataCountsUpdateOnSpecChange(t *testing.T) {
+	ctx, cleanup := setupTest(t)
+	t.Cleanup(cleanup)
+
+	src := utils.NewTestRuleSource("spec-change-src", testNamespace,
+		`SecRule REQUEST_URI "@contains /x" "id:11,phase:1,pass,nolog"`)
+	require.NoError(t, k8sClient.Create(ctx, src))
+	t.Cleanup(func() { _ = k8sClient.Delete(ctx, src) })
+
+	rd := utils.NewTestRuleData("spec-change-rd", testNamespace, map[string]string{"x.data": "a"})
+	require.NoError(t, k8sClient.Create(ctx, rd))
+	t.Cleanup(func() { _ = k8sClient.Delete(ctx, rd) })
+
+	// Initial RuleSet: 1 source, 1 data file.
+	ruleSet := utils.NewTestRuleSet(utils.RuleSetOptions{
+		Name:      "spec-change-ruleset",
+		Namespace: testNamespace,
+		Sources:   []wafv1alpha1.SourceReference{{Name: "spec-change-src"}},
+		Data:      []wafv1alpha1.DataReference{{Name: "spec-change-rd"}},
+	})
+	require.NoError(t, k8sClient.Create(ctx, ruleSet))
+	t.Cleanup(func() { _ = k8sClient.Delete(ctx, ruleSet) })
+
+	reg := prometheus.NewRegistry()
+	m, err := NewCorazaMetrics(reg)
+	require.NoError(t, err)
+
+	reconciler := &RuleSetReconciler{
+		Client:   k8sClient,
+		Scheme:   scheme,
+		Recorder: utils.NewTestRecorder(),
+		Cache:    cache.NewRuleSetCache(),
+		Metrics:  m,
+	}
+	nn := types.NamespacedName{Name: ruleSet.Name, Namespace: ruleSet.Namespace}
+
+	_, err = reconcileRuleSetWithRuleSources(ctx, t, nn, reconciler)
+	require.NoError(t, err)
+
+	gatherCounts := func() (sources, dataFiles float64) {
+		gathered, gErr := reg.Gather()
+		require.NoError(t, gErr)
+		for _, mf := range gathered {
+			switch mf.GetName() {
+			case "coraza_ruleset_sources":
+				for _, metric := range mf.GetMetric() {
+					sources = metric.GetGauge().GetValue()
+				}
+			case "coraza_ruleset_data_files":
+				for _, metric := range mf.GetMetric() {
+					dataFiles = metric.GetGauge().GetValue()
+				}
+			}
+		}
+		return
+	}
+
+	sources, dataFiles := gatherCounts()
+	assert.Equal(t, float64(1), sources, "initial sources count must be 1")
+	assert.Equal(t, float64(1), dataFiles, "initial data_files count must be 1")
+
+	// Remove spec.data from the RuleSet — this requires a spec update.
+	var updated wafv1alpha1.RuleSet
+	require.NoError(t, k8sClient.Get(ctx, nn, &updated))
+	updated.Spec.Data = nil
+	require.NoError(t, k8sClient.Update(ctx, &updated))
+
+	_, err = reconcileRuleSetWithRuleSources(ctx, t, nn, reconciler)
+	require.NoError(t, err)
+
+	sources, dataFiles = gatherCounts()
+	assert.Equal(t, float64(1), sources, "sources count must remain 1 after data removal")
+	assert.Equal(t, float64(0), dataFiles, "data_files count must drop to 0 after spec.data cleared")
+}
+
+// TestRuleSetReconciler_MetricsForgetRuleDataOnSpecRemoval verifies the
+// reconciler-level "stale RuleData series cleanup" path (Finding 1): when a
+// RuleData is removed from spec.data, the reconciler's defer block calls
+// ForgetRuleData so the coraza_ruledata_info series disappears.
+func TestRuleSetReconciler_MetricsForgetRuleDataOnSpecRemoval(t *testing.T) {
+	ctx, cleanup := setupTest(t)
+	t.Cleanup(cleanup)
+
+	// Use a rule that references the data file only while the RuleData is in
+	// spec.data. When we remove it from spec.data we also change the rule so
+	// the RuleSet can still reconcile successfully.
+	srcWithData := utils.NewTestRuleSource("forget-rd-src-data", testNamespace,
+		`SecRule ARGS "@pmFromFile forget-rd.data" "id:33,phase:1,pass,nolog"`)
+	require.NoError(t, k8sClient.Create(ctx, srcWithData))
+	t.Cleanup(func() { _ = k8sClient.Delete(ctx, srcWithData) })
+
+	srcNoData := utils.NewTestRuleSource("forget-rd-src-nodata", testNamespace,
+		`SecCollectionTimeout 1`)
+	require.NoError(t, k8sClient.Create(ctx, srcNoData))
+	t.Cleanup(func() { _ = k8sClient.Delete(ctx, srcNoData) })
+
+	rd := utils.NewTestRuleData("forget-rd", testNamespace, map[string]string{"forget-rd.data": "alpha"})
+	require.NoError(t, k8sClient.Create(ctx, rd))
+	t.Cleanup(func() { _ = k8sClient.Delete(ctx, rd) })
+
+	// Initial: RuleSet references the RuleData and the rule that uses it.
+	ruleSet := utils.NewTestRuleSet(utils.RuleSetOptions{
+		Name:      "forget-rd-ruleset",
+		Namespace: testNamespace,
+		Sources:   []wafv1alpha1.SourceReference{{Name: "forget-rd-src-data"}},
+		Data:      []wafv1alpha1.DataReference{{Name: "forget-rd"}},
+	})
+	require.NoError(t, k8sClient.Create(ctx, ruleSet))
+	t.Cleanup(func() { _ = k8sClient.Delete(ctx, ruleSet) })
+
+	reg := prometheus.NewRegistry()
+	m, err := NewCorazaMetrics(reg)
+	require.NoError(t, err)
+
+	reconciler := &RuleSetReconciler{
+		Client:   k8sClient,
+		Scheme:   scheme,
+		Recorder: utils.NewTestRecorder(),
+		Cache:    cache.NewRuleSetCache(),
+		Metrics:  m,
+	}
+	nn := types.NamespacedName{Name: ruleSet.Name, Namespace: ruleSet.Namespace}
+
+	// First reconcile: RuleData is referenced, so RecordRuleData must fire via
+	// the cache path in ruleset_controller_cache.go.
+	_, err = reconcileRuleSetWithRuleSources(ctx, t, nn, reconciler)
+	require.NoError(t, err)
+
+	assert.Equal(t, 1, testutil.CollectAndCount(reg, "coraza_ruledata_info"),
+		"pre-condition: coraza_ruledata_info must be set while RuleData is in spec.data")
+
+	// Swap the source to one that does not use the data file, then remove
+	// spec.data so the RuleSet can reconcile cleanly without the RuleData.
+	var updated wafv1alpha1.RuleSet
+	require.NoError(t, k8sClient.Get(ctx, nn, &updated))
+	updated.Spec.Sources = []wafv1alpha1.SourceReference{{Name: "forget-rd-src-nodata"}}
+	updated.Spec.Data = nil
+	require.NoError(t, k8sClient.Update(ctx, &updated))
+
+	// Second reconcile: the defer block must call ForgetRuleData for "forget-rd"
+	// because it is present in the namespace but absent from spec.data.
+	_, err = reconcileRuleSetWithRuleSources(ctx, t, nn, reconciler)
+	require.NoError(t, err)
+
+	assert.Equal(t, 0, testutil.CollectAndCount(reg, "coraza_ruledata_info"),
+		"coraza_ruledata_info must be cleared when RuleData is removed from spec.data")
+	assert.Equal(t, 0, testutil.CollectAndCount(reg, "coraza_ruledata_condition"),
+		"coraza_ruledata_condition must be cleared when RuleData is removed from spec.data")
+}
+
+// TestRuleSetReconciler_MetricsMultiRuleSetRuleDataIsolation verifies that
+// reconciling one RuleSet does NOT wipe RuleData metrics belonging to another
+// RuleSet in the same namespace. The ForgetRuleData logic must build a union
+// of spec.data across ALL RuleSets before deciding what to forget.
+func TestRuleSetReconciler_MetricsMultiRuleSetRuleDataIsolation(t *testing.T) {
+	ctx, cleanup := setupTest(t)
+	t.Cleanup(cleanup)
+
+	// Two distinct RuleSources with simple, valid rules.
+	srcA := utils.NewTestRuleSource("multi-src-a", testNamespace,
+		`SecRule REQUEST_URI "@contains /a" "id:50,phase:1,pass,nolog"`)
+	srcB := utils.NewTestRuleSource("multi-src-b", testNamespace,
+		`SecRule REQUEST_URI "@contains /b" "id:51,phase:1,pass,nolog"`)
+	require.NoError(t, k8sClient.Create(ctx, srcA))
+	require.NoError(t, k8sClient.Create(ctx, srcB))
+	t.Cleanup(func() { _ = k8sClient.Delete(ctx, srcA) })
+	t.Cleanup(func() { _ = k8sClient.Delete(ctx, srcB) })
+
+	// Two distinct RuleData objects, each referenced by a different RuleSet.
+	rdA := utils.NewTestRuleData("multi-rd-a", testNamespace, map[string]string{"a.data": "alpha"})
+	rdB := utils.NewTestRuleData("multi-rd-b", testNamespace, map[string]string{"b.data": "beta"})
+	require.NoError(t, k8sClient.Create(ctx, rdA))
+	require.NoError(t, k8sClient.Create(ctx, rdB))
+	t.Cleanup(func() { _ = k8sClient.Delete(ctx, rdA) })
+	t.Cleanup(func() { _ = k8sClient.Delete(ctx, rdB) })
+
+	rsA := utils.NewTestRuleSet(utils.RuleSetOptions{
+		Name:      "multi-rs-a",
+		Namespace: testNamespace,
+		Sources:   []wafv1alpha1.SourceReference{{Name: "multi-src-a"}},
+		Data:      []wafv1alpha1.DataReference{{Name: "multi-rd-a"}},
+	})
+	rsB := utils.NewTestRuleSet(utils.RuleSetOptions{
+		Name:      "multi-rs-b",
+		Namespace: testNamespace,
+		Sources:   []wafv1alpha1.SourceReference{{Name: "multi-src-b"}},
+		Data:      []wafv1alpha1.DataReference{{Name: "multi-rd-b"}},
+	})
+	require.NoError(t, k8sClient.Create(ctx, rsA))
+	require.NoError(t, k8sClient.Create(ctx, rsB))
+	t.Cleanup(func() { _ = k8sClient.Delete(ctx, rsA) })
+	t.Cleanup(func() { _ = k8sClient.Delete(ctx, rsB) })
+
+	reg := prometheus.NewRegistry()
+	m, err := NewCorazaMetrics(reg)
+	require.NoError(t, err)
+
+	reconciler := &RuleSetReconciler{
+		Client:   k8sClient,
+		Scheme:   scheme,
+		Recorder: utils.NewTestRecorder(),
+		Cache:    cache.NewRuleSetCache(),
+		Metrics:  m,
+	}
+
+	nnA := types.NamespacedName{Name: rsA.Name, Namespace: rsA.Namespace}
+	nnB := types.NamespacedName{Name: rsB.Name, Namespace: rsB.Namespace}
+
+	// Reconcile both RuleSets — both RuleData should have metrics.
+	_, err = reconcileRuleSetWithRuleSources(ctx, t, nnA, reconciler)
+	require.NoError(t, err)
+	_, err = reconcileRuleSetWithRuleSources(ctx, t, nnB, reconciler)
+	require.NoError(t, err)
+
+	assert.Equal(t, 2, testutil.CollectAndCount(reg, "coraza_ruledata_info"),
+		"both RuleData must have info series after initial reconcile")
+
+	// Re-reconcile RuleSet A — must NOT wipe RuleData B's series.
+	_, err = reconcileRuleSetWithRuleSources(ctx, t, nnA, reconciler)
+	require.NoError(t, err)
+
+	assert.Equal(t, 2, testutil.CollectAndCount(reg, "coraza_ruledata_info"),
+		"reconciling RuleSet A must not forget RuleData B's series")
+
+	// Re-reconcile RuleSet B — must NOT wipe RuleData A's series.
+	_, err = reconcileRuleSetWithRuleSources(ctx, t, nnB, reconciler)
+	require.NoError(t, err)
+
+	assert.Equal(t, 2, testutil.CollectAndCount(reg, "coraza_ruledata_info"),
+		"reconciling RuleSet B must not forget RuleData A's series")
+}
+
+// TestRuleSetReconciler_MetricsRuleSetDeletionCleansUpRuleData verifies that
+// when a RuleSet is deleted (not-found path), the orphaned RuleData metrics are
+// cleaned up via reconcileRuleDataMetrics — not left stale.
+func TestRuleSetReconciler_MetricsRuleSetDeletionCleansUpRuleData(t *testing.T) {
+	ctx, cleanup := setupTest(t)
+	t.Cleanup(cleanup)
+
+	src := utils.NewTestRuleSource("del-cleanup-src", testNamespace,
+		`SecRule REQUEST_URI "@contains /d" "id:60,phase:1,pass,nolog"`)
+	require.NoError(t, k8sClient.Create(ctx, src))
+	t.Cleanup(func() { _ = k8sClient.Delete(ctx, src) })
+
+	rd := utils.NewTestRuleData("del-cleanup-rd", testNamespace, map[string]string{"d.data": "value"})
+	require.NoError(t, k8sClient.Create(ctx, rd))
+	t.Cleanup(func() { _ = k8sClient.Delete(ctx, rd) })
+
+	ruleSet := utils.NewTestRuleSet(utils.RuleSetOptions{
+		Name:      "del-cleanup-rs",
+		Namespace: testNamespace,
+		Sources:   []wafv1alpha1.SourceReference{{Name: "del-cleanup-src"}},
+		Data:      []wafv1alpha1.DataReference{{Name: "del-cleanup-rd"}},
+	})
+	require.NoError(t, k8sClient.Create(ctx, ruleSet))
+
+	reg := prometheus.NewRegistry()
+	m, err := NewCorazaMetrics(reg)
+	require.NoError(t, err)
+
+	reconciler := &RuleSetReconciler{
+		Client:   k8sClient,
+		Scheme:   scheme,
+		Recorder: utils.NewTestRecorder(),
+		Cache:    cache.NewRuleSetCache(),
+		Metrics:  m,
+	}
+	nn := types.NamespacedName{Name: ruleSet.Name, Namespace: ruleSet.Namespace}
+
+	// First reconcile: both RuleSet and RuleData series should be recorded.
+	_, err = reconcileRuleSetWithRuleSources(ctx, t, nn, reconciler)
+	require.NoError(t, err)
+
+	assert.Equal(t, 1, testutil.CollectAndCount(reg, "coraza_ruleset_info"),
+		"pre-condition: ruleset info must exist")
+	assert.Equal(t, 1, testutil.CollectAndCount(reg, "coraza_ruledata_info"),
+		"pre-condition: ruledata info must exist")
+
+	// Delete the RuleSet from the cluster.
+	require.NoError(t, k8sClient.Delete(ctx, ruleSet))
+
+	// Reconcile the deleted RuleSet — not-found path should clean up both
+	// the RuleSet series and the orphaned RuleData series.
+	_, err = reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: nn})
+	require.NoError(t, err)
+
+	assert.Equal(t, 0, testutil.CollectAndCount(reg, "coraza_ruleset_info"),
+		"coraza_ruleset_info must be cleared after RuleSet deletion")
+	assert.Equal(t, 0, testutil.CollectAndCount(reg, "coraza_ruledata_info"),
+		"coraza_ruledata_info must be cleared when the only referencing RuleSet is deleted")
+	assert.Equal(t, 0, testutil.CollectAndCount(reg, "coraza_ruledata_condition"),
+		"coraza_ruledata_condition must be cleared when the only referencing RuleSet is deleted")
 }

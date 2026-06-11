@@ -66,6 +66,7 @@ import (
 type EngineReconciler struct {
 	Scheme   *runtime.Scheme
 	Recorder events.EventRecorder
+	Metrics  *CorazaMetrics
 
 	client.Client
 	kubeClient                kubernetes.Interface
@@ -167,6 +168,11 @@ func (r *EngineReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	if err := r.Get(ctx, req.NamespacedName, &engine); err != nil {
 		if apierrors.IsNotFound(err) {
 			logDebug(log, req, "Engine", "Resource not found")
+			r.Metrics.ForgetEngine(req.Namespace, req.Name)
+			var list wafv1alpha1.EngineList
+			if listErr := r.List(ctx, &list, client.InNamespace(req.Namespace)); listErr == nil {
+				r.Metrics.SetEnginesTotal(req.Namespace, len(list.Items))
+			}
 			// Best-effort cleanup: remove any orphaned NetworkPolicy that may
 			// remain if the Engine was deleted before the finalizer was added
 			// (e.g., race during upgrade or legacy Engine without finalizer).
@@ -179,6 +185,17 @@ func (r *EngineReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		logAPIError(log, req, "Engine", err, "Failed to get", nil)
 		return ctrl.Result{}, err
 	}
+
+	defer func() {
+		if r.Metrics == nil {
+			return
+		}
+		r.Metrics.RecordEngine(&engine)
+		var list wafv1alpha1.EngineList
+		if err := r.List(ctx, &list, client.InNamespace(req.Namespace)); err == nil {
+			r.Metrics.SetEnginesTotal(req.Namespace, len(list.Items))
+		}
+	}()
 
 	// Handle deletion: clean up cross-namespace NetworkPolicy before removing
 	// the finalizer so the Engine can be garbage-collected.
@@ -256,7 +273,7 @@ func (r *EngineReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	}
 
 	logInfo(log, req, "Engine", "Selecting driver and provisioning")
-	return r.selectDriver(ctx, log, req, engine)
+	return r.selectDriver(ctx, log, req, &engine)
 }
 
 // -----------------------------------------------------------------------------
@@ -283,7 +300,7 @@ func (r *EngineReconciler) handleInvalidDriverConfiguration(ctx context.Context,
 // EngineReconciler - Driver Provisioning
 // -----------------------------------------------------------------------------
 
-func (r *EngineReconciler) selectDriver(ctx context.Context, log logr.Logger, req ctrl.Request, engine wafv1alpha1.Engine) (ctrl.Result, error) {
+func (r *EngineReconciler) selectDriver(ctx context.Context, log logr.Logger, req ctrl.Request, engine *wafv1alpha1.Engine) (ctrl.Result, error) {
 	driverType := engine.Spec.Driver.Type
 	if driverType == "" {
 		driverType = defaultDriverTypeForProvider(engine.Spec.Target.Provider)
@@ -294,7 +311,7 @@ func (r *EngineReconciler) selectDriver(ctx context.Context, log logr.Logger, re
 		logDebug(log, req, "Engine", "Using WASM driver")
 		return r.provisionWasmDriver(ctx, log, req, engine)
 	default:
-		return ctrl.Result{}, r.handleInvalidDriverConfiguration(ctx, log, req, &engine)
+		return ctrl.Result{}, r.handleInvalidDriverConfiguration(ctx, log, req, engine)
 	}
 }
 
