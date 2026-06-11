@@ -106,15 +106,16 @@ spec:
         # Using count() avoids per-Engine alert storms.
         #
         # DEPENDENCY: coraza_engine_condition and coraza_ruleset_condition are emitted
-        # by the metrics-collector component. These recording rules (and the
-        # CorazaEngineNotReady / CorazaRuleSetNotReady alerts that depend on them)
-        # will produce a constant 0 via the `or vector(0)` fallback — meaning the
-        # alerts will never fire — until the metrics-collector is deployed alongside
-        # the operator. Ensure the metrics-collector chart is deployed before relying
-        # on these rules for alerting.
+        # by the operator's controller metrics (internal/controller/metrics.go).
+        # These recording rules (and the CorazaEngineNotReady / CorazaRuleSetNotReady
+        # alerts that depend on them) will produce a constant 0 via the `or vector(0)`
+        # fallback — meaning the alerts will never fire — until the operator is
+        # running and has reconciled at least one Engine or RuleSet.
+        #
+        # != 1 catches both False (0) and Unknown (-1) condition states.
         - record: coraza:engines_not_ready:count
-          expr: count(coraza_engine_condition{condition="Ready"} == 0) or vector(0)
+          expr: count(coraza_engine_condition{condition="Ready"} != 1) or vector(0)
 
         - record: coraza:rulesets_not_ready:count
-          expr: count(coraza_ruleset_condition{condition="Ready"} == 0) or vector(0)
+          expr: count(coraza_ruleset_condition{condition="Ready"} != 1) or vector(0)
 {{- end }}

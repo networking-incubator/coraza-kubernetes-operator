@@ -30,7 +30,7 @@ for counters by Prometheus convention).
 
 ### Controller Observability (PR #397 — `internal/controller/metrics.go`)
 
-> **Note:** The metrics in this section are defined in PR #397, which is not yet merged into `main`. These metrics do not exist in the current codebase. This section applies only once PR #397 is merged.
+> **Note:** The metrics in this section are defined in `internal/controller/metrics.go` (merged via PR #397).
 
 | Metric | Type | Labels | Worst-case series/cluster | Notes |
 |--------|------|--------|--------------------------|-------|
@@ -105,7 +105,8 @@ Data-plane metrics are emitted directly from the Coraza WASM driver running insi
 Envoy sidecars. They are NOT scraped from the operator.
 
 For the full specification of data-plane metric names, labels, and cardinality
-constraints (including the top-N rule limit that bounds per-rule series), see the driver metrics contract documentation (available once the `feat/metrics-driver-contract` branch is merged).
+constraints (including the top-N rule limit that bounds per-rule series), see
+[`docs/driver-metrics-contract.md`](../../../driver-metrics-contract.md).
 
 **Key differences from operator metrics:**
 

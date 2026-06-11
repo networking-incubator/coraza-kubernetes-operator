@@ -69,11 +69,35 @@ else
   fail "Empty gatewaySelector should have caused a render failure"
 fi
 
-# ── Test 7: additionalLabels merged into PrometheusRule ──────────────────────
+# ── Test 7: PodMonitor disabled when metrics.enabled=false ───────────────────
+section "PodMonitor respects metrics.enabled gate"
+out=$(render --set metrics.enabled=false --set metrics.podMonitor.enabled=true \
+  --set 'metrics.podMonitor.gatewaySelector.app=my-gateway')
+echo "$out" | grep -q "kind: PodMonitor" && fail "PodMonitor should be gated on metrics.enabled" || pass "PodMonitor correctly gated"
+
+# ── Test 8: additionalLabels merged into PrometheusRule ──────────────────────
 section "PrometheusRule additionalLabels"
 out=$(render --set metrics.enabled=true --set metrics.prometheusRule.enabled=true \
   --set 'metrics.prometheusRule.additionalLabels.release=prometheus')
 echo "$out" | grep -q "release: prometheus" && pass "additionalLabels merged" || fail "additionalLabels not merged"
+
+# ── Test 9: promtool check rules (optional) ──────────────────────────────────
+if command -v promtool &>/dev/null; then
+  section "promtool check rules"
+  prom_yaml=$(render --set metrics.enabled=true --set metrics.prometheusRule.enabled=true \
+    | sed -n '/^  groups:/,$p')
+  tmpfile=$(mktemp /tmp/prometheusrule-XXXXXX.yaml)
+  echo "$prom_yaml" > "$tmpfile"
+  if promtool check rules "$tmpfile" &>/dev/null; then
+    pass "promtool check rules passed"
+  else
+    fail "promtool check rules failed"
+  fi
+  rm -f "$tmpfile"
+else
+  echo
+  echo "SKIP: promtool not found — install prometheus to validate rules"
+fi
 
 # ── Summary ───────────────────────────────────────────────────────────────────
 echo

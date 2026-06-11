@@ -135,7 +135,7 @@ coraza_waf_request_anomaly_score_sum{engine="gw-waf",namespace="prod",driver_typ
 coraza_waf_request_anomaly_score_count{engine="gw-waf",namespace="prod",driver_type="wasm"} 1000
 ```
 
-### coraza_waf_rule_overrides_total
+### coraza_waf_rule_overrides
 
 Type: gauge
 
@@ -154,20 +154,20 @@ Labels:
 
 **Security note:** A change in this metric signals a WAF posture change — a rule was disabled or its action was altered. Operators SHOULD configure an alert on posture changes between scrapes:
 ```
-changes(coraza_waf_rule_overrides_total[1h]) > 0
+changes(coraza_waf_rule_overrides[1h]) > 0
 ```
 
 This alert fires when the gauge value changes (override added or removed), not on every scrape. Use `sum by (engine, namespace, driver_type)` if you want to alert on the total override count exceeding a threshold:
 ```
-sum by (engine, namespace, driver_type) (coraza_waf_rule_overrides_total) > 10
+sum by (engine, namespace, driver_type) (coraza_waf_rule_overrides) > 10
 ```
 
 Prometheus text format example:
 ```
-# HELP coraza_waf_rule_overrides_total Current count of rule override directives in effect by type.
-# TYPE coraza_waf_rule_overrides_total gauge
-coraza_waf_rule_overrides_total{engine="gw-waf",namespace="prod",driver_type="wasm",rule_id="941100",type="disabled"} 1
-coraza_waf_rule_overrides_total{engine="gw-waf",namespace="prod",driver_type="wasm",rule_id="942150",type="action_changed"} 1
+# HELP coraza_waf_rule_overrides Current count of rule override directives in effect by type.
+# TYPE coraza_waf_rule_overrides gauge
+coraza_waf_rule_overrides{engine="gw-waf",namespace="prod",driver_type="wasm",rule_id="941100",type="disabled"} 1
+coraza_waf_rule_overrides{engine="gw-waf",namespace="prod",driver_type="wasm",rule_id="942150",type="action_changed"} 1
 ```
 
 ### coraza_waf_plugin_loads_total
@@ -258,7 +258,7 @@ coraza_waf_blocked_requests_total{engine="gw-waf",namespace="prod",driver_type="
 | `coraza_waf_requests_total` | 10 × 5 outcomes × 2 driver types = 100 | Fixed label set; no unbounded dimension |
 | `coraza_waf_rule_hits_total` | 10 × 201 rule slots × 5 severities × 3 outcomes × 2 driver types = 60,300 | top-N bound (N≤200) with `rule_id="other"` overflow; lower N in multi-replica deployments |
 | `coraza_waf_request_anomaly_score` | 10 × (11 buckets + sum + count) × 2 driver types = 260 | Fixed bucket set; bounded by driver types |
-| `coraza_waf_rule_overrides_total` | 10 × (overrides per engine) × 4 types × 2 driver types; overrides are operator-controlled | Gauge reflects current state; alert on `changes()`, not cardinality |
+| `coraza_waf_rule_overrides` | 10 × (overrides per engine) × 4 types × 2 driver types; overrides are operator-controlled | Gauge reflects current state; alert on `changes()`, not cardinality |
 | `coraza_waf_plugin_loads_total` | 10 × 2 driver types × 2 statuses = 40 | Fixed label set |
 | `coraza_waf_plugin_rule_count` | 10 × 2 driver types = 20 | Gauge; no unbounded dimension |
 | `coraza_waf_blocked_requests_total` | 10 × 9 categories × 5 severities × 2 driver types = 900 | Fixed category and severity set |
@@ -272,7 +272,7 @@ A driver PR MUST satisfy all of the following before merge:
 - [ ] All 7 metrics implemented with the exact names defined in this document
 - [ ] `engine` and `namespace` labels injected from `pluginConfig` JSON at initialization
 - [ ] `coraza_waf_rule_hits_total` bounded by top-N (N≤200) with overflow aggregated to `rule_id="other"`
-- [ ] `coraza_waf_rule_overrides_total` set (gauge) at load time, not per request; value reset on plugin reload to reflect new configuration
+- [ ] `coraza_waf_rule_overrides` set (gauge) at load time, not per request; value reset on plugin reload to reflect new configuration
 - [ ] Metric names match exactly (Prometheus is case-sensitive, exact-match)
 - [ ] Integration test validates that all 7 metrics appear after a test HTTP request is processed
 - [ ] `promtool check metrics` passes on the raw exposition output from the driver
@@ -330,7 +330,7 @@ histogram_quantile(0.95,
 ### Engines with changed override posture (any override added or removed in the last hour)
 
 ```promql
-changes(coraza_waf_rule_overrides_total[1h]) > 0
+changes(coraza_waf_rule_overrides[1h]) > 0
 ```
 
 ### WAF error rate (fraction of requests resulting in evaluation errors)
