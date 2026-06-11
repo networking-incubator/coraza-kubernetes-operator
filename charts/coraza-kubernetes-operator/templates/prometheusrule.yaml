@@ -1,0 +1,120 @@
+{{- if and .Values.metrics.enabled .Values.metrics.prometheusRule.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "coraza-operator.fullname" . }}-alerts
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "coraza-operator.labels" . | nindent 4 }}
+    {{- with .Values.metrics.prometheusRule.additionalLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  groups:
+    - name: coraza-operator.alerts
+      rules:
+        # Reconcile error ratio above 10% over 5m window (errors / total reconciles)
+        - alert: CorazaReconcileErrorRateHigh
+          expr: >-
+            rate(controller_runtime_reconcile_errors_total{controller=~"ruleset|engine"}[5m])
+            /
+            rate(controller_runtime_reconcile_total{controller=~"ruleset|engine"}[5m])
+            > 0.1
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Coraza operator reconcile error rate is high"
+            description: 'Controller {{ "{{" }} $labels.controller {{ "}}" }} has reconcile error ratio {{ "{{" }} $value | humanizePercentage {{ "}}" }} over the last 5 minutes.'
+
+        # Engine not ready for 5 minutes
+        - alert: CorazaEngineNotReady
+          expr: coraza:engines_not_ready:count > 0
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "One or more Coraza Engines are not ready"
+            description: '{{ "{{" }} $value {{ "}}" }} Engine resource(s) have been in non-Ready state for more than 5 minutes.'
+
+        # RuleSet not ready for 5 minutes
+        - alert: CorazaRuleSetNotReady
+          expr: coraza:rulesets_not_ready:count > 0
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "One or more Coraza RuleSets are not ready"
+            description: '{{ "{{" }} $value {{ "}}" }} RuleSet resource(s) have been in non-Ready state for more than 5 minutes.'
+
+        # Cache server absent from metrics (down or not scraped).
+        # coraza_cache_server_in_flight_requests is a GaugeVec with label {handler}.
+        # absent() with a label matcher returns 1 only when that specific label combination
+        # is absent, making the detection reliable even if other handler series exist.
+        - alert: CorazaCacheServerDown
+          expr: absent(coraza_cache_server_in_flight_requests{handler="rules"}) == 1
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Coraza ruleset cache server is not reachable"
+            description: "The coraza_cache_server_in_flight_requests metric is absent — the cache server may be down or the metrics endpoint is unreachable."
+
+        # Cache utilization above 90%.
+        # Guard against division by zero: only evaluate when max_size_bytes > 0.
+        # When max_size_bytes is 0 (no size limit configured or metric not emitted),
+        # the division produces NaN and the alert would silently never fire.
+        - alert: CorazaCacheSizeHigh
+          expr: (coraza_cache_size_bytes / coraza_cache_config_max_size_bytes > 0.9) and coraza_cache_config_max_size_bytes > 0
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Coraza ruleset cache is near capacity"
+            description: 'Cache utilization is {{ "{{" }} $value | humanizePercentage {{ "}}" }} of the configured maximum.'
+
+        # GC pruning more than 10 entries per second — indicates cache pressure.
+        # rate() returns per-second values, so > 10 means more than 10 entries/sec
+        # (i.e. 600 per minute, ~9000 per 15m). To alert on 10 entries per 15m instead,
+        # use threshold > 0.011 (10/900).
+        - alert: CorazaCacheGCFrequencyHigh
+          expr: rate(coraza_cache_gc_pruned_entries_total[15m]) > 10
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Coraza cache GC is pruning entries at a high rate"
+            description: 'Cache GC is pruning {{ "{{" }} $value | humanize {{ "}}" }} entries/sec — consider increasing cache size limits.'
+
+        # Workqueue depth above 100 for 10 minutes
+        - alert: CorazaWorkqueueDepthHigh
+          expr: workqueue_depth{name=~"ruleset|engine"} > 100
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Coraza operator workqueue depth is high"
+            description: 'Workqueue {{ "{{" }} $labels.name {{ "}}" }} has {{ "{{" }} $value {{ "}}" }} items pending — reconciliation may be lagging.'
+
+        {{- with .Values.metrics.prometheusRule.rules }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+
+    - name: coraza-operator.recording
+      rules:
+        # Aggregate Engine readiness into a scalar for low-cardinality alerting.
+        # Using count() avoids per-Engine alert storms.
+        #
+        # DEPENDENCY: coraza_engine_condition and coraza_ruleset_condition are emitted
+        # by the metrics-collector component. These recording rules (and the
+        # CorazaEngineNotReady / CorazaRuleSetNotReady alerts that depend on them)
+        # will produce a constant 0 via the `or vector(0)` fallback — meaning the
+        # alerts will never fire — until the metrics-collector is deployed alongside
+        # the operator. Ensure the metrics-collector chart is deployed before relying
+        # on these rules for alerting.
+        - record: coraza:engines_not_ready:count
+          expr: count(coraza_engine_condition{condition="Ready"} == 0) or vector(0)
+
+        - record: coraza:rulesets_not_ready:count
+          expr: count(coraza_ruleset_condition{condition="Ready"} == 0) or vector(0)
+{{- end }}

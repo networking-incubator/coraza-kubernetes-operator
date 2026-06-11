@@ -47,6 +47,7 @@ dist/
 !LIMITATIONS.md
 
 # documentation site (Hugo)
+!docs/*.md
 !docs/content/**/*.md
 !docs/content/**/*.html
 docs/content/reference/api.md

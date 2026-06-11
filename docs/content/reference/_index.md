@@ -26,3 +26,7 @@ Reference documentation provides precise, complete descriptions of the operator'
 ## Diagnostics
 
 - [Status Conditions and Troubleshooting]({{< relref "status-conditions" >}})
+
+## Observability
+
+- [Metrics Cardinality]({{< relref "metrics-cardinality" >}})

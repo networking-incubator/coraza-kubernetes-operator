@@ -465,6 +465,14 @@ helm.sync-rbac: manifests ## Sync generated RBAC rules into the Helm chart Clust
 helm.sync: helm.sync-crds helm.sync-rbac ## Sync all generated resources into the Helm chart
 
 # -------------------------------------------------------------------------------
+# Testing - Helm
+# -------------------------------------------------------------------------------
+
+.PHONY: helm.validate
+helm.validate: ## Validate Helm templates render correctly for key flag combinations
+	hack/test-helm-manifests.sh
+
+# -------------------------------------------------------------------------------
 # Documentation
 # -------------------------------------------------------------------------------
 
