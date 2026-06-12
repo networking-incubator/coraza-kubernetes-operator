@@ -129,6 +129,35 @@ jobs:
       - name: run chart-testing (lint)
         run: ct lint --config .ct.yaml --all
 
+  helm-validate:
+    name: helm validate
+    runs-on: ubuntu-latest
+    needs: [build]
+    steps:
+      - name: checkout code
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+      - name: set up helm
+        uses: azure/setup-helm@dda3372f752e03dde6b3237bc9431cdc2f7a02a2 # v5.0.0
+        with:
+          version: "v4.1.3"
+      - name: install promtool
+        run: |
+          PROM_VERSION="3.12.0"
+          PROM_SHA256="20da47f8e5303f74aecb78edd7f7e39041dac08ac4939dba75efd7a900ae8867"
+          PROM_ARCHIVE="prometheus-${PROM_VERSION}.linux-amd64.tar.gz"
+          curl -fsSLo "${PROM_ARCHIVE}" \
+            "https://github.com/prometheus/prometheus/releases/download/v${PROM_VERSION}/${PROM_ARCHIVE}"
+          echo "${PROM_SHA256}  ${PROM_ARCHIVE}" | sha256sum -c -
+          tar -xzf "${PROM_ARCHIVE}" --strip-components=1 \
+            "prometheus-${PROM_VERSION}.linux-amd64/promtool"
+          install promtool "${RUNNER_TEMP}/promtool"
+          echo "${RUNNER_TEMP}" >> "${GITHUB_PATH}"
+          rm -f "${PROM_ARCHIVE}" promtool
+      - name: validate helm templates
+        run: make helm.validate
+
   unit-tests:
     name: unit tests
     runs-on: ubuntu-latest
