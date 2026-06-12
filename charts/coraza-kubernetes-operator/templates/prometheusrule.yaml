@@ -18,7 +18,7 @@ spec:
           expr: >-
             rate(controller_runtime_reconcile_errors_total{controller=~"ruleset|engine|rulesource"}[5m])
             /
-            rate(controller_runtime_reconcile_total{controller=~"ruleset|engine|rulesource"}[5m])
+            sum by (controller) (rate(controller_runtime_reconcile_total{controller=~"ruleset|engine|rulesource"}[5m]))
             > 0.1
           for: 10m
           labels:
