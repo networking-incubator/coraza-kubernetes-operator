@@ -48,11 +48,10 @@ spec:
             description: '{{ "{{" }} $value {{ "}}" }} RuleSet resource(s) have been in non-Ready state for more than 5 minutes.'
 
         # Cache server absent from metrics (down or not scraped).
-        # coraza_cache_server_in_flight_requests is a GaugeVec with label {handler}.
-        # absent() with a label matcher returns 1 only when that specific label combination
-        # is absent, making the detection reliable even if other handler series exist.
+        # coraza_cache_size_bytes is a GaugeFunc (always present once the cache is
+        # initialized), unlike GaugeVec metrics that only appear after first use.
         - alert: CorazaCacheServerDown
-          expr: absent(coraza_cache_server_in_flight_requests{handler="rules"}) == 1
+          expr: absent(coraza_cache_size_bytes) == 1
           for: 2m
           labels:
             severity: critical

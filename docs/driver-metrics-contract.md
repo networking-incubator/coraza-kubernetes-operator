@@ -271,12 +271,12 @@ The dominant cardinality risk is `coraza_waf_rule_hits_total`. The top-N bound w
 
 A driver PR MUST satisfy all of the following before merge:
 
-- [ ] All 7 metrics implemented with the exact names defined in this document
+- [ ] All metrics listed above implemented with the exact names defined in this document
 - [ ] `engine` and `namespace` labels injected from `pluginConfig` JSON at initialization
 - [ ] `coraza_waf_rule_hits_total` bounded by top-N (N≤200) with overflow aggregated to `rule_id="other"`
 - [ ] `coraza_waf_rule_overrides` set (gauge) at load time, not per request; value reset on plugin reload to reflect new configuration
 - [ ] Metric names match exactly (Prometheus is case-sensitive, exact-match)
-- [ ] Integration test validates that all 7 metrics appear after a test HTTP request is processed
+- [ ] Integration test validates that all metrics listed above appear after a test HTTP request is processed
 - [ ] `promtool check metrics` passes on the raw exposition output from the driver
 - [ ] Cardinality budget is documented for any label dimension not in this spec (if extensions are proposed)
 - [ ] Driver refuses to process traffic if `pluginConfig` is missing or malformed, with a logged error

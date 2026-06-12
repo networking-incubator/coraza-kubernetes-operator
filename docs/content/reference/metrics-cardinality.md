@@ -19,7 +19,7 @@ for counters by Prometheus convention).
 | Metric | Type | Labels | Worst-case series/cluster | Notes |
 |--------|------|--------|--------------------------|-------|
 | `coraza_cache_server_requests_total` | counter | `handler`, `method`, `code` | ~6 | `handler` ∈ {`rules`, `latest`} |
-| `coraza_cache_server_request_duration_seconds` | histogram | `handler`, `method`, `code` | ~6 × 11 buckets | |
+| `coraza_cache_server_request_duration_seconds` | histogram | `handler`, `method`, `code` | ~6 × 12 buckets (11 + +Inf) | |
 | `coraza_cache_server_in_flight_requests` | gauge | `handler` | ~2 | |
 | `coraza_cache_size_bytes` | gauge | (none) | 1 | |
 | `coraza_cache_instances` | gauge | (none) | 1 | |
