@@ -94,7 +94,22 @@ out=$(render --set metrics.enabled=true --set metrics.prometheusRule.enabled=tru
   --set-json 'metrics.prometheusRule.rules=[{"alert":"CustomAlert","expr":"up == 0","for":"1m","labels":{"severity":"info"},"annotations":{"summary":"custom"}}]')
 echo "$out" | grep -q "CustomAlert" && pass "Custom alert rule injected" || fail "Custom alert rule missing"
 
-# ── Test 11: promtool check rules (optional) ─────────────────────────────────
+# ── Test 11: PodMonitor additionalLabels ─────────────────────────────────────
+section "PodMonitor additionalLabels"
+out=$(render --set metrics.podMonitor.enabled=true \
+  --set 'metrics.podMonitor.gatewaySelector.app=my-gateway' \
+  --set 'metrics.podMonitor.additionalLabels.release=prometheus')
+echo "$out" | grep -q "release: prometheus" && pass "PodMonitor additionalLabels merged" || fail "PodMonitor additionalLabels not merged"
+
+# ── Test 12: PodMonitor metricRelabelings injection ──────────────────────────
+section "PodMonitor metricRelabelings"
+out=$(render --set metrics.podMonitor.enabled=true \
+  --set 'metrics.podMonitor.gatewaySelector.app=my-gateway' \
+  --set-json 'metrics.podMonitor.metricRelabelings=[{"sourceLabels":["__name__"],"regex":"coraza_waf_requests_total","action":"drop"}]')
+echo "$out" | grep -q "coraza_waf_requests_total" && pass "User metricRelabelings injected" || fail "User metricRelabelings missing"
+echo "$out" | grep -q 'coraza_waf_\.\*' && pass "Mandatory cardinality guard still present" || fail "Mandatory cardinality guard missing"
+
+# ── Test 13: promtool check rules (optional) ─────────────────────────────────
 if command -v promtool &>/dev/null; then
   section "promtool check rules"
   tmpfile=$(mktemp /tmp/prometheusrule-XXXXXX.yaml)
