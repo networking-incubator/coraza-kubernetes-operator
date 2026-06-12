@@ -107,7 +107,7 @@ out=$(render --set metrics.podMonitor.enabled=true \
   --set 'metrics.podMonitor.gatewaySelector.app=my-gateway' \
   --set-json 'metrics.podMonitor.metricRelabelings=[{"sourceLabels":["__name__"],"regex":"coraza_waf_requests_total","action":"drop"}]')
 echo "$out" | grep -q "coraza_waf_requests_total" && pass "User metricRelabelings injected" || fail "User metricRelabelings missing"
-echo "$out" | grep -q 'coraza_waf_\.\*' && pass "Mandatory cardinality guard still present" || fail "Mandatory cardinality guard missing"
+echo "$out" | grep -qF 'coraza_waf_.*' && pass "Mandatory cardinality guard still present" || fail "Mandatory cardinality guard missing"
 
 # ── Test 13: promtool check rules (optional) ─────────────────────────────────
 if command -v promtool &>/dev/null; then

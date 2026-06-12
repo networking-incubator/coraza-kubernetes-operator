@@ -57,7 +57,7 @@ spec:
             severity: critical
           annotations:
             summary: "Coraza ruleset cache server is not reachable"
-            description: "The coraza_cache_server_in_flight_requests metric is absent — the cache server may be down or the metrics endpoint is unreachable."
+            description: "The coraza_cache_size_bytes metric is absent — the cache server may be down or the metrics endpoint is unreachable."
 
         # Cache utilization above 90%.
         # Guard against division by zero: only evaluate when max_size_bytes > 0.
