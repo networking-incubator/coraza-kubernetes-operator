@@ -33,7 +33,7 @@ import (
 	"github.com/networking-incubator/coraza-kubernetes-operator/test/framework"
 )
 
-// TestCorazaControllerMetrics verifies that the CorazaCollector metrics
+// TestCorazaControllerMetrics verifies that the operator's coraza_* metrics
 // (engine, ruleset, and cache server counters) are exposed on the operator's
 // authenticated HTTPS metrics endpoint.
 func TestCorazaControllerMetrics(t *testing.T) {
@@ -111,77 +111,37 @@ func TestCorazaControllerMetrics(t *testing.T) {
 	}
 
 	// -------------------------------------------------------------------------
-	// Verify Coraza engine/ruleset metrics are present
+	// Verify cache server metrics are present (always emitted by the server)
 	// -------------------------------------------------------------------------
 
-	s.Step("verify CorazaCollector engine metrics")
-	t.Run("exposes coraza_engine metrics", func(t *testing.T) {
+	s.Step("verify cache server metrics")
+	t.Run("exposes coraza_cache metrics", func(t *testing.T) {
 		require.EventuallyWithT(t, func(collect *assert.CollectT) {
 			body := fetchMetrics(collect)
 			if body == "" {
 				return
 			}
-			// The CorazaCollector always sends descriptors via Describe, so the
-			// HELP lines appear in every scrape even when no Engine resources exist.
-			// Assert descriptor presence rather than data-point presence to avoid
-			// false failures on a clean cluster with no Engines.
-			hasEngineDescriptor := strings.Contains(body, "# HELP coraza_engine_info") ||
-				strings.Contains(body, "# HELP coraza_engines")
-			assert.True(collect, hasEngineDescriptor,
-				"expected # HELP coraza_engine_info or # HELP coraza_engines descriptor in response")
-		}, framework.DefaultTimeout, framework.DefaultInterval)
-	})
-
-	s.Step("verify CorazaCollector ruleset metrics")
-	t.Run("exposes coraza_ruleset metrics", func(t *testing.T) {
-		require.EventuallyWithT(t, func(collect *assert.CollectT) {
-			body := fetchMetrics(collect)
-			if body == "" {
-				return
-			}
-			// The CorazaCollector always sends descriptors via Describe, so the
-			// HELP lines appear in every scrape even when no RuleSet resources exist.
-			hasRulesetDescriptor := strings.Contains(body, "# HELP coraza_ruleset_info") ||
-				strings.Contains(body, "# HELP coraza_rulesets")
-			assert.True(collect, hasRulesetDescriptor,
-				"expected # HELP coraza_ruleset_info or # HELP coraza_rulesets descriptor in response")
-		}, framework.DefaultTimeout, framework.DefaultInterval)
-	})
-
-	s.Step("verify cache server RED metrics")
-	t.Run("exposes coraza_cache_server_requests_total", func(t *testing.T) {
-		require.EventuallyWithT(t, func(collect *assert.CollectT) {
-			body := fetchMetrics(collect)
-			if body == "" {
-				return
-			}
-			assert.Contains(collect, body, "coraza_cache_server_requests_total",
-				"expected coraza_cache_server_requests_total metric family in response")
+			assert.Contains(collect, body, "coraza_cache_size_bytes",
+				"expected coraza_cache_size_bytes gauge in response")
 		}, framework.DefaultTimeout, framework.DefaultInterval)
 	})
 
 	// -------------------------------------------------------------------------
-	// Subtest: create a minimal Engine and verify coraza_engines metric appears
+	// Create resources and verify Engine + RuleSet metrics appear
 	// -------------------------------------------------------------------------
 
-	s.Step("create Engine and verify coraza_engines metric")
-	t.Run("coraza_engines metric appears after Engine creation", func(t *testing.T) {
+	s.Step("create Engine and RuleSet, verify metrics appear")
+	t.Run("coraza_engine and coraza_ruleset metrics appear after resource creation", func(t *testing.T) {
 		ns := s.GenerateNamespace("metrics-engine")
 
-		// Create a minimal RuleSource and RuleSet that the Engine can reference.
 		s.CreateRuleSource(ns, "metrics-rs-source", `SecRuleEngine DetectionOnly`)
 		s.CreateRuleSet(ns, "metrics-ruleset", []string{"metrics-rs-source"}, nil)
 
-		// Create the Engine referencing the RuleSet.
-		// We intentionally omit a gateway so it will not fully reconcile —
-		// but the Engine object will exist and the controller will register it.
 		s.CreateEngine(ns, "metrics-engine", framework.EngineOpts{
 			RuleSetName: "metrics-ruleset",
 			GatewayName: "non-existent-gateway",
 		})
 
-		// Assert the coraza_engines metric NAME appears in the response.
-		// Do not assert specific label values since the Engine may not reconcile fully in CI.
 		require.EventuallyWithT(t, func(collect *assert.CollectT) {
 			body := fetchMetrics(collect)
 			if body == "" {
@@ -190,7 +150,12 @@ func TestCorazaControllerMetrics(t *testing.T) {
 			hasEngineMetric := strings.Contains(body, "coraza_engine_info") ||
 				strings.Contains(body, "coraza_engines")
 			assert.True(collect, hasEngineMetric,
-				"expected coraza_engine_info or coraza_engines metric to appear after Engine creation")
+				"expected coraza_engine_info or coraza_engines metric after Engine creation")
+
+			hasRulesetMetric := strings.Contains(body, "coraza_ruleset_info") ||
+				strings.Contains(body, "coraza_rulesets")
+			assert.True(collect, hasRulesetMetric,
+				"expected coraza_ruleset_info or coraza_rulesets metric after RuleSet creation")
 		}, framework.DefaultTimeout, framework.DefaultInterval)
 	})
 }

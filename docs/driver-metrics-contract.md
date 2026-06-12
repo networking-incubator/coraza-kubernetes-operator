@@ -47,7 +47,7 @@ The driver MUST read these fields at initialization and apply them as Prometheus
 
 ## Mandatory Metrics
 
-All seven metrics below MUST be implemented. Metric names are exact — Prometheus performs case-sensitive, exact-string matching.
+All metrics listed below MUST be implemented. Metric names are exact — Prometheus performs case-sensitive, exact-string matching.
 
 ### coraza_waf_requests_total
 

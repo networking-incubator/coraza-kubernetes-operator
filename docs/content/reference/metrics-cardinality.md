@@ -116,7 +116,7 @@ Envoy sidecars. They are NOT scraped from the operator.
 
 For the full specification of data-plane metric names, labels, and cardinality
 constraints (including the top-N rule limit that bounds per-rule series), see
-[`docs/driver-metrics-contract.md`](../../../driver-metrics-contract.md).
+[driver metrics contract](https://github.com/networking-incubator/coraza-kubernetes-operator/blob/main/docs/driver-metrics-contract.md).
 
 **Key differences from operator metrics:**
 
