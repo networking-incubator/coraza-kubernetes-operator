@@ -97,10 +97,12 @@ echo "$out" | grep -q "CustomAlert" && pass "Custom alert rule injected" || fail
 # ── Test 11: promtool check rules (optional) ─────────────────────────────────
 if command -v promtool &>/dev/null; then
   section "promtool check rules"
-  prom_yaml=$(render --set metrics.enabled=true --set metrics.prometheusRule.enabled=true \
-    | sed -n '/^  groups:/,$p')
   tmpfile=$(mktemp /tmp/prometheusrule-XXXXXX.yaml)
-  echo "$prom_yaml" > "$tmpfile"
+  # Render only the PrometheusRule template and extract spec.groups with
+  # dedented indentation so promtool sees a valid rules file.
+  render --set metrics.enabled=true --set metrics.prometheusRule.enabled=true \
+    -s templates/prometheusrule.yaml \
+    | sed -n '/^  groups:/,$ { s/^  //; p; }' > "$tmpfile"
   if promtool check rules "$tmpfile" &>/dev/null; then
     pass "promtool check rules passed"
   else

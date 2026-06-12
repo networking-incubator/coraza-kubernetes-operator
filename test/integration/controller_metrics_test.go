@@ -102,7 +102,6 @@ func TestCorazaControllerMetrics(t *testing.T) {
 		// across EventuallyWithT iterations. Without draining, each iteration opens
 		// a new TCP connection and the port-forward connection backlog can be exhausted.
 		body, _ := io.ReadAll(resp.Body)
-		_, _ = io.Copy(io.Discard, resp.Body)
 		_ = resp.Body.Close()
 
 		assert.Equal(collect, http.StatusOK, resp.StatusCode,

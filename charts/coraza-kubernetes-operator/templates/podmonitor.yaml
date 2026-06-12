@@ -6,6 +6,9 @@ metadata:
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "coraza-operator.labels" . | nindent 4 }}
+    {{- with .Values.metrics.podMonitor.additionalLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
 spec:
   namespaceSelector:
     any: true
