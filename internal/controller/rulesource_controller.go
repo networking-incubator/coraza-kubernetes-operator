@@ -100,36 +100,39 @@ func (r *RuleSourceReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		}
 	}()
 
+	// Validation metrics are recorded only after a successful status transition
+	// (not on informer resync when the condition is already current).
 	skipValidation := rs.Annotations[wafv1alpha1.AnnotationSkipValidation] == "false"
 	if skipValidation {
-		r.Metrics.IncRuleSourceValidation(req.Namespace, "skipped")
 		if isConditionCurrent(rs.Status.Conditions, conditionReady, ruleSourceReadyReasonValidationSkipped, rs.Generation) {
 			return ctrl.Result{}, nil
 		}
 		if patchErr := patchReady(ctx, r.Status(), r.Recorder, log, req, "RuleSource", &rs, &rs.Status.Conditions, rs.Generation, ruleSourceReadyReasonValidationSkipped, "Per-fragment validation skipped by annotation"); patchErr != nil {
 			return ctrl.Result{}, patchErr
 		}
+		r.Metrics.IncRuleSourceValidation(req.Namespace, "skipped")
 		return ctrl.Result{}, nil
 	}
 
-	if validation.IsPatchOnlyFragment(rs.Spec.Rules) {
-		r.Metrics.IncRuleSourceValidation(req.Namespace, "skipped")
-	} else {
+	patchOnly := validation.IsPatchOnlyFragment(rs.Spec.Rules)
+	// Patch-only fragments skip Coraza; aggregate RuleSet validation is authoritative.
+	var validationDuration time.Duration
+
+	if !patchOnly {
 		validationStart := time.Now()
 		if err := validation.ValidateRuleSourceRules(rs.Spec.Rules, rs.Name, nil); err != nil {
-			d := time.Since(validationStart)
-			r.Metrics.IncRuleSourceValidation(req.Namespace, "invalid")
-			r.Metrics.ObserveRuleSourceValidation(req.Namespace, "invalid", d)
-			if !isConditionCurrent(rs.Status.Conditions, conditionDegraded, ruleSourceDegradedReasonInvalidRules, rs.Generation) {
-				if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "RuleSource", &rs, &rs.Status.Conditions, rs.Generation, ruleSourceDegradedReasonInvalidRules, err.Error()); patchErr != nil {
-					return ctrl.Result{}, patchErr
-				}
+			validationDuration = time.Since(validationStart)
+			if isConditionCurrent(rs.Status.Conditions, conditionDegraded, ruleSourceDegradedReasonInvalidRules, rs.Generation) {
+				return ctrl.Result{}, nil
 			}
+			if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "RuleSource", &rs, &rs.Status.Conditions, rs.Generation, ruleSourceDegradedReasonInvalidRules, err.Error()); patchErr != nil {
+				return ctrl.Result{}, patchErr
+			}
+			r.Metrics.IncRuleSourceValidation(req.Namespace, "invalid")
+			r.Metrics.ObserveRuleSourceValidation(req.Namespace, "invalid", validationDuration)
 			return ctrl.Result{}, nil
 		}
-		d := time.Since(validationStart)
-		r.Metrics.IncRuleSourceValidation(req.Namespace, "valid")
-		r.Metrics.ObserveRuleSourceValidation(req.Namespace, "valid", d)
+		validationDuration = time.Since(validationStart)
 	}
 
 	if isConditionCurrent(rs.Status.Conditions, conditionReady, ruleSourceReadyReasonValidated, rs.Generation) {
@@ -137,6 +140,12 @@ func (r *RuleSourceReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	}
 	if patchErr := patchReady(ctx, r.Status(), r.Recorder, log, req, "RuleSource", &rs, &rs.Status.Conditions, rs.Generation, ruleSourceReadyReasonValidated, "Rules validated successfully"); patchErr != nil {
 		return ctrl.Result{}, patchErr
+	}
+	if patchOnly {
+		r.Metrics.IncRuleSourceValidation(req.Namespace, "skipped")
+	} else {
+		r.Metrics.IncRuleSourceValidation(req.Namespace, "valid")
+		r.Metrics.ObserveRuleSourceValidation(req.Namespace, "valid", validationDuration)
 	}
 	return ctrl.Result{}, nil
 }

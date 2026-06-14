@@ -61,6 +61,10 @@ When `openshift.enabled=true`, `runAsUser`, `fsGroup`, and `fsGroupChangePolicy`
 | `metrics.keyName`                                     | string | `tls.key`                                                 | Key name of the private key file inside `certSecret`                                                        |
 | `metrics.caName`                                      | string | `""`                                                      | Key name of a CA certificate inside `certSecret` for ServiceMonitor TLS verification                        |
 | `metrics.serviceMonitor.enabled`                      | bool   | `false`                                                   | Create a ServiceMonitor resource                                                                            |
+| `metrics.serviceMonitor.additionalLabels`             | object | `{}`                                                      | Extra labels on ServiceMonitor metadata (e.g. `release: kube-prometheus-stack`)                             |
+| `metrics.prometheusRule.enabled`                      | bool   | `false`                                                   | Create PrometheusRule alerting and recording rules                                                            |
+| `metrics.grafanaDashboard.enabled`                    | bool   | `false`                                                   | Create ConfigMap(s) with Grafana dashboard JSON for sidecar provisioning                                     |
+| `metrics.grafanaDashboard.folder`                     | string | `Coraza WAF`                                              | Grafana folder annotation on dashboard ConfigMaps                                                           |
 | `logging.development`                                 | bool   | `false`                                                   | Use console encoder with debug level (dev mode); when false, production flags below apply                   |
 | `logging.encoder`                                     | string | `json`                                                    | Log encoding format (`json` or `console`). Only used when `development=false`                               |
 | `logging.level`                                       | string | `info`                                                    | Minimum log level (`debug`, `info`, `error`). Only used when `development=false`                            |
@@ -123,3 +127,13 @@ subjects:
     name: prometheus  # adjust to your Prometheus SA
     namespace: monitoring
 ```
+
+### Grafana dashboards
+
+When `metrics.grafanaDashboard.enabled=true` **and** `metrics.prometheusRule.enabled=true`,
+the chart deploys ConfigMaps labeled `grafana_dashboard=1` containing **Coraza Operator —
+Overview** and **Coraza Operator — Resources** dashboards. Health summary panels query
+recording rules from the chart PrometheusRule; enabling dashboards without PrometheusRule
+is not supported. Compatible with the kube-prometheus-stack Grafana sidecar.
+
+See [Observability demo on KIND](https://github.com/networking-incubator/coraza-kubernetes-operator/blob/main/docs/content/howto/observability-demo.md) for a local walkthrough.

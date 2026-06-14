@@ -30,6 +30,12 @@ metrics:
     enabled: true
 ```
 
+For a local KIND demo with Grafana dashboards, see [Observability demo on KIND]({{< relref "observability-demo" >}}).
+
+The ServiceMonitor sets `honorLabels: true` so `namespace` on `coraza_*` metrics
+reflects the CR namespace. Built-in `metricRelabelings` drop `job` and `instance`
+if they ever appear on operator metrics. See [Metrics Cardinality]({{< relref "metrics-cardinality" >}}#servicemonitor-label-handling).
+
 ## Configuring Prometheus RBAC
 
 The metrics endpoint uses Kubernetes authentication. Prometheus must present a valid ServiceAccount token and the ServiceAccount must have permission to access the `/metrics` endpoint.

@@ -1,0 +1,9 @@
+# Workload samples (excludes gateway.yaml — KIND creates coraza-gateway via make cluster.kind).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ruleset.yaml
+  - engine.yaml
+  - echo.yaml
+  - httproute.yaml

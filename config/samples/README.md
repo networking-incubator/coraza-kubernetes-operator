@@ -9,9 +9,10 @@ Kubernetes Gateway API and Istio.
 |------|-------------|
 | `ruleset.yaml` | `RuleSource` (SecLang rules), `RuleData` (`@pmFromFile` data files), and a `RuleSet` referencing them via `spec.sources` and `spec.data` |
 | `engine.yaml` | `Engine` CR that references the RuleSet and targets an Istio Gateway (`spec.driver.wasm.image` is optional) |
-| `gateway.yaml` | Kubernetes Gateway API `Gateway` using the Istio gateway class |
+| `gateway.yaml` | Kubernetes Gateway API `Gateway` using the Istio gateway class (**not** in `kustomization.yaml`; apply separately on generic clusters) |
 | `httproute.yaml` | `HTTPRoute` that sends all traffic through the gateway to the echo service |
 | `echo.yaml` | A simple echo Deployment and Service to act as the backend |
+| `kustomization.yaml` | Kustomize bundle of workload manifests (`ruleset`, `engine`, `echo`, `httproute`); excludes `gateway.yaml` |
 
 ## Prerequisites
 
@@ -22,9 +23,21 @@ Kubernetes Gateway API and Istio.
 
 All samples must be deployed to the same namespace.
 
+On a generic cluster, create the Gateway first, then apply the Kustomize bundle:
+
 ```bash
-kubectl apply -f config/samples/
+kubectl apply -f config/samples/gateway.yaml
+kubectl apply -k config/samples/
 ```
+
+For the KIND integration cluster (`make cluster.kind`), the Gateway is created automatically in `integration-tests`.
+Apply only the workload bundle:
+
+```bash
+kubectl apply -n integration-tests -k config/samples/
+```
+
+This is also what `make observability.demo.workload` uses.
 
 ## Test
 
@@ -48,5 +61,8 @@ kubectl logs deploy/coraza-gateway-istio
 ## Cleanup
 
 ```bash
-kubectl delete -f config/samples/
+kubectl delete -k config/samples/
+kubectl delete -f config/samples/gateway.yaml   # only if you applied gateway.yaml above
 ```
+
+On the KIND integration cluster, omit the `gateway.yaml` delete; the Gateway is owned by `make cluster.kind`.

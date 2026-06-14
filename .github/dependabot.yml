@@ -6,6 +6,7 @@ updates:
       - "/"
       - "/test/conformance"
       - "/tools/github_project_manager"
+      - "/tools/grafana-dashboards"
       - "/docs"
     schedule:
       interval: "weekly"

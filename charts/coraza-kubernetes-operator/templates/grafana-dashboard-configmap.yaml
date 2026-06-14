@@ -1,0 +1,20 @@
+{{- if and .Values.metrics.enabled .Values.metrics.grafanaDashboard.enabled .Values.metrics.prometheusRule.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "coraza-operator.fullname" . }}-dashboards
+  namespace: {{ .Release.Namespace }}
+  labels:
+    grafana_dashboard: "1"
+    {{- include "coraza-operator.labels" . | nindent 4 }}
+    {{- with .Values.metrics.grafanaDashboard.additionalLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  annotations:
+    grafana_folder: {{ .Values.metrics.grafanaDashboard.folder | quote }}
+data:
+{{- range $path, $_ := .Files.Glob "dashboards/*.json" }}
+  {{ base $path }}: |
+{{ $.Files.Get $path | indent 4 }}
+{{- end }}
+{{- end }}

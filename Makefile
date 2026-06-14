@@ -22,6 +22,17 @@ KIND_CLUSTER_NAME ?= coraza-kubernetes-operator-integration
 # use openshift-gateway (match operator istio.revision) or empty for default-revision Istio.
 ISTIO_GATEWAY_REVISION ?= coraza
 ISTIO_VERSION ?= 1.28.2
+# Pin kube-prometheus-stack chart version (https://artifacthub.io/packages/helm/prometheus-community/kube-prometheus-stack).
+# Override at install time: make observability.prometheus.deploy KUBE_PROM_STACK_VERSION=x.y.z
+KUBE_PROM_STACK_VERSION ?= 86.2.3
+KUBE_PROM_STACK_RELEASE ?= kube-prometheus-stack
+MONITORING_NAMESPACE ?= monitoring
+DEMO_NAMESPACE ?= integration-tests
+GRAFANA_ADMIN_PASSWORD ?= coraza-demo
+# Matches Prometheus bundled in kube-prometheus-stack $(KUBE_PROM_STACK_VERSION).
+# Used by promtool in CI and: make observability.promtool.install
+PROM_VERSION ?= 3.12.0
+PROM_SHA256_LINUX_AMD64 ?= 20da47f8e5303f74aecb78edd7f7e39041dac08ac4939dba75efd7a900ae8867
 METALLB_VERSION ?= 0.15.3
 METALLB_POOL_SIZE ?= 128 # Defines the size of MetalLB pool, when being used
 
@@ -283,6 +294,7 @@ test.e2e:
 .PHONY: test.tools
 test.tools:
 	cd tools/github_project_manager && go test -v ./...
+	cd tools/grafana-dashboards && go test -v ./...
 
 
 # -------------------------------------------------------------------------------
@@ -476,6 +488,135 @@ helm.validate: ## Validate Helm templates render correctly for key flag combinat
 test.metrics: ## Run metrics integration tests (requires KIND cluster)
 	go clean -testcache
 	KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) ISTIO_VERSION=${ISTIO_VERSION} go test -tags=integration -run TestCorazaControllerMetrics ./test/integration/... -v
+
+# -------------------------------------------------------------------------------
+# Observability demo (KIND + kube-prometheus-stack + Grafana dashboards)
+# -------------------------------------------------------------------------------
+
+.PHONY: observability.dashboard.generate
+observability.dashboard.generate: ## Regenerate Grafana dashboard JSON via Go Foundation SDK
+	cd tools/grafana-dashboards && go run ./cmd/generate
+
+.PHONY: observability.dashboard.test
+observability.dashboard.test: ## Run grafana-dashboards unit and golden tests
+	cd tools/grafana-dashboards && go test ./...
+
+.PHONY: observability.dashboard.validate
+observability.dashboard.validate: observability.dashboard.test ## Go tests + lint committed chart dashboard JSON
+	hack/observability/validate-dashboards.sh
+
+.PHONY: observability.promtool.install
+observability.promtool.install: ## Install promtool (PROM_VERSION) to INSTALL_DIR (default: GOBIN)
+	PROM_VERSION=$(PROM_VERSION) PROM_SHA256=$(PROM_SHA256_LINUX_AMD64) \
+		INSTALL_DIR=$(or $(INSTALL_DIR),$(GOBIN)) \
+		hack/observability/install-promtool.sh
+
+.PHONY: observability.prometheus.deploy
+observability.prometheus.deploy: ## Install kube-prometheus-stack on the KIND cluster
+	@set -e; \
+	ctx="kind-$(KIND_CLUSTER_NAME)"; \
+	cfg="$(CURDIR)/config/observability"; \
+	kubectl --context "$$ctx" cluster-info >/dev/null; \
+	echo "=== Installing $(KUBE_PROM_STACK_RELEASE) ($(KUBE_PROM_STACK_VERSION)) ==="; \
+	helm --kube-context "$$ctx" repo add prometheus-community https://prometheus-community.github.io/helm-charts 2>/dev/null || true; \
+	helm --kube-context "$$ctx" repo update prometheus-community; \
+	kubectl --context "$$ctx" create namespace "$(MONITORING_NAMESPACE)" 2>/dev/null || true; \
+	helm --kube-context "$$ctx" upgrade --install "$(KUBE_PROM_STACK_RELEASE)" prometheus-community/kube-prometheus-stack \
+		--namespace "$(MONITORING_NAMESPACE)" \
+		--version "$(KUBE_PROM_STACK_VERSION)" \
+		--values "$$cfg/kube-prometheus-stack-values.yaml" \
+		--set-string grafana.adminPassword="$(GRAFANA_ADMIN_PASSWORD)" \
+		--wait --timeout 10m; \
+	kubectl --context "$$ctx" -n "$(MONITORING_NAMESPACE)" wait --for=condition=Available \
+		deployment/"$(KUBE_PROM_STACK_RELEASE)-operator" --timeout=300s; \
+	kubectl --context "$$ctx" -n "$(MONITORING_NAMESPACE)" wait --for=condition=Ready \
+		pod -l app.kubernetes.io/name=prometheus --timeout=300s; \
+	kubectl --context "$$ctx" -n "$(MONITORING_NAMESPACE)" wait --for=condition=Ready \
+		pod -l app.kubernetes.io/name=grafana --timeout=300s; \
+	sed -e "s/PLACEHOLDER_PROMETHEUS_SA/$(KUBE_PROM_STACK_RELEASE)-prometheus/g" \
+		-e "s/PLACEHOLDER_MONITORING_NS/$(MONITORING_NAMESPACE)/g" \
+		"$$cfg/prometheus-rbac.yaml" | kubectl --context "$$ctx" apply -f -
+
+.PHONY: observability.prometheus.undeploy
+observability.prometheus.undeploy: ## Remove kube-prometheus-stack from the KIND cluster
+	@set -e; \
+	ctx="kind-$(KIND_CLUSTER_NAME)"; \
+	if kubectl --context "$$ctx" cluster-info >/dev/null 2>&1; then \
+		helm --kube-context "$$ctx" uninstall "$(KUBE_PROM_STACK_RELEASE)" --namespace "$(MONITORING_NAMESPACE)" 2>/dev/null || true; \
+		kubectl --context "$$ctx" delete clusterrolebinding coraza-metrics-reader-prometheus --ignore-not-found; \
+		kubectl --context "$$ctx" delete clusterrole coraza-metrics-reader --ignore-not-found; \
+		kubectl --context "$$ctx" delete namespace "$(MONITORING_NAMESPACE)" --ignore-not-found --timeout=120s || true; \
+	fi
+
+.PHONY: observability.operator.monitoring
+observability.operator.monitoring: ## Enable ServiceMonitor, PrometheusRule, and Grafana dashboards on the operator
+	@set -e; \
+	ctx="kind-$(KIND_CLUSTER_NAME)"; \
+	kubectl --context "$$ctx" cluster-info >/dev/null; \
+	helm_extra="--reuse-values"; \
+	if ! helm --kube-context "$$ctx" status "$(HELM_RELEASE_NAME)" -n "$(HELM_RELEASE_NAMESPACE)" &>/dev/null; then \
+		helm_extra=""; \
+	fi; \
+	echo "=== Enabling operator monitoring ==="; \
+	helm --kube-context "$$ctx" upgrade --install "$(HELM_RELEASE_NAME)" "$(HELM_CHART_DIR)" \
+		--namespace "$(HELM_RELEASE_NAMESPACE)" \
+		--create-namespace \
+		$$helm_extra \
+		--set metrics.serviceMonitor.enabled=true \
+		--set metrics.serviceMonitor.additionalLabels.release="$(KUBE_PROM_STACK_RELEASE)" \
+		--set metrics.prometheusRule.enabled=true \
+		--set metrics.prometheusRule.additionalLabels.release="$(KUBE_PROM_STACK_RELEASE)" \
+		--set metrics.grafanaDashboard.enabled=true \
+		--wait --timeout 5m; \
+	kubectl --context "$$ctx" -n "$(HELM_RELEASE_NAMESPACE)" wait --for=condition=Available \
+		deployment/"$(HELM_RELEASE_NAME)" --timeout=300s
+
+.PHONY: observability.demo.workload
+observability.demo.workload: ## Apply demo CRs and seed traffic for dashboard metrics
+	@set -e; \
+	ctx="kind-$(KIND_CLUSTER_NAME)"; \
+	kubectl --context "$$ctx" cluster-info >/dev/null; \
+	echo "=== Applying demo workload (config/samples) to $(DEMO_NAMESPACE) ==="; \
+	kubectl --context "$$ctx" apply -n "$(DEMO_NAMESPACE)" -k "$(CURDIR)/config/samples"; \
+	kubectl --context "$$ctx" -n "$(DEMO_NAMESPACE)" wait --for=condition=Available \
+		deployment/echo --timeout=300s; \
+	echo "=== Waiting for Engine Ready ==="; \
+	ready=""; \
+	deadline=$$(($$(date +%s) + 300)); \
+	while [ "$$(date +%s)" -lt "$$deadline" ]; do \
+		ready=$$(kubectl --context "$$ctx" -n "$(DEMO_NAMESPACE)" get engine coraza \
+			-o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || true); \
+		if [ "$$ready" = "True" ]; then echo "Engine coraza is Ready"; break; fi; \
+		sleep 5; \
+	done; \
+	if [ "$$ready" != "True" ]; then echo "ERROR: Engine coraza not Ready within timeout" >&2; exit 1; fi; \
+	echo "=== Waiting for RuleSet Ready ==="; \
+	if ! kubectl --context "$$ctx" -n "$(DEMO_NAMESPACE)" wait --for=condition=Ready \
+		ruleset/default-ruleset --timeout=300s 2>/dev/null; then \
+		echo "ERROR: RuleSet default-ruleset not Ready within timeout" >&2; exit 1; \
+	fi
+	KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) DEMO_NAMESPACE=$(DEMO_NAMESPACE) \
+		hack/observability/seed-traffic.sh
+
+.PHONY: observability.demo
+observability.demo: observability.prometheus.deploy observability.operator.monitoring observability.demo.workload observability.grafana.url ## Full observability demo on existing KIND cluster
+
+.PHONY: observability.grafana.port-forward
+observability.grafana.port-forward: ## Port-forward Grafana to http://localhost:3000
+	@echo "Grafana: http://localhost:3000 (admin / $(GRAFANA_ADMIN_PASSWORD))"
+	@echo "Press Ctrl+C to stop."
+	kubectl --context kind-$(KIND_CLUSTER_NAME) -n $(MONITORING_NAMESPACE) \
+		port-forward svc/$(KUBE_PROM_STACK_RELEASE)-grafana 3000:80
+
+.PHONY: observability.grafana.url
+observability.grafana.url: ## Print Grafana URL, credentials, and dashboard links
+	@echo "Grafana (port-forward):  make observability.grafana.port-forward"
+	@echo "URL:      http://localhost:3000"
+	@echo "User:     admin"
+	@echo "Password: $(GRAFANA_ADMIN_PASSWORD)"
+	@echo "Dashboards (folder: Coraza WAF):"
+	@echo "  - Coraza Operator — Overview:   /d/coraza-operator-overview"
+	@echo "  - Coraza Operator — Resources:  /d/coraza-operator-resources"
 
 # -------------------------------------------------------------------------------
 # Documentation

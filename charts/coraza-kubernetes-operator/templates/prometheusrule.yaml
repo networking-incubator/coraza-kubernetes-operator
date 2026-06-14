@@ -13,13 +13,19 @@ spec:
   groups:
     - name: coraza-operator.alerts
       rules:
-        # Reconcile error ratio above 10% over 5m window (errors / total reconciles)
+        # Reconcile error ratio above 10% over 5m window (errors / total reconciles).
+        # Guard: when reconcile_total rate is 0 the division is NaN and the alert
+        # does not fire (same pattern as CorazaCacheHitRateLow traffic guard).
         - alert: CorazaReconcileErrorRateHigh
           expr: >-
-            sum by (controller) (rate(controller_runtime_reconcile_errors_total{controller=~"ruleset|engine|rulesource"}[5m]))
-            /
-            sum by (controller) (rate(controller_runtime_reconcile_total{controller=~"ruleset|engine|rulesource"}[5m]))
-            > 0.1
+            (
+              sum by (controller) (rate(controller_runtime_reconcile_errors_total{controller=~"ruleset|engine|rulesource"}[5m]))
+              /
+              sum by (controller) (rate(controller_runtime_reconcile_total{controller=~"ruleset|engine|rulesource"}[5m]))
+              > 0.1
+            )
+            and
+            sum by (controller) (rate(controller_runtime_reconcile_total{controller=~"ruleset|engine|rulesource"}[5m])) > 0
           for: 10m
           labels:
             severity: warning
@@ -72,18 +78,15 @@ spec:
             summary: "Coraza ruleset cache is near capacity"
             description: 'Cache utilization is {{ "{{" }} $value | humanizePercentage {{ "}}" }} of the configured maximum.'
 
-        # GC pruning more than 10 entries per second — indicates cache pressure.
-        # rate() returns per-second values, so > 10 means more than 10 entries/sec
-        # (i.e. 600 per minute, ~9000 per 15m). To alert on 10 entries per 15m instead,
-        # use threshold > 0.011 (10/900).
+        # More than 10 entries pruned in 15 minutes — indicates sustained cache pressure.
         - alert: CorazaCacheGCFrequencyHigh
-          expr: rate(coraza_cache_gc_pruned_entries_total[15m]) > 10
+          expr: increase(coraza_cache_gc_pruned_entries_total[15m]) > 10
           for: 15m
           labels:
             severity: warning
           annotations:
             summary: "Coraza cache GC is pruning entries at a high rate"
-            description: 'Cache GC is pruning {{ "{{" }} $value | humanize {{ "}}" }} entries/sec — consider increasing cache size limits.'
+            description: 'Cache GC pruned more than 10 entries in the last 15 minutes — consider increasing cache size limits.'
 
         # Workqueue depth above 100 for 10 minutes
         - alert: CorazaWorkqueueDepthHigh
@@ -141,9 +144,10 @@ spec:
             summary: "Cache hit ratio is low"
             description: 'Cache hit ratio is {{ "{{" }} $value | humanizePercentage {{ "}}" }} — most cache requests are returning 404 (cache miss).'
 
-        # Sustained authentication failures on the cache HTTP server
+        # Sustained authentication failures on the cache HTTP server.
+        # Require multiple failures in 15m to ignore brief token refresh on pod restart.
         - alert: CorazaCacheServerAuthFailures
-          expr: rate(coraza_cache_server_auth_failures_total[5m]) > 0
+          expr: increase(coraza_cache_server_auth_failures_total[15m]) >= 3
           for: 5m
           labels:
             severity: warning
