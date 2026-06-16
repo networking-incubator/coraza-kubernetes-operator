@@ -185,6 +185,7 @@ func (s *ruleSetCacheServer) handleRules(w http.ResponseWriter, r *http.Request)
 	// Authenticate: the token audience must match the requested RuleSet, and
 	// the SA namespace must match the cache key namespace.
 	if err := s.authenticateRequest(r, cacheKey); err != nil {
+		authFailuresTotal.Inc()
 		s.logger.Info("Authentication failed", "cacheKey", cacheKey, "error", err)
 		http.Error(w, "Forbidden", http.StatusForbidden)
 		return

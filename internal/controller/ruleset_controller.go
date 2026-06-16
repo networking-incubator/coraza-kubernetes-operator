@@ -180,7 +180,11 @@ func (r *RuleSetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	}
 
 	logInfo(log, req, "RuleSet", "Validating aggregated rules")
+	validationStart := time.Now()
 	if err := validation.ValidatePMFromFileData(aggregatedRules, dataFiles); err != nil {
+		vd := time.Since(validationStart)
+		r.Metrics.IncRuleSetValidation(req.Namespace, "invalid")
+		r.Metrics.ObserveRuleSetValidation(req.Namespace, "invalid", vd)
 		msg := fmt.Sprintf("Ruleset is invalid\n%v", err)
 		if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "RuleSet", &ruleset, &ruleset.Status.Conditions, ruleset.Generation, "InvalidRuleSet", msg); patchErr != nil {
 			return ctrl.Result{}, patchErr
@@ -193,8 +197,14 @@ func (r *RuleSetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		conf = conf.WithRootFS(fsRules)
 	}
 	if err := r.validateAggregatedRules(ctx, log, req, &ruleset, conf); err != nil {
+		vd := time.Since(validationStart)
+		r.Metrics.IncRuleSetValidation(req.Namespace, "invalid")
+		r.Metrics.ObserveRuleSetValidation(req.Namespace, "invalid", vd)
 		return ctrl.Result{}, err
 	}
+	vd := time.Since(validationStart)
+	r.Metrics.IncRuleSetValidation(req.Namespace, "valid")
+	r.Metrics.ObserveRuleSetValidation(req.Namespace, "valid", vd)
 
 	logDebug(log, req, "RuleSet", "Checking for unsupported rules")
 	foundUnsupportedRules, unsupportedMsg, err := r.rejectUnsupportedRules(ctx, log, req, &ruleset, aggregatedRules)

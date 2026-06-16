@@ -102,6 +102,7 @@ func (r *RuleSourceReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 
 	skipValidation := rs.Annotations[wafv1alpha1.AnnotationSkipValidation] == "false"
 	if skipValidation {
+		r.Metrics.IncRuleSourceValidation(req.Namespace, "skipped")
 		if isConditionCurrent(rs.Status.Conditions, conditionReady, ruleSourceReadyReasonValidationSkipped, rs.Generation) {
 			return ctrl.Result{}, nil
 		}
@@ -111,13 +112,24 @@ func (r *RuleSourceReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		return ctrl.Result{}, nil
 	}
 
-	if err := validation.ValidateRuleSourceRules(rs.Spec.Rules, rs.Name, nil); err != nil {
-		if !isConditionCurrent(rs.Status.Conditions, conditionDegraded, ruleSourceDegradedReasonInvalidRules, rs.Generation) {
-			if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "RuleSource", &rs, &rs.Status.Conditions, rs.Generation, ruleSourceDegradedReasonInvalidRules, err.Error()); patchErr != nil {
-				return ctrl.Result{}, patchErr
+	if validation.IsPatchOnlyFragment(rs.Spec.Rules) {
+		r.Metrics.IncRuleSourceValidation(req.Namespace, "skipped")
+	} else {
+		validationStart := time.Now()
+		if err := validation.ValidateRuleSourceRules(rs.Spec.Rules, rs.Name, nil); err != nil {
+			d := time.Since(validationStart)
+			r.Metrics.IncRuleSourceValidation(req.Namespace, "invalid")
+			r.Metrics.ObserveRuleSourceValidation(req.Namespace, "invalid", d)
+			if !isConditionCurrent(rs.Status.Conditions, conditionDegraded, ruleSourceDegradedReasonInvalidRules, rs.Generation) {
+				if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "RuleSource", &rs, &rs.Status.Conditions, rs.Generation, ruleSourceDegradedReasonInvalidRules, err.Error()); patchErr != nil {
+					return ctrl.Result{}, patchErr
+				}
 			}
+			return ctrl.Result{}, nil
 		}
-		return ctrl.Result{}, nil
+		d := time.Since(validationStart)
+		r.Metrics.IncRuleSourceValidation(req.Namespace, "valid")
+		r.Metrics.ObserveRuleSourceValidation(req.Namespace, "valid", d)
 	}
 
 	if isConditionCurrent(rs.Status.Conditions, conditionReady, ruleSourceReadyReasonValidated, rs.Generation) {

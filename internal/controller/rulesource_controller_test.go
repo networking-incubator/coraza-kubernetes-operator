@@ -57,8 +57,12 @@ func TestRuleSourceReconciler_InvalidRules(t *testing.T) {
 	require.NoError(t, k8sClient.Create(ctx, rs))
 	t.Cleanup(func() { _ = k8sClient.Delete(ctx, rs) })
 
-	rec := &RuleSourceReconciler{Client: k8sClient, Recorder: utils.NewTestRecorder()}
-	_, err := rec.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: rs.Name, Namespace: rs.Namespace}})
+	reg := prometheus.NewRegistry()
+	m, err := NewCorazaMetrics(reg)
+	require.NoError(t, err)
+
+	rec := &RuleSourceReconciler{Client: k8sClient, Recorder: utils.NewTestRecorder(), Metrics: m}
+	_, err = rec.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: rs.Name, Namespace: rs.Namespace}})
 	require.NoError(t, err)
 
 	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: rs.Name, Namespace: rs.Namespace}, rs))
@@ -66,6 +70,7 @@ func TestRuleSourceReconciler_InvalidRules(t *testing.T) {
 	require.NotNil(t, deg)
 	assert.Equal(t, metav1.ConditionTrue, deg.Status)
 	assert.Equal(t, ruleSourceDegradedReasonInvalidRules, deg.Reason)
+	assert.Equal(t, float64(1), gatherValidationCounter(t, reg, "invalid"))
 }
 
 func TestRuleSourceReconciler_PatchOnlyFragment(t *testing.T) {
@@ -75,8 +80,12 @@ func TestRuleSourceReconciler_PatchOnlyFragment(t *testing.T) {
 	require.NoError(t, k8sClient.Create(ctx, rs))
 	t.Cleanup(func() { _ = k8sClient.Delete(ctx, rs) })
 
-	rec := &RuleSourceReconciler{Client: k8sClient, Recorder: utils.NewTestRecorder()}
-	_, err := rec.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: rs.Name, Namespace: rs.Namespace}})
+	reg := prometheus.NewRegistry()
+	m, err := NewCorazaMetrics(reg)
+	require.NoError(t, err)
+
+	rec := &RuleSourceReconciler{Client: k8sClient, Recorder: utils.NewTestRecorder(), Metrics: m}
+	_, err = rec.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: rs.Name, Namespace: rs.Namespace}})
 	require.NoError(t, err)
 
 	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: rs.Name, Namespace: rs.Namespace}, rs))
@@ -87,6 +96,8 @@ func TestRuleSourceReconciler_PatchOnlyFragment(t *testing.T) {
 
 	deg := apimeta.FindStatusCondition(rs.Status.Conditions, conditionDegraded)
 	assert.Nil(t, deg)
+	assert.Equal(t, float64(1), gatherValidationCounter(t, reg, "skipped"))
+	assert.Equal(t, float64(0), gatherValidationCounter(t, reg, "valid"))
 }
 
 // TestRuleSourceReconciler_MetricsRecordOnSuccess verifies that after a
@@ -114,6 +125,7 @@ func TestRuleSourceReconciler_MetricsRecordOnSuccess(t *testing.T) {
 	// The defer in Reconcile fires RecordRuleSource: info gauge must be 1.
 	assert.Equal(t, 1, testutil.CollectAndCount(reg, "coraza_rulesource_info"),
 		"coraza_rulesource_info must be emitted after successful reconcile")
+	assert.Equal(t, float64(1), gatherValidationCounter(t, reg, "valid"))
 }
 
 // TestRuleSourceReconciler_MetricsForgetOnNotFound verifies that reconciling a

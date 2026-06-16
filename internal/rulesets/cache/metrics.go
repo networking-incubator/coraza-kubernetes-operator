@@ -51,10 +51,17 @@ var (
 		},
 		[]string{"handler"},
 	)
+
+	authFailuresTotal = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "coraza_cache_server_auth_failures_total",
+			Help: "Total number of authentication failures on the cache server.",
+		},
+	)
 )
 
 func init() {
-	metrics.Registry.MustRegister(requestsTotal, requestDuration, inFlightRequests)
+	metrics.Registry.MustRegister(requestsTotal, requestDuration, inFlightRequests, authFailuresTotal)
 }
 
 // instrumentHandler wraps an http.Handler to record RED metrics.
