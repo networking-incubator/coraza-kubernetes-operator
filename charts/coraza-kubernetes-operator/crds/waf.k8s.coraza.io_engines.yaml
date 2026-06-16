@@ -69,11 +69,69 @@ spec:
                   underlying Engine (eg.: WASM for Istio)
                 minProperties: 0
                 properties:
+                  dynamicModule:
+                    description: |-
+                      dynamicModule contains configuration specific to the Envoy dynamic
+                      module driver.
+                    minProperties: 0
+                    properties:
+                      filterMode:
+                        default: FULL
+                        description: filterMode controls whether the WAF inspects
+                          requests, responses, or both.
+                        enum:
+                        - REQUEST_ONLY
+                        - RESPONSE_ONLY
+                        - FULL
+                        type: string
+                      filterName:
+                        default: coraza-waf
+                        description: filterName is the HTTP filter name registered
+                          by the dynamic module.
+                        maxLength: 253
+                        minLength: 1
+                        type: string
+                      moduleImage:
+                        description: |-
+                          moduleImage is the OCI image that contains the dynamic module shared
+                          library (libcomposer.so). When set, the operator creates a ConfigMap
+                          with a Deployment overlay that injects an init container to copy the
+                          .so into the gateway pod. The user must reference this ConfigMap in
+                          the Gateway's spec.infrastructure.parametersRef field.
+                        maxLength: 1024
+                        minLength: 1
+                        type: string
+                      moduleName:
+                        default: composer
+                        description: |-
+                          moduleName is the Envoy dynamic module name used to identify the loaded
+                          shared library. This corresponds to the .so filename without the "lib"
+                          prefix and ".so" suffix (e.g., "composer" loads "libcomposer.so").
+                        maxLength: 253
+                        minLength: 1
+                        type: string
+                      proxyImage:
+                        description: |-
+                          proxyImage overrides the Envoy proxy image used by the gateway pod.
+                          The standard Istio proxy image does not include the dynamic modules
+                          HTTP filter extension. This field allows specifying an Envoy image
+                          that has it compiled in (e.g., "gcr.io/istio-testing/proxyv2:1.31-dev").
+
+                          When set and moduleImage is also set, the proxy image override is
+                          included in the operator-managed ConfigMap Deployment overlay.
+                        maxLength: 1024
+                        minLength: 1
+                        type: string
+                    type: object
+                    x-kubernetes-validations:
+                    - message: moduleImage is required when proxyImage is set
+                      rule: '!has(self.proxyImage) || has(self.moduleImage)'
                   type:
                     description: type selects the driver mechanism used to deploy
                       the WAF filter.
                     enum:
                     - wasm
+                    - dynamicModule
                     type: string
                   wasm:
                     description: wasm contains configuration specific to the WASM
@@ -108,6 +166,11 @@ spec:
                 x-kubernetes-validations:
                 - message: wasm config is required when type is wasm
                   rule: 'self.type == ''wasm'' ? has(self.wasm) : true'
+                - message: dynamicModule config is required when type is dynamicModule
+                  rule: 'self.type == ''dynamicModule'' ? has(self.dynamicModule)
+                    : true'
+                - message: only one driver config may be set
+                  rule: '!has(self.wasm) || !has(self.dynamicModule)'
               failurePolicy:
                 default: fail
                 description: |-
