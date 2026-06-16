@@ -27,6 +27,7 @@ for counters by Prometheus convention).
 | `coraza_cache_config_max_size_bytes` | gauge | (none) | 1 | |
 | `coraza_cache_gc_pruned_entries_total` | counter | `reason` | 2 | `reason` ∈ {`age`, `size`} |
 | `coraza_cache_gc_size_limit_exceeded_total` | counter | (none) | 1 | |
+| `coraza_cache_server_auth_failures_total` | counter | (none) | 1 | Authentication failures on cache server |
 
 ### Controller Observability (PR #397 — `internal/controller/metrics.go`)
 
@@ -48,6 +49,11 @@ for counters by Prometheus convention).
 | `coraza_ruledata_info` | gauge=1 | `namespace`, `name` | 1 per referenced RuleData | Only RuleDatas referenced by a RuleSet |
 | `coraza_ruledata_condition` | gauge | `namespace`, `name`, `condition` | 1 per referenced RuleData (Ready) | |
 | `coraza_ruledatas` | gauge | `namespace` | 1 per namespace | Refreshed on RuleSet reconciliation |
+| `coraza_rulesource_validations_total` | counter | `namespace`, `outcome` | 3 per namespace (valid/invalid/skipped) | `skipped` = annotation bypass or patch-only fragment |
+| `coraza_ruleset_validations_total` | counter | `namespace`, `outcome` | 2 per namespace (valid/invalid) | `valid` = Coraza parse succeeded, not necessarily Ready |
+| `coraza_rulesource_validation_duration_seconds` | histogram | `namespace`, `outcome` | 2 × 13 per namespace (valid/invalid) | `skipped` increments the counter only; 11 buckets + sum + count |
+| `coraza_ruleset_validation_duration_seconds` | histogram | `namespace`, `outcome` | 2 × 13 per namespace | 11 buckets + sum + count |
+| `coraza_cache_set_duration_seconds` | histogram | `namespace` | 1 × 10 per namespace | 8 buckets + sum + count |
 
 ### Controller-Runtime Built-ins (not `coraza_` prefixed)
 
@@ -75,9 +81,11 @@ for the full list.
 200 RuleSources in 5 namespaces: 5 namespace aggregates            =    5 series
 50 referenced RuleData × (1 info + 1 condition)                    =  100 RuleData series
 50 RuleData in 5 namespaces: 5 namespace aggregates                =    5 series
-Cache server: ~98 series
+Validation counters: 5 ns × (3 rulesource + 2 ruleset outcomes)    =   25 series
+Validation histograms: 5 ns × (2×13 rulesource + 2×13 ruleset + 10 cache) =  310 series
+Cache server: ~99 series (incl. auth failures counter)
                                                                    ─────────────────
-Total coraza_* operator series:                                   ~1368
+Total coraza_* operator series:                                   ~1704
 ```
 
 Well within the 5,000 series budget.

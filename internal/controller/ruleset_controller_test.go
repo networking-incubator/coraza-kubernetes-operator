@@ -1535,6 +1535,49 @@ func TestRuleSetReconciler_MetricsRecordOnSuccess(t *testing.T) {
 		"coraza_ruleset_info must be emitted after successful RuleSet reconcile")
 }
 
+// TestRuleSetReconciler_MetricsValidationInvalid verifies that aggregate
+// validation failure increments coraza_ruleset_validations_total{outcome="invalid"}.
+func TestRuleSetReconciler_MetricsValidationInvalid(t *testing.T) {
+	ctx, cleanup := setupTest(t)
+	t.Cleanup(cleanup)
+
+	src := utils.NewTestRuleSource("metrics-invalid-src", testNamespace,
+		`SecRule REQUEST_URI "@pmFromFile rule1.data" "id:55555,phase:1,deny,status:403,msg:'File Match'"`)
+	require.NoError(t, k8sClient.Create(ctx, src))
+	t.Cleanup(func() { _ = k8sClient.Delete(ctx, src) })
+
+	ruleSet := utils.NewTestRuleSet(utils.RuleSetOptions{
+		Name:      "metrics-invalid-rs",
+		Namespace: testNamespace,
+		Sources:   []wafv1alpha1.SourceReference{{Name: "metrics-invalid-src"}},
+	})
+	require.NoError(t, k8sClient.Create(ctx, ruleSet))
+	t.Cleanup(func() { _ = k8sClient.Delete(ctx, ruleSet) })
+
+	reg := prometheus.NewRegistry()
+	m, err := NewCorazaMetrics(reg)
+	require.NoError(t, err)
+
+	reconciler := &RuleSetReconciler{
+		Client:   k8sClient,
+		Scheme:   scheme,
+		Recorder: utils.NewTestRecorder(),
+		Cache:    cache.NewRuleSetCache(),
+		Metrics:  m,
+	}
+
+	_, err = reconcileRuleSetWithRuleSources(ctx, t, types.NamespacedName{Name: ruleSet.Name, Namespace: ruleSet.Namespace}, reconciler)
+	require.NoError(t, err)
+
+	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: ruleSet.Name, Namespace: ruleSet.Namespace}, ruleSet))
+	ready := apimeta.FindStatusCondition(ruleSet.Status.Conditions, "Ready")
+	require.NotNil(t, ready)
+	assert.Equal(t, metav1.ConditionFalse, ready.Status)
+	assert.Equal(t, "InvalidRuleSet", ready.Reason)
+	assert.Equal(t, float64(1), gatherRuleSetValidationCounter(t, reg, "invalid"))
+	assert.Equal(t, float64(0), gatherRuleSetValidationCounter(t, reg, "valid"))
+}
+
 // TestRuleSetReconciler_MetricsForgetOnNotFound verifies that a not-found
 // reconcile calls ForgetRuleSet and removes all series from the registry.
 func TestRuleSetReconciler_MetricsForgetOnNotFound(t *testing.T) {

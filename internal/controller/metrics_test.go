@@ -18,6 +18,7 @@ package controller
 
 import (
 	"testing"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
@@ -654,5 +655,82 @@ func TestCorazaMetricsNilSafe(t *testing.T) {
 		m.RecordRuleData(minimalRuleData("ns", "rd"))
 		m.ForgetRuleData("ns", "rd")
 		m.SetRuleDatasTotal("ns", 0)
+		m.IncRuleSourceValidation("ns", "valid")
+		m.IncRuleSetValidation("ns", "invalid")
+		m.ObserveRuleSourceValidation("ns", "valid", time.Millisecond)
+		m.ObserveRuleSetValidation("ns", "invalid", 2*time.Millisecond)
+		m.ObserveCacheSet("ns", time.Microsecond)
 	})
+}
+
+// TestCorazaMetricsValidationMetrics verifies validation counters and histograms.
+func TestCorazaMetricsValidationMetrics(t *testing.T) {
+	m, reg := newTestMetrics(t)
+
+	m.IncRuleSourceValidation("default", "valid")
+	m.IncRuleSourceValidation("default", "invalid")
+	m.IncRuleSourceValidation("default", "skipped")
+	m.IncRuleSetValidation("default", "valid")
+	m.IncRuleSetValidation("default", "invalid")
+	m.ObserveRuleSourceValidation("default", "valid", 10*time.Millisecond)
+	m.ObserveRuleSetValidation("default", "valid", 20*time.Millisecond)
+	m.ObserveCacheSet("default", 5*time.Millisecond)
+
+	gathered, err := reg.Gather()
+	require.NoError(t, err)
+
+	counterValues := make(map[string]float64)
+	for _, mf := range gathered {
+		if mf.GetName() != "coraza_rulesource_validations_total" && mf.GetName() != "coraza_ruleset_validations_total" {
+			continue
+		}
+		for _, metric := range mf.GetMetric() {
+			var outcome string
+			for _, lp := range metric.GetLabel() {
+				if lp.GetName() == "outcome" {
+					outcome = lp.GetValue()
+				}
+			}
+			counterValues[mf.GetName()+"/"+outcome] = metric.GetCounter().GetValue()
+		}
+	}
+
+	assert.Equal(t, float64(1), counterValues["coraza_rulesource_validations_total/valid"])
+	assert.Equal(t, float64(1), counterValues["coraza_rulesource_validations_total/invalid"])
+	assert.Equal(t, float64(1), counterValues["coraza_rulesource_validations_total/skipped"])
+	assert.Equal(t, float64(1), counterValues["coraza_ruleset_validations_total/valid"])
+	assert.Equal(t, float64(1), counterValues["coraza_ruleset_validations_total/invalid"])
+
+	assert.Equal(t, 1, testutil.CollectAndCount(reg, "coraza_rulesource_validation_duration_seconds"))
+	assert.Equal(t, 1, testutil.CollectAndCount(reg, "coraza_ruleset_validation_duration_seconds"))
+	assert.Equal(t, 1, testutil.CollectAndCount(reg, "coraza_cache_set_duration_seconds"))
+}
+
+func gatherValidationCounter(t *testing.T, reg *prometheus.Registry, outcome string) float64 {
+	return gatherCounterOutcome(t, reg, "coraza_rulesource_validations_total", outcome)
+}
+
+func gatherRuleSetValidationCounter(t *testing.T, reg *prometheus.Registry, outcome string) float64 {
+	return gatherCounterOutcome(t, reg, "coraza_ruleset_validations_total", outcome)
+}
+
+func gatherCounterOutcome(t *testing.T, reg *prometheus.Registry, metricName, outcome string) float64 {
+	t.Helper()
+	gathered, err := reg.Gather()
+	require.NoError(t, err)
+	for _, mf := range gathered {
+		if mf.GetName() != metricName {
+			continue
+		}
+		for _, metric := range mf.GetMetric() {
+			labels := make(map[string]string)
+			for _, lp := range metric.GetLabel() {
+				labels[lp.GetName()] = lp.GetValue()
+			}
+			if labels["outcome"] == outcome {
+				return metric.GetCounter().GetValue()
+			}
+		}
+	}
+	return 0
 }

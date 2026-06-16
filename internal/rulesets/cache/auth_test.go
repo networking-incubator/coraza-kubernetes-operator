@@ -25,6 +25,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -352,11 +353,13 @@ func TestServer_HandleRules_Authentication(t *testing.T) {
 	})
 
 	t.Run("invalid bearer token", func(t *testing.T) {
+		before := testutil.ToFloat64(authFailuresTotal)
 		req := httptest.NewRequest(http.MethodGet, "/rules/test-ns/my-ruleset", nil)
 		req.Header.Set("Authorization", "Bearer invalid-token")
 		w := httptest.NewRecorder()
 		server.handleRules(w, req)
 		assert.Equal(t, http.StatusForbidden, w.Code)
+		assert.Equal(t, before+1, testutil.ToFloat64(authFailuresTotal))
 	})
 
 	t.Run("valid token for correct ruleset", func(t *testing.T) {

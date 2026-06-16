@@ -95,6 +95,72 @@ spec:
             summary: "Coraza operator workqueue depth is high"
             description: 'Workqueue {{ "{{" }} $labels.name {{ "}}" }} has {{ "{{" }} $value {{ "}}" }} items pending — reconciliation may be lagging.'
 
+        # RuleSource validation failure rate above 20% over 5m (per namespace).
+        # Requires sustained validation traffic to avoid firing on a single failure.
+        - alert: CorazaRuleSourceValidationFailureRate
+          expr: >-
+            (sum by (namespace) (rate(coraza_rulesource_validations_total{outcome="invalid"}[5m]))
+            /
+            sum by (namespace) (rate(coraza_rulesource_validations_total[5m])))
+            > 0.2
+            and
+            sum by (namespace) (rate(coraza_rulesource_validations_total[5m])) > 0.01
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "RuleSource validation failure rate is high"
+            description: 'Namespace {{ "{{" }} $labels.namespace {{ "}}" }} has {{ "{{" }} $value | humanizePercentage {{ "}}" }} RuleSource validation failure rate over the last 5 minutes.'
+
+        # RuleSet aggregate validation failure rate above 20% over 5m (per namespace).
+        - alert: CorazaRuleSetValidationFailureRate
+          expr: >-
+            (sum by (namespace) (rate(coraza_ruleset_validations_total{outcome="invalid"}[5m]))
+            /
+            sum by (namespace) (rate(coraza_ruleset_validations_total[5m])))
+            > 0.2
+            and
+            sum by (namespace) (rate(coraza_ruleset_validations_total[5m])) > 0.01
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "RuleSet validation failure rate is high"
+            description: 'Namespace {{ "{{" }} $labels.namespace {{ "}}" }} has {{ "{{" }} $value | humanizePercentage {{ "}}" }} RuleSet aggregate validation failure rate over the last 5 minutes.'
+
+        # Cache hit ratio below 50% with active traffic
+        - alert: CorazaCacheHitRateLow
+          expr: >-
+            (coraza:cache_hit_ratio:rate5m < 0.5)
+            and
+            (sum(rate(coraza_cache_server_requests_total{code=~"200|404"}[5m])) > 0)
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Cache hit ratio is low"
+            description: 'Cache hit ratio is {{ "{{" }} $value | humanizePercentage {{ "}}" }} — most cache requests are returning 404 (cache miss).'
+
+        # Sustained authentication failures on the cache HTTP server
+        - alert: CorazaCacheServerAuthFailures
+          expr: rate(coraza_cache_server_auth_failures_total[5m]) > 0
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Cache server authentication failures detected"
+            description: 'The RuleSet cache server is rejecting authenticated requests — verify ServiceAccount tokens and RBAC for WASM plugin polling.'
+
+        # RuleSources in Degraded state
+        - alert: CorazaRuleSourcesDegraded
+          expr: coraza:rulesources_degraded:count > 0
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "One or more RuleSources are degraded"
+            description: '{{ "{{" }} $value {{ "}}" }} RuleSource(s) have been in Degraded state for more than 5 minutes.'
+
         {{- with .Values.metrics.prometheusRule.rules }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
@@ -117,4 +183,16 @@ spec:
 
         - record: coraza:rulesets_not_ready:count
           expr: count(coraza_ruleset_condition{condition="Ready"} != 1) or vector(0)
+
+        - record: coraza:rulesources_degraded:count
+          expr: count(coraza_rulesource_condition{condition="Degraded"} == 1) or vector(0)
+
+        # Produces NaN when there is no cache traffic (0/0). This is correct:
+        # the dependent CorazaCacheHitRateLow alert has a traffic-presence
+        # guard (sum(rate(...)) > 0) so it never fires on NaN/idle.
+        - record: coraza:cache_hit_ratio:rate5m
+          expr: >-
+            sum(rate(coraza_cache_server_requests_total{code="200"}[5m]))
+            /
+            sum(rate(coraza_cache_server_requests_total{code=~"200|404"}[5m]))
 {{- end }}

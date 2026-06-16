@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/go-logr/logr"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -26,7 +27,9 @@ func (r *RuleSetReconciler) cacheRules(
 	unsupportedMsg string,
 ) error {
 	cacheKey := fmt.Sprintf("%s/%s", ruleset.Namespace, ruleset.Name)
+	cacheStart := time.Now()
 	r.Cache.Put(cacheKey, aggregatedRules, dataFiles)
+	r.Metrics.ObserveCacheSet(ruleset.Namespace, time.Since(cacheStart))
 	logInfo(log, req, "RuleSet", "Stored rules in cache", "cacheKey", cacheKey)
 
 	statusMsg := buildCacheReadyMessage(ruleset.Namespace, ruleset.Name, unsupportedMsg)

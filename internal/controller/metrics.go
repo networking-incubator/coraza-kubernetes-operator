@@ -17,6 +17,8 @@ limitations under the License.
 package controller
 
 import (
+	"time"
+
 	"github.com/prometheus/client_golang/prometheus"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -66,6 +68,12 @@ type CorazaMetrics struct {
 	ruledataInfo      *prometheus.GaugeVec
 	ruledataCondition *prometheus.GaugeVec
 	ruledatas         *prometheus.GaugeVec
+
+	rulesourceValidations        *prometheus.CounterVec
+	rulesetValidations           *prometheus.CounterVec
+	rulesourceValidationDuration *prometheus.HistogramVec
+	rulesetValidationDuration    *prometheus.HistogramVec
+	cacheSetDuration             *prometheus.HistogramVec
 }
 
 // NewCorazaMetrics creates a CorazaMetrics and registers all gauges with reg.
@@ -141,6 +149,34 @@ func NewCorazaMetrics(reg prometheus.Registerer) (*CorazaMetrics, error) {
 			Name: "coraza_ruledatas",
 			Help: "Total number of RuleData resources per namespace.",
 		}, []string{"namespace"}),
+
+		rulesourceValidations: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "coraza_rulesource_validations_total",
+			Help: "Total RuleSource validation attempts per reconcile by outcome (valid=Coraza parse succeeded, invalid=parse failed, skipped=annotation or patch-only fragment).",
+		}, []string{"namespace", "outcome"}),
+
+		rulesetValidations: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "coraza_ruleset_validations_total",
+			Help: "Total RuleSet aggregate validation attempts per reconcile by outcome (valid=Coraza parse succeeded, invalid=parse failed; does not imply Ready — unsupported rules are checked afterward).",
+		}, []string{"namespace", "outcome"}),
+
+		rulesourceValidationDuration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
+			Name:    "coraza_rulesource_validation_duration_seconds",
+			Help:    "Duration of RuleSource Coraza validation by outcome (skipped outcomes are not recorded).",
+			Buckets: []float64{.001, .005, .01, .025, .05, .1, .25, .5, 1, 2.5, 5},
+		}, []string{"namespace", "outcome"}),
+
+		rulesetValidationDuration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
+			Name:    "coraza_ruleset_validation_duration_seconds",
+			Help:    "Duration of RuleSet aggregate Coraza validation by outcome.",
+			Buckets: []float64{.001, .005, .01, .025, .05, .1, .25, .5, 1, 2.5, 5},
+		}, []string{"namespace", "outcome"}),
+
+		cacheSetDuration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
+			Name:    "coraza_cache_set_duration_seconds",
+			Help:    "Duration of cache Put operations for validated RuleSets.",
+			Buckets: []float64{.0001, .0005, .001, .005, .01, .025, .05, .1},
+		}, []string{"namespace"}),
 	}
 
 	for _, c := range []prometheus.Collector{
@@ -148,6 +184,8 @@ func NewCorazaMetrics(reg prometheus.Registerer) (*CorazaMetrics, error) {
 		m.rulesetInfo, m.rulesetCondition, m.rulesets, m.rulesetSources, m.rulesetDataFiles,
 		m.rulesourceInfo, m.rulesourceCondition, m.rulesources,
 		m.ruledataInfo, m.ruledataCondition, m.ruledatas,
+		m.rulesourceValidations, m.rulesetValidations,
+		m.rulesourceValidationDuration, m.rulesetValidationDuration, m.cacheSetDuration,
 	} {
 		if err := reg.Register(c); err != nil {
 			return nil, err
@@ -351,4 +389,50 @@ func (m *CorazaMetrics) SetRuleDatasTotal(ns string, count int) {
 		return
 	}
 	m.ruledatas.WithLabelValues(ns).Set(float64(count))
+}
+
+// -----------------------------------------------------------------------------
+// Validation counters and duration histograms
+// -----------------------------------------------------------------------------
+
+// IncRuleSourceValidation increments the RuleSource validation counter.
+// Outcome must be one of "valid", "invalid", or "skipped" (annotation bypass or patch-only fragment).
+func (m *CorazaMetrics) IncRuleSourceValidation(ns, outcome string) {
+	if m == nil {
+		return
+	}
+	m.rulesourceValidations.WithLabelValues(ns, outcome).Inc()
+}
+
+// IncRuleSetValidation increments the RuleSet validation counter.
+// Outcome must be one of "valid" (Coraza parse succeeded) or "invalid".
+func (m *CorazaMetrics) IncRuleSetValidation(ns, outcome string) {
+	if m == nil {
+		return
+	}
+	m.rulesetValidations.WithLabelValues(ns, outcome).Inc()
+}
+
+// ObserveRuleSourceValidation records a RuleSource validation duration.
+func (m *CorazaMetrics) ObserveRuleSourceValidation(ns, outcome string, d time.Duration) {
+	if m == nil {
+		return
+	}
+	m.rulesourceValidationDuration.WithLabelValues(ns, outcome).Observe(d.Seconds())
+}
+
+// ObserveRuleSetValidation records a RuleSet aggregate validation duration.
+func (m *CorazaMetrics) ObserveRuleSetValidation(ns, outcome string, d time.Duration) {
+	if m == nil {
+		return
+	}
+	m.rulesetValidationDuration.WithLabelValues(ns, outcome).Observe(d.Seconds())
+}
+
+// ObserveCacheSet records a cache Put duration.
+func (m *CorazaMetrics) ObserveCacheSet(ns string, d time.Duration) {
+	if m == nil {
+		return
+	}
+	m.cacheSetDuration.WithLabelValues(ns).Observe(d.Seconds())
 }
