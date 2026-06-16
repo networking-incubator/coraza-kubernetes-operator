@@ -465,6 +465,19 @@ helm.sync-rbac: manifests ## Sync generated RBAC rules into the Helm chart Clust
 helm.sync: helm.sync-crds helm.sync-rbac ## Sync all generated resources into the Helm chart
 
 # -------------------------------------------------------------------------------
+# Testing - Helm
+# -------------------------------------------------------------------------------
+
+.PHONY: helm.validate
+helm.validate: ## Validate Helm templates render correctly for key flag combinations
+	hack/test-helm-manifests.sh
+
+.PHONY: test.metrics
+test.metrics: ## Run metrics integration tests (requires KIND cluster)
+	go clean -testcache
+	KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) ISTIO_VERSION=${ISTIO_VERSION} go test -tags=integration -run TestCorazaControllerMetrics ./test/integration/... -v
+
+# -------------------------------------------------------------------------------
 # Documentation
 # -------------------------------------------------------------------------------
 

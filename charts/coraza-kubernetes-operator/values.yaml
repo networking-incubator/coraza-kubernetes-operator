@@ -35,10 +35,52 @@ metrics:
   caName: ""
   serviceMonitor:
     enabled: false
-    # Additional metric relabelings to apply to scraped samples.
+    # Additional metric relabelings applied to scraped samples.
+    # See docs/content/reference/metrics-cardinality.md for worked examples and a full
+    # cardinality budget analysis.
+    # Example — drop info metrics to reduce series count in large clusters:
+    #   metricRelabelings:
+    #     - sourceLabels: [__name__]
+    #       regex: 'coraza_(engine|ruleset)_info'
+    #       action: drop
     metricRelabelings: []
     # Additional relabelings to apply to the scrape targets.
     relabelings: []
+  prometheusRule:
+    # When true, deploys a PrometheusRule CR with WAF alerting and recording rules.
+    # Requires the monitoring.coreos.com/v1 CRD (Prometheus Operator).
+    # Disabled by default — not all clusters have Prometheus Operator installed.
+    enabled: false
+    # Labels merged into PrometheusRule metadata.labels.
+    # Use this to match your Prometheus instance's ruleSelector.
+    # Example: additionalLabels: {release: prometheus}
+    additionalLabels: {}
+    # Additional alerting rules appended after the default rules.
+    rules: []
+  podMonitor:
+    # When true, deploys a PodMonitor CR to scrape coraza_waf_* metrics
+    # from Envoy stats on Gateway pods. Requires:
+    # - monitoring.coreos.com/v1 CRD (Prometheus Operator)
+    # - Istio with Envoy stats port 15090 (http-envoy-prom) exposed on Gateway pods
+    # Disabled by default.
+    enabled: false
+    # Scrape interval for WAF data-plane metrics.
+    interval: "30s"
+    scrapeTimeout: "10s"
+    # Label selector for Gateway pods. An empty selector matches ALL pods
+    # in all namespaces — narrow this in production environments.
+    # Example: gatewaySelector: {gateway.networking.k8s.io/gateway-name: my-gateway}
+    gatewaySelector: {}
+    # Labels merged into PodMonitor metadata.labels.
+    # Use this to match your Prometheus instance's podMonitorSelector.
+    # Example: additionalLabels: {release: prometheus}
+    additionalLabels: {}
+    # Port name on Gateway pods that exposes Envoy stats.
+    # Default is the Istio convention; override for non-Istio service meshes.
+    portName: "http-envoy-prom"
+    # Additional metricRelabelings appended AFTER the mandatory cardinality guard.
+    # The guard (keep only coraza_waf_.*) is always enforced first.
+    metricRelabelings: []
 
 logging:
   # When true, uses console encoder with debug level (development mode).
