@@ -119,3 +119,63 @@ Counters and histograms are emitted during Coraza validation in the RuleSource a
 For controller resource gauges, condition metrics, and cardinality guidance, see [Metrics cardinality reference]({{< relref "../reference/metrics-cardinality" >}}).
 
 When the Helm chart's `metrics.prometheusRule.enabled` value is true, bundled alerts cover validation failure rates, cache hit ratio, and authentication failures on the cache server.
+
+## Dataplane (WAF driver) metrics
+
+Gateway administrators can monitor WAF traffic decisions without shell access to Envoy pods. The Coraza WASM driver emits `coraza_waf_*` metrics on each Gateway pod's Envoy prometheus port (`http-envoy-prom`, port **15090**) at `/stats/prometheus`.
+
+The operator injects `engine` and `namespace` into the WasmPlugin `pluginConfig` so metrics are labeled per Engine CRD. See the [driver metrics contract](https://github.com/networking-incubator/coraza-kubernetes-operator/blob/main/docs/driver-metrics-contract.md) for the full metric catalog.
+
+### Scraping Gateway pods
+
+Enable the Helm PodMonitor to collect dataplane metrics from Gateway pods:
+
+```yaml
+# values.yaml
+metrics:
+  podMonitor:
+    enabled: true
+    gatewaySelector:
+      gateway.networking.k8s.io/gateway-name: my-gateway
+```
+
+The PodMonitor keeps only series matching `coraza_waf_.*` to avoid ingesting Envoy's internal stats.
+
+### Extracting Prometheus labels
+
+Proxy-WASM encodes labels into flat stat names. To export them as Prometheus labels, enable the opt-in EnvoyFilter that merges `stats_config.stats_tags` regexes on Gateway workloads:
+
+```yaml
+# values.yaml
+metrics:
+  envoyStatsTags:
+    enabled: true
+    gatewaySelector:
+      gateway.networking.k8s.io/gateway-name: my-gateway
+```
+
+Without this EnvoyFilter (or an equivalent mesh-level `stats_tags` configuration), metrics appear as unlabeled flat stat names.
+
+### Example dataplane queries
+
+Block rate per engine:
+
+```promql
+sum by (engine, namespace) (
+  rate(coraza_waf_requests_total{outcome="block"}[5m])
+)
+```
+
+Top blocked rule IDs:
+
+```promql
+topk(5,
+  sum by (rule_id) (
+    rate(coraza_waf_rule_hits_total{outcome="block"}[5m])
+  )
+)
+```
+
+### Blocked request logs
+
+When a request is interrupted, the WASM driver emits a structured JSON log line with `event=coraza_waf_blocked_request`, including rule ID, client IP, request URI, and a truncated matched-data snippet. Collect Gateway pod logs with your cluster logging stack to investigate individual blocks.
