@@ -111,6 +111,12 @@ out=$(render --set metrics.podMonitor.enabled=true \
 echo "$out" | grep -q "coraza_waf_requests_total" && pass "User metricRelabelings injected" || fail "User metricRelabelings missing"
 echo "$out" | grep -qF 'coraza_waf_.*' && pass "Mandatory cardinality guard still present" || fail "Mandatory cardinality guard missing"
 
+# ── Test 12b: EnvoyFilter stats_tags ─────────────────────────────────────────
+section "EnvoyFilter stats_tags"
+out=$(render --set metrics.envoyStatsTags.enabled=true --set 'metrics.envoyStatsTags.gatewaySelector.app=my-gateway')
+echo "$out" | grep -q "kind: EnvoyFilter" && pass "EnvoyFilter rendered" || fail "EnvoyFilter missing"
+echo "$out" | grep -q "tag_name: engine" && pass "engine stats_tag present" || fail "engine stats_tag missing"
+
 # ── Test 14: Grafana dashboard ConfigMap ─────────────────────────────────────
 section "Grafana dashboard ConfigMap"
 dash_tmp=$(mktemp /tmp/coraza-dashboard-helm-XXXXXX.yaml)

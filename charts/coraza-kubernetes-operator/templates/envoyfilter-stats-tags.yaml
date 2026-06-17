@@ -1,0 +1,45 @@
+{{- if and .Values.metrics.enabled .Values.metrics.envoyStatsTags.enabled }}
+apiVersion: networking.istio.io/v1alpha3
+kind: EnvoyFilter
+metadata:
+  name: {{ include "coraza-operator.fullname" . }}-waf-stats-tags
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "coraza-operator.labels" . | nindent 4 }}
+    {{- with .Values.metrics.envoyStatsTags.additionalLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  {{- if .Values.metrics.envoyStatsTags.gatewaySelector }}
+  workloadSelector:
+    labels:
+      {{- toYaml .Values.metrics.envoyStatsTags.gatewaySelector | nindent 6 }}
+  {{- else }}
+  {{- fail "metrics.envoyStatsTags.gatewaySelector must be set when envoyStatsTags is enabled" }}
+  {{- end }}
+  configPatches:
+    - applyTo: BOOTSTRAP
+      patch:
+        operation: MERGE
+        value:
+          stats_config:
+            stats_tags:
+              - tag_name: engine
+                regex: "_engine=([a-zA-Z0-9]([-a-zA-Z0-9]*[a-zA-Z0-9])?)"
+              - tag_name: namespace
+                regex: "_namespace=([a-zA-Z0-9]([-a-zA-Z0-9]*[a-zA-Z0-9])?)"
+              - tag_name: driver_type
+                regex: "_driver_type=([a-z]+)"
+              - tag_name: outcome
+                regex: "_outcome=([a-z]+)"
+              - tag_name: rule_id
+                regex: "_rule_id=([0-9]+|other)"
+              - tag_name: severity
+                regex: "_severity=([A-Z]+)"
+              - tag_name: category
+                regex: "_category=([a-z_]+)"
+              - tag_name: type
+                regex: "_type=([a-z_]+)"
+              - tag_name: status
+                regex: "_status=([a-z]+)"
+{{- end }}
