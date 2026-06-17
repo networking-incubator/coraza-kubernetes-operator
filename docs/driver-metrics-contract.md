@@ -41,9 +41,9 @@ The operator will inject `engine` and `namespace` labels into the driver at load
 {"engine": "my-engine", "namespace": "my-ns"}
 ```
 
-> **Not yet implemented:** The operator does not currently inject `engine` and `namespace` into `pluginConfig`. This injection will be added in a future PR alongside the first driver implementation. Until then, driver prototypes should use hardcoded test values for these fields.
+The operator injects these fields via `buildWasmPlugin` in `internal/controller/engine_controller_wasm_driver.go`.
 
-The driver MUST read these fields at initialization and apply them as Prometheus labels to **all** emitted metrics. Drivers that fail to read `pluginConfig` at startup MUST log an error and refuse to process traffic — a driver emitting metrics without the `engine` and `namespace` labels cannot be correlated to a specific Engine CRD instance, defeating the purpose of multi-tenant observability.
+The driver MUST read these fields at initialization and apply them as Prometheus labels to **all** emitted metrics. If either field is missing or empty, the driver MUST continue WAF initialization and traffic processing normally, MUST NOT emit any `coraza_waf_*` metrics, and MUST log a warning that dataplane metrics are unavailable until `engine` and `namespace` are provided in `pluginConfig`.
 
 ## Mandatory Metrics
 
@@ -279,11 +279,16 @@ A driver PR MUST satisfy all of the following before merge:
 - [ ] Integration test validates that all metrics listed above appear after a test HTTP request is processed
 - [ ] `promtool check metrics` passes on the raw exposition output from the driver
 - [ ] Cardinality budget is documented for any label dimension not in this spec (if extensions are proposed)
-- [ ] Driver refuses to process traffic if `pluginConfig` is missing or malformed, with a logged error
+- [ ] Driver skips all `coraza_waf_*` emission and logs a warning when `engine` or `namespace` is missing from `pluginConfig` (WAF continues to process traffic)
 
 ## Scraping Configuration
 
-The `coraza_waf_*` metrics are exposed on the Envoy stats port (`http-envoy-prom`, port 15090) at `/stats/prometheus` on Gateway pods. The operator Helm chart provides an opt-in PodMonitor to collect these metrics.
+The `coraza_waf_*` metrics are exposed on the Envoy stats port (`http-envoy-prom`, port 15090) at `/stats/prometheus` on Gateway pods. The operator Helm chart provides:
+
+- An opt-in **PodMonitor** to collect these metrics from Gateway pods
+- An opt-in **EnvoyFilter** (`metrics.envoyStatsTags`) that merges `stats_tags` regexes required to extract Prometheus labels from WASM-encoded stat names
+
+Without the EnvoyFilter (or an equivalent mesh-level `stats_config.stats_tags` configuration), metrics appear as flat unlabeled Envoy stat names.
 
 To enable scraping, set the following in your Helm values:
 
