@@ -1,0 +1,53 @@
+# kube-prometheus-stack values tuned for local KIND demo clusters.
+# Chart version is pinned in the Makefile (KUBE_PROM_STACK_VERSION, default 86.2.3).
+# Installed by: make observability.prometheus.deploy
+
+prometheus:
+  prometheusSpec:
+    # Discover ServiceMonitors and PrometheusRules in all namespaces.
+    serviceMonitorSelectorNilUsesHelmValues: false
+    serviceMonitorNamespaceSelector: {}
+    ruleSelectorNilUsesHelmValues: false
+    ruleNamespaceSelector: {}
+    retention: 2d
+    resources:
+      requests:
+        cpu: 200m
+        memory: 512Mi
+      limits:
+        cpu: 1000m
+        memory: 2Gi
+
+grafana:
+  # adminPassword is set by make observability.prometheus.deploy (GRAFANA_ADMIN_PASSWORD).
+  sidecar:
+    dashboards:
+      enabled: true
+      label: grafana_dashboard
+      labelValue: "1"
+      searchNamespace: ALL
+      folderAnnotation: grafana_folder
+      provider:
+        foldersFromFilesStructure: true
+    datasources:
+      enabled: true
+      defaultDatasourceEnabled: true
+
+alertmanager:
+  enabled: true
+
+kubeStateMetrics:
+  enabled: true
+
+nodeExporter:
+  enabled: true
+
+# Reduce footprint on single-node KIND clusters.
+prometheusOperator:
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+
+defaultRules:
+  create: true

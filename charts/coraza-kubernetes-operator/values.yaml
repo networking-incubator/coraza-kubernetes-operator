@@ -35,6 +35,10 @@ metrics:
   caName: ""
   serviceMonitor:
     enabled: false
+    # Labels merged into ServiceMonitor metadata.labels.
+    # Use this to match your Prometheus instance's serviceMonitorSelector.
+    # Example: additionalLabels: {release: kube-prometheus-stack}
+    additionalLabels: {}
     # Additional metric relabelings applied to scraped samples.
     # See docs/content/reference/metrics-cardinality.md for worked examples and a full
     # cardinality budget analysis.
@@ -53,7 +57,7 @@ metrics:
     enabled: false
     # Labels merged into PrometheusRule metadata.labels.
     # Use this to match your Prometheus instance's ruleSelector.
-    # Example: additionalLabels: {release: prometheus}
+    # Example: additionalLabels: {release: kube-prometheus-stack}
     additionalLabels: {}
     # Additional alerting rules appended after the default rules.
     rules: []
@@ -73,7 +77,7 @@ metrics:
     gatewaySelector: {}
     # Labels merged into PodMonitor metadata.labels.
     # Use this to match your Prometheus instance's podMonitorSelector.
-    # Example: additionalLabels: {release: prometheus}
+    # Example: additionalLabels: {release: kube-prometheus-stack}
     additionalLabels: {}
     # Port name on Gateway pods that exposes Envoy stats.
     # Default is the Istio convention; override for non-Istio service meshes.
@@ -81,6 +85,17 @@ metrics:
     # Additional metricRelabelings appended AFTER the mandatory cardinality guard.
     # The guard (keep only coraza_waf_.*) is always enforced first.
     metricRelabelings: []
+  grafanaDashboard:
+    # When true, deploys ConfigMap(s) containing Grafana dashboard JSON for the
+    # kube-prometheus-stack (or compatible) Grafana dashboard sidecar.
+    # Requires metrics.prometheusRule.enabled=true (health panels query recording
+    # rules from the chart PrometheusRule) and a Grafana instance watching
+    # ConfigMaps labeled grafana_dashboard=1.
+    enabled: false
+    # Folder name written to the grafana_folder ConfigMap annotation.
+    folder: "Coraza WAF"
+    # Labels merged into dashboard ConfigMap metadata.labels (in addition to grafana_dashboard).
+    additionalLabels: {}
 
 logging:
   # When true, uses console encoder with debug level (development mode).
