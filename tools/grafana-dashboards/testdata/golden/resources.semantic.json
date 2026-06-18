@@ -1,0 +1,251 @@
+{
+  "uid": "coraza-operator-resources",
+  "title": "Coraza Operator — Resources",
+  "tags": [
+    "control-plane",
+    "coraza",
+    "operator",
+    "waf"
+  ],
+  "panels": [
+    {
+      "id": 1,
+      "type": "text",
+      "title": "",
+      "gridPos": {
+        "h": 3,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "id": 2,
+      "type": "row",
+      "title": "Selected Engine",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 3
+      }
+    },
+    {
+      "id": 3,
+      "type": "table",
+      "title": "Engine conditions",
+      "gridPos": {
+        "h": 6,
+        "w": 24,
+        "x": 0,
+        "y": 4
+      },
+      "exprs": [
+        "label_join(coraza_engine_condition{namespace=~\"$namespace\", condition=~\"Ready|Progressing|Degraded|Accepted\"}, \"resource\", \"/\", \"namespace\", \"name\")"
+      ],
+      "transformationIds": [
+        "groupingToMatrix",
+        "renameByRegex",
+        "organize"
+      ]
+    },
+    {
+      "id": 4,
+      "type": "table",
+      "title": "Engine details",
+      "gridPos": {
+        "h": 6,
+        "w": 24,
+        "x": 0,
+        "y": 10
+      },
+      "exprs": [
+        "coraza_engine_info{namespace=~\"$namespace\", name=~\"$engine\", ruleset_name=~\"$ruleset\"}"
+      ],
+      "transformationIds": [
+        "organize"
+      ]
+    },
+    {
+      "id": 5,
+      "type": "row",
+      "title": "RuleSets in namespace",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 16
+      }
+    },
+    {
+      "id": 6,
+      "type": "table",
+      "title": "RuleSet conditions",
+      "gridPos": {
+        "h": 6,
+        "w": 24,
+        "x": 0,
+        "y": 17
+      },
+      "exprs": [
+        "label_join(coraza_ruleset_condition{namespace=~\"$namespace\", condition=~\"Ready|Progressing|Degraded\"}, \"resource\", \"/\", \"namespace\", \"name\")"
+      ],
+      "transformationIds": [
+        "groupingToMatrix",
+        "renameByRegex",
+        "organize"
+      ]
+    },
+    {
+      "id": 7,
+      "type": "table",
+      "title": "RuleSet composition",
+      "gridPos": {
+        "h": 5,
+        "w": 24,
+        "x": 0,
+        "y": 23
+      },
+      "exprs": [
+        "coraza_ruleset_data_files{namespace=~\"$namespace\"}",
+        "coraza_ruleset_sources{namespace=~\"$namespace\"}"
+      ],
+      "transformationIds": [
+        "merge",
+        "organize"
+      ]
+    },
+    {
+      "id": 8,
+      "type": "row",
+      "title": "Namespace inventory — Engines",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 28
+      }
+    },
+    {
+      "id": 9,
+      "type": "table",
+      "title": "Engines in namespace",
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 29
+      },
+      "exprs": [
+        "label_join(coraza_engine_condition{namespace=~\"$namespace\", condition=~\"Ready|Degraded\"}, \"resource\", \"/\", \"namespace\", \"name\")"
+      ],
+      "transformationIds": [
+        "groupingToMatrix",
+        "renameByRegex",
+        "organize"
+      ]
+    },
+    {
+      "id": 10,
+      "type": "row",
+      "title": "Namespace inventory — RuleSources",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 39
+      }
+    },
+    {
+      "id": 11,
+      "type": "table",
+      "title": "RuleSources",
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 40
+      },
+      "exprs": [
+        "label_join(coraza_rulesource_condition{namespace=~\"$namespace\", condition=~\"Ready|Degraded\"}, \"resource\", \"/\", \"namespace\", \"name\")"
+      ],
+      "transformationIds": [
+        "groupingToMatrix",
+        "renameByRegex",
+        "organize"
+      ]
+    },
+    {
+      "id": 12,
+      "type": "row",
+      "title": "Operator-wide activity",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 48
+      }
+    },
+    {
+      "id": 13,
+      "type": "timeseries",
+      "title": "Reconcile rate (all controllers)",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 49
+      },
+      "exprs": [
+        "sum by (controller, result) (rate(controller_runtime_reconcile_total{controller=~\"ruleset|engine|rulesource\"}[5m]))"
+      ]
+    },
+    {
+      "id": 14,
+      "type": "timeseries",
+      "title": "Cache request rate",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 49
+      },
+      "exprs": [
+        "sum by (handler) (rate(coraza_cache_server_requests_total[5m]))"
+      ]
+    }
+  ],
+  "links": [
+    {
+      "title": "Overview",
+      "url": "/d/coraza-operator-overview/coraza-operator-overview?${__url_time_range}"
+    }
+  ],
+  "variables": [
+    {
+      "name": "DS_PROMETHEUS",
+      "type": "datasource"
+    },
+    {
+      "name": "engine",
+      "type": "query",
+      "definition": "label_values(coraza_engine_info{namespace=~\"$namespace\"}, name)",
+      "multi": true,
+      "includeAll": true
+    },
+    {
+      "name": "namespace",
+      "type": "query",
+      "definition": "label_values({__name__=~\"coraza_(engines|rulesets|rulesources|ruledatas|engine_info|ruleset_info|rulesource_info|ruledata_info)\"}, namespace)",
+      "multi": true,
+      "includeAll": true
+    },
+    {
+      "name": "ruleset",
+      "type": "query",
+      "definition": "label_values(coraza_ruleset_info{namespace=~\"$namespace\"}, name)",
+      "multi": true,
+      "includeAll": true
+    }
+  ]
+}

@@ -1,0 +1,581 @@
+{
+  "uid": "coraza-operator-overview",
+  "title": "Coraza Operator — Overview",
+  "tags": [
+    "control-plane",
+    "coraza",
+    "operator",
+    "waf"
+  ],
+  "panels": [
+    {
+      "id": 1,
+      "type": "text",
+      "title": "",
+      "gridPos": {
+        "h": 3,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "id": 2,
+      "type": "row",
+      "title": "Health summary",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 3
+      }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Engines not ready",
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 0,
+        "y": 4
+      },
+      "exprs": [
+        "coraza:engines_not_ready:count"
+      ]
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "RuleSets not ready",
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 4,
+        "y": 4
+      },
+      "exprs": [
+        "coraza:rulesets_not_ready:count"
+      ]
+    },
+    {
+      "id": 5,
+      "type": "stat",
+      "title": "RuleSources degraded",
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 8,
+        "y": 4
+      },
+      "exprs": [
+        "coraza:rulesources_degraded:count"
+      ]
+    },
+    {
+      "id": 6,
+      "type": "stat",
+      "title": "Reconcile error ratio",
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 12,
+        "y": 4
+      },
+      "exprs": [
+        "(sum(rate(controller_runtime_reconcile_errors_total{controller=~\"ruleset|engine|rulesource\"}[5m])) / sum(rate(controller_runtime_reconcile_total{controller=~\"ruleset|engine|rulesource\"}[5m]))) and sum(rate(controller_runtime_reconcile_total{controller=~\"ruleset|engine|rulesource\"}[5m])) \u003e 0"
+      ]
+    },
+    {
+      "id": 7,
+      "type": "stat",
+      "title": "Cache utilization",
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 16,
+        "y": 4
+      },
+      "exprs": [
+        "(coraza_cache_size_bytes / coraza_cache_config_max_size_bytes) and coraza_cache_config_max_size_bytes \u003e 0"
+      ]
+    },
+    {
+      "id": 8,
+      "type": "stat",
+      "title": "Cache hit ratio",
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 20,
+        "y": 4
+      },
+      "exprs": [
+        "coraza:cache_hit_ratio:rate5m"
+      ]
+    },
+    {
+      "id": 9,
+      "type": "row",
+      "title": "Reconciliation",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 8
+      }
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "Reconcile rate",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 9
+      },
+      "exprs": [
+        "sum by (controller, result) (rate(controller_runtime_reconcile_total{controller=~\"ruleset|engine|rulesource\"}[5m]))"
+      ]
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "Reconcile errors",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 9
+      },
+      "exprs": [
+        "sum by (controller) (rate(controller_runtime_reconcile_errors_total{controller=~\"ruleset|engine|rulesource\"}[5m]))"
+      ]
+    },
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "Reconcile duration p99",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 17
+      },
+      "exprs": [
+        "histogram_quantile(0.50, sum by (le, controller) (rate(controller_runtime_reconcile_time_seconds_bucket{controller=~\"ruleset|engine|rulesource\"}[5m])))",
+        "histogram_quantile(0.99, sum by (le, controller) (rate(controller_runtime_reconcile_time_seconds_bucket{controller=~\"ruleset|engine|rulesource\"}[5m])))"
+      ]
+    },
+    {
+      "id": 13,
+      "type": "timeseries",
+      "title": "Workqueue depth",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 17
+      },
+      "exprs": [
+        "workqueue_depth{name=~\"ruleset|engine|rulesource\"}"
+      ]
+    },
+    {
+      "id": 14,
+      "type": "row",
+      "title": "Validation",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 24
+      }
+    },
+    {
+      "id": 15,
+      "type": "timeseries",
+      "title": "RuleSource validation rate",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 25
+      },
+      "exprs": [
+        "sum by (outcome) (rate(coraza_rulesource_validations_total[5m]))"
+      ]
+    },
+    {
+      "id": 16,
+      "type": "timeseries",
+      "title": "RuleSet validation rate",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 25
+      },
+      "exprs": [
+        "sum by (outcome) (rate(coraza_ruleset_validations_total[5m]))"
+      ]
+    },
+    {
+      "id": 17,
+      "type": "timeseries",
+      "title": "RuleSource validation duration",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 33
+      },
+      "exprs": [
+        "histogram_quantile(0.50, sum by (le, outcome) (rate(coraza_rulesource_validation_duration_seconds_bucket[5m])))",
+        "histogram_quantile(0.99, sum by (le, outcome) (rate(coraza_rulesource_validation_duration_seconds_bucket[5m])))"
+      ]
+    },
+    {
+      "id": 18,
+      "type": "timeseries",
+      "title": "RuleSet validation duration",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 33
+      },
+      "exprs": [
+        "histogram_quantile(0.50, sum by (le, outcome) (rate(coraza_ruleset_validation_duration_seconds_bucket[5m])))",
+        "histogram_quantile(0.99, sum by (le, outcome) (rate(coraza_ruleset_validation_duration_seconds_bucket[5m])))"
+      ]
+    },
+    {
+      "id": 19,
+      "type": "row",
+      "title": "Cache server — RED",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 40
+      }
+    },
+    {
+      "id": 20,
+      "type": "timeseries",
+      "title": "Request rate",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 41
+      },
+      "exprs": [
+        "sum by (handler, code) (rate(coraza_cache_server_requests_total[5m]))"
+      ]
+    },
+    {
+      "id": 21,
+      "type": "timeseries",
+      "title": "Errors \u0026 auth failures",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 41
+      },
+      "exprs": [
+        "rate(coraza_cache_server_auth_failures_total[5m])",
+        "sum(rate(coraza_cache_server_requests_total{code=~\"5..\"}[5m]))"
+      ]
+    },
+    {
+      "id": 22,
+      "type": "timeseries",
+      "title": "Request latency",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 49
+      },
+      "exprs": [
+        "histogram_quantile(0.50, sum by (le, handler) (rate(coraza_cache_server_request_duration_seconds_bucket[5m])))",
+        "histogram_quantile(0.99, sum by (le, handler) (rate(coraza_cache_server_request_duration_seconds_bucket[5m])))"
+      ]
+    },
+    {
+      "id": 23,
+      "type": "timeseries",
+      "title": "In-flight requests",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 49
+      },
+      "exprs": [
+        "coraza_cache_server_in_flight_requests"
+      ]
+    },
+    {
+      "id": 24,
+      "type": "row",
+      "title": "Cache server — USE",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 56
+      }
+    },
+    {
+      "id": 25,
+      "type": "timeseries",
+      "title": "Cache size vs limit",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 57
+      },
+      "exprs": [
+        "coraza_cache_config_max_size_bytes",
+        "coraza_cache_size_bytes"
+      ]
+    },
+    {
+      "id": 26,
+      "type": "timeseries",
+      "title": "GC prune rate",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 57
+      },
+      "exprs": [
+        "sum by (reason) (rate(coraza_cache_gc_pruned_entries_total[15m]))"
+      ]
+    },
+    {
+      "id": 27,
+      "type": "timeseries",
+      "title": "Cache instances \u0026 entries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 65
+      },
+      "exprs": [
+        "coraza_cache_instances",
+        "coraza_cache_total_entries"
+      ]
+    },
+    {
+      "id": 28,
+      "type": "timeseries",
+      "title": "Cache Put duration",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 65
+      },
+      "exprs": [
+        "histogram_quantile(0.50, sum by (le, namespace) (rate(coraza_cache_set_duration_seconds_bucket[5m])))",
+        "histogram_quantile(0.99, sum by (le, namespace) (rate(coraza_cache_set_duration_seconds_bucket[5m])))"
+      ]
+    },
+    {
+      "id": 29,
+      "type": "row",
+      "title": "Kubernetes API \u0026 workqueue",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 72
+      }
+    },
+    {
+      "id": 30,
+      "type": "timeseries",
+      "title": "API request rate",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 73
+      },
+      "exprs": [
+        "sum by (verb, resource) (rate(rest_client_requests_total[5m]))"
+      ]
+    },
+    {
+      "id": 31,
+      "type": "timeseries",
+      "title": "API errors (non-2xx)",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 73
+      },
+      "exprs": [
+        "sum by (code) (rate(rest_client_requests_total{code!~\"2..\"}[5m]))"
+      ]
+    },
+    {
+      "id": 32,
+      "type": "timeseries",
+      "title": "API request latency p99",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 81
+      },
+      "exprs": [
+        "histogram_quantile(0.50, sum by (le, verb) (rate(rest_client_request_duration_seconds_bucket[5m])))",
+        "histogram_quantile(0.99, sum by (le, verb) (rate(rest_client_request_duration_seconds_bucket[5m])))"
+      ]
+    },
+    {
+      "id": 33,
+      "type": "timeseries",
+      "title": "Workqueue retries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 81
+      },
+      "exprs": [
+        "sum by (name) (rate(workqueue_retries_total{name=~\"ruleset|engine|rulesource\"}[5m]))"
+      ]
+    },
+    {
+      "id": 34,
+      "type": "timeseries",
+      "title": "Longest running processor",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 89
+      },
+      "exprs": [
+        "workqueue_longest_running_processor_seconds{name=~\"ruleset|engine|rulesource\"}"
+      ]
+    },
+    {
+      "id": 35,
+      "type": "timeseries",
+      "title": "Unfinished work",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 89
+      },
+      "exprs": [
+        "workqueue_unfinished_work_seconds{name=~\"ruleset|engine|rulesource\"}"
+      ]
+    },
+    {
+      "id": 36,
+      "type": "row",
+      "title": "Resource counts by namespace",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 96
+      }
+    },
+    {
+      "id": 37,
+      "type": "table",
+      "title": "Engines",
+      "gridPos": {
+        "h": 6,
+        "w": 12,
+        "x": 0,
+        "y": 97
+      },
+      "exprs": [
+        "coraza_engines"
+      ],
+      "transformationIds": [
+        "organize"
+      ]
+    },
+    {
+      "id": 38,
+      "type": "table",
+      "title": "RuleSets",
+      "gridPos": {
+        "h": 6,
+        "w": 12,
+        "x": 12,
+        "y": 97
+      },
+      "exprs": [
+        "coraza_rulesets"
+      ],
+      "transformationIds": [
+        "organize"
+      ]
+    },
+    {
+      "id": 39,
+      "type": "table",
+      "title": "RuleSources",
+      "gridPos": {
+        "h": 6,
+        "w": 12,
+        "x": 0,
+        "y": 103
+      },
+      "exprs": [
+        "coraza_rulesources"
+      ],
+      "transformationIds": [
+        "organize"
+      ]
+    },
+    {
+      "id": 40,
+      "type": "table",
+      "title": "RuleData",
+      "gridPos": {
+        "h": 6,
+        "w": 12,
+        "x": 12,
+        "y": 103
+      },
+      "exprs": [
+        "coraza_ruledatas"
+      ],
+      "transformationIds": [
+        "organize"
+      ]
+    }
+  ],
+  "links": [
+    {
+      "title": "Resource drill-down",
+      "url": "/d/coraza-operator-resources/coraza-operator-resources?${__url_time_range}"
+    }
+  ],
+  "variables": [
+    {
+      "name": "DS_PROMETHEUS",
+      "type": "datasource"
+    }
+  ]
+}

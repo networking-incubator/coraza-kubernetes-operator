@@ -26,4 +26,5 @@ How-to guides address specific tasks. Unlike tutorials, they assume you already 
 ## Operations
 
 - [Monitoring with Prometheus]({{< relref "monitoring-prometheus" >}})
+- [Observability demo on KIND]({{< relref "observability-demo" >}})
 - [Upgrading the Operator]({{< relref "upgrading" >}})

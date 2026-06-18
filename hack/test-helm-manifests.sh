@@ -111,13 +111,37 @@ out=$(render --set metrics.podMonitor.enabled=true \
 echo "$out" | grep -q "coraza_waf_requests_total" && pass "User metricRelabelings injected" || fail "User metricRelabelings missing"
 echo "$out" | grep -qF 'coraza_waf_.*' && pass "Mandatory cardinality guard still present" || fail "Mandatory cardinality guard missing"
 
-# ── Test 13: ServiceMonitor additionalLabels ─────────────────────────────────
+# ── Test 14: Grafana dashboard ConfigMap ─────────────────────────────────────
+section "Grafana dashboard ConfigMap"
+dash_tmp=$(mktemp /tmp/coraza-dashboard-helm-XXXXXX.yaml)
+render --set metrics.enabled=true --set metrics.grafanaDashboard.enabled=true \
+  --set metrics.prometheusRule.enabled=true \
+  -s templates/grafana-dashboard-configmap.yaml > "${dash_tmp}"
+grep -q "kind: ConfigMap" "${dash_tmp}" && pass "Dashboard ConfigMap rendered" || fail "Dashboard ConfigMap missing"
+grep -q "grafana_dashboard" "${dash_tmp}" && pass "grafana_dashboard label present" || fail "grafana_dashboard label missing"
+grep -q "coraza-operator-overview.json" "${dash_tmp}" && pass "Overview dashboard embedded" || fail "Overview dashboard missing"
+grep -q "coraza-operator-resources.json" "${dash_tmp}" && pass "Resources dashboard embedded" || fail "Resources dashboard missing"
+grep -q "grafana_folder" "${dash_tmp}" && pass "grafana_folder annotation present" || fail "grafana_folder annotation missing"
+rm -f "${dash_tmp}"
+
+# ── Test 15: ServiceMonitor additionalLabels ─────────────────────────────────
 section "ServiceMonitor additionalLabels"
 out=$(render --set metrics.enabled=true --set metrics.serviceMonitor.enabled=true \
   --set 'metrics.serviceMonitor.additionalLabels.release=kube-prometheus-stack')
 echo "$out" | grep -q "release: kube-prometheus-stack" && pass "ServiceMonitor additionalLabels merged" || fail "ServiceMonitor additionalLabels not merged"
 
-# ── Test 14: promtool check rules (optional) ─────────────────────────────────
+# ── Test 16: Grafana dashboard gated on metrics.enabled ──────────────────────
+section "Grafana dashboard respects metrics.enabled gate"
+out=$(render --set metrics.enabled=false --set metrics.grafanaDashboard.enabled=true)
+echo "$out" | grep -q "coraza-operator-overview.json" && fail "Dashboard should be gated on metrics.enabled" || pass "Dashboard correctly gated"
+
+# ── Test 16b: Grafana dashboard requires PrometheusRule ───────────────────────
+section "Grafana dashboard requires prometheusRule"
+out=$(render --set metrics.enabled=true --set metrics.grafanaDashboard.enabled=true \
+  --set metrics.prometheusRule.enabled=false)
+echo "$out" | grep -q "coraza-operator-overview.json" && fail "Dashboard should require prometheusRule.enabled" || pass "Dashboard correctly gated on prometheusRule"
+
+# ── Test 17: promtool check rules (optional) ─────────────────────────────────
 if command -v promtool &>/dev/null; then
   section "promtool check rules"
   tmpfile=$(mktemp /tmp/prometheusrule-XXXXXX.yaml)
