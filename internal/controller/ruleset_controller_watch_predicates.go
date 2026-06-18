@@ -45,6 +45,17 @@ func (r *RuleSetReconciler) findRuleSetsForRuleData(ctx context.Context, ruleDat
 	return r.findRuleSetsBy(ctx, ruleData.GetNamespace(), "spec.data.name", ruleData.GetName())
 }
 
+// enqueueForRuleDataChange maps RuleData events to RuleSet reconciles when
+// referenced, and refreshes namespace-level ruledata totals when not.
+func (r *RuleSetReconciler) enqueueForRuleDataChange(ctx context.Context, ruleData client.Object) []reconcile.Request {
+	reqs := r.findRuleSetsForRuleData(ctx, ruleData)
+	if len(reqs) > 0 {
+		return reqs
+	}
+	r.reconcileRuleDataMetrics(ctx, ruleData.GetNamespace())
+	return nil
+}
+
 // findRuleSetsBy lists RuleSets matching a field index value and returns
 // reconcile requests for each.
 func (r *RuleSetReconciler) findRuleSetsBy(ctx context.Context, namespace, indexKey, indexValue string) []reconcile.Request {
@@ -83,5 +94,19 @@ func ruleSourceWatchPredicate() predicate.Predicate {
 		predicate.GenerationChangedPredicate{},
 		annotationChangedPredicate(wafv1alpha1.AnnotationSkipValidation),
 		statusChanged,
+	)
+}
+
+// ruleDataWatchPredicate enqueues referencing RuleSets (or refreshes namespace
+// ruledata totals) when RuleData is created, updated, or deleted.
+func ruleDataWatchPredicate() predicate.Predicate {
+	return predicate.Or(
+		predicate.GenerationChangedPredicate{},
+		predicate.Funcs{
+			CreateFunc:  func(event.CreateEvent) bool { return true },
+			DeleteFunc:  func(event.DeleteEvent) bool { return true },
+			UpdateFunc:  func(event.UpdateEvent) bool { return false },
+			GenericFunc: func(event.GenericEvent) bool { return false },
+		},
 	)
 }

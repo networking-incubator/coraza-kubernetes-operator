@@ -48,12 +48,12 @@ for counters by Prometheus convention).
 | `coraza_rulesources` | gauge | `namespace` | 1 per namespace | |
 | `coraza_ruledata_info` | gauge=1 | `namespace`, `name` | 1 per referenced RuleData | Only RuleDatas referenced by a RuleSet |
 | `coraza_ruledata_condition` | gauge | `namespace`, `name`, `condition` | 1 per referenced RuleData (Ready) | |
-| `coraza_ruledatas` | gauge | `namespace` | 1 per namespace | Refreshed on RuleSet reconciliation |
-| `coraza_rulesource_validations_total` | counter | `namespace`, `outcome` | 3 per namespace (valid/invalid/skipped) | `skipped` = annotation bypass or patch-only fragment |
-| `coraza_ruleset_validations_total` | counter | `namespace`, `outcome` | 2 per namespace (valid/invalid) | `valid` = Coraza parse succeeded, not necessarily Ready |
+| `coraza_ruledatas` | gauge | `namespace` | 1 per namespace | Refreshed on RuleSet reconcile and RuleData watch events |
+| `coraza_rulesource_validations_total` | counter | `namespace`, `outcome` | 3 per namespace (valid/invalid/skipped) | Incremented once per status transition, not per informer resync |
+| `coraza_ruleset_validations_total` | counter | `namespace`, `outcome` | 2 per namespace (valid/invalid) | `valid` recorded after successful cache; `invalid` on degrade transition |
 | `coraza_rulesource_validation_duration_seconds` | histogram | `namespace`, `outcome` | 2 × 13 per namespace (valid/invalid) | `skipped` increments the counter only; 11 buckets + sum + count |
-| `coraza_ruleset_validation_duration_seconds` | histogram | `namespace`, `outcome` | 2 × 13 per namespace | 11 buckets + sum + count |
-| `coraza_cache_set_duration_seconds` | histogram | `namespace` | 1 × 10 per namespace | 8 buckets + sum + count |
+| `coraza_ruleset_validation_duration_seconds` | histogram | `namespace`, `outcome` | 2 × 13 per namespace | PMFromFile + Coraza parse only; excludes status patches and cache |
+| `coraza_cache_set_duration_seconds` | histogram | `namespace` | 1 × 10 per namespace | Recorded once per cache transition; excludes resync and unchanged content |
 
 ### Controller-Runtime Built-ins (not `coraza_` prefixed)
 
@@ -134,6 +134,21 @@ constraints (including the top-N rule limit that bounds per-rule series), see
 | Scrape target | ServiceMonitor on operator pod | PodMonitor on Gateway pods |
 | Per-rule detail | No — operator never sees rule decisions | Yes — bounded by top-N limit |
 | Worst-case (10-engine cluster) | ~585 series | ~7,000 series |
+
+## ServiceMonitor label handling
+
+The Helm chart enables `honorLabels: true` on the operator ServiceMonitor so the
+`namespace` label on `coraza_*` metrics reflects the **CR namespace**, not the
+operator pod namespace. Prometheus normally overwrites `namespace` with the scrape
+target namespace when `honorLabels` is false.
+
+`honorLabels` also preserves any `job` or `instance` labels emitted by the
+operator. Those labels are reserved for scrape-target identity; if the operator
+ever emitted them, aggregation would silently break. The chart therefore applies a
+built-in `metricRelabelings` rule to drop `job` and `instance` before user-supplied
+`metrics.serviceMonitor.metricRelabelings` are applied.
+
+**Contract:** operator metrics must not emit `job` or `instance` labels.
 
 ## Reducing Cardinality with metricRelabelings
 

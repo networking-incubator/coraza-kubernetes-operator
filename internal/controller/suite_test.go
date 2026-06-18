@@ -160,6 +160,30 @@ func TestMain(m *testing.M) {
 		_ = testEnv.Stop()
 		os.Exit(1)
 	}
+	if err := testCache.(client.FieldIndexer).IndexField(context.Background(), &wafv1alpha1.RuleSet{}, "spec.sources.name", func(obj client.Object) []string {
+		rs := obj.(*wafv1alpha1.RuleSet)
+		names := make([]string, len(rs.Spec.Sources))
+		for i, src := range rs.Spec.Sources {
+			names[i] = src.Name
+		}
+		return names
+	}); err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to register RuleSet spec.sources.name index: %v\n", err)
+		_ = testEnv.Stop()
+		os.Exit(1)
+	}
+	if err := testCache.(client.FieldIndexer).IndexField(context.Background(), &wafv1alpha1.RuleSet{}, "spec.data.name", func(obj client.Object) []string {
+		rs := obj.(*wafv1alpha1.RuleSet)
+		names := make([]string, len(rs.Spec.Data))
+		for i, d := range rs.Spec.Data {
+			names[i] = d.Name
+		}
+		return names
+	}); err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to register RuleSet spec.data.name index: %v\n", err)
+		_ = testEnv.Stop()
+		os.Exit(1)
+	}
 	cacheCtx, cacheCancel := context.WithCancel(context.Background())
 	cacheErrCh := make(chan error, 1)
 	go func() {

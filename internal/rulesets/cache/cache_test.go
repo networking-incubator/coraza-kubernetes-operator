@@ -17,6 +17,7 @@ limitations under the License.
 package cache
 
 import (
+	"bytes"
 	"testing"
 	"time"
 
@@ -88,6 +89,39 @@ func TestRuleSetCache_PutAndGet(t *testing.T) {
 			assert.False(t, entry.Timestamp.IsZero(), "Timestamp should be set")
 		})
 	}
+}
+
+func TestRuleSetCache_EntryMatches(t *testing.T) {
+	c := NewRuleSetCache()
+	rules := `SecRule REQUEST_URI "@contains /admin" "id:1,deny"`
+	data := map[string][]byte{"words.data": []byte("admin\nroot")}
+
+	assert.False(t, c.EntryMatches("ns/rs", rules, data))
+
+	c.Put("ns/rs", rules, data)
+	assert.True(t, c.EntryMatches("ns/rs", rules, data))
+	assert.False(t, c.EntryMatches("ns/rs", rules+"\n", data))
+	assert.False(t, c.EntryMatches("ns/rs", rules, map[string][]byte{"words.data": []byte("other")}))
+	assert.False(t, c.EntryMatches("ns/other", rules, data))
+}
+
+func TestRuleSetCache_EntryMatchesNoAllocOnLargeData(t *testing.T) {
+	c := NewRuleSetCache()
+	large := make([]byte, 1<<20) // 1 MiB
+	for i := range large {
+		large[i] = byte(i)
+	}
+	data := map[string][]byte{"big.data": large}
+	rules := `SecRule ARGS "@rx ." "id:1,pass,nolog"`
+	c.Put("ns/rs", rules, data)
+
+	candidate := map[string][]byte{"big.data": bytes.Clone(large)}
+	allocs := testing.AllocsPerRun(10, func() {
+		if !c.EntryMatches("ns/rs", rules, candidate) {
+			panic("expected match")
+		}
+	})
+	assert.Zero(t, allocs, "EntryMatches must not allocate when comparing large RuleData")
 }
 
 func TestRuleSetCache_Pruning(t *testing.T) {

@@ -152,12 +152,12 @@ func NewCorazaMetrics(reg prometheus.Registerer) (*CorazaMetrics, error) {
 
 		rulesourceValidations: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "coraza_rulesource_validations_total",
-			Help: "Total RuleSource validation attempts per reconcile by outcome (valid=Coraza parse succeeded, invalid=parse failed, skipped=annotation or patch-only fragment).",
+			Help: "RuleSource validation outcomes recorded once per status transition (valid=Coraza parse succeeded, invalid=parse failed, skipped=annotation or patch-only fragment).",
 		}, []string{"namespace", "outcome"}),
 
 		rulesetValidations: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "coraza_ruleset_validations_total",
-			Help: "Total RuleSet aggregate validation attempts per reconcile by outcome (valid=Coraza parse succeeded, invalid=parse failed; does not imply Ready — unsupported rules are checked afterward).",
+			Help: "RuleSet aggregate validation outcomes recorded once per status transition (valid=Coraza parse succeeded and rules cached, invalid=parse failed).",
 		}, []string{"namespace", "outcome"}),
 
 		rulesourceValidationDuration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
@@ -168,13 +168,13 @@ func NewCorazaMetrics(reg prometheus.Registerer) (*CorazaMetrics, error) {
 
 		rulesetValidationDuration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
 			Name:    "coraza_ruleset_validation_duration_seconds",
-			Help:    "Duration of RuleSet aggregate Coraza validation by outcome.",
+			Help:    "Duration of RuleSet Coraza validation (PMFromFile + aggregate parse) by outcome; excludes status patches and cache writes.",
 			Buckets: []float64{.001, .005, .01, .025, .05, .1, .25, .5, 1, 2.5, 5},
 		}, []string{"namespace", "outcome"}),
 
 		cacheSetDuration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
 			Name:    "coraza_cache_set_duration_seconds",
-			Help:    "Duration of cache Put operations for validated RuleSets.",
+			Help:    "Duration of cache Put operations recorded once per RuleSet cache transition; excludes resync and content-unchanged reconciles.",
 			Buckets: []float64{.0001, .0005, .001, .005, .01, .025, .05, .1},
 		}, []string{"namespace"}),
 	}

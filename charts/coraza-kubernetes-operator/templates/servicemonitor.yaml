@@ -6,6 +6,9 @@ metadata:
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "coraza-operator.labels" . | nindent 4 }}
+    {{- with .Values.metrics.serviceMonitor.additionalLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
 spec:
   selector:
     matchLabels:
@@ -15,6 +18,11 @@ spec:
       interval: 30s
       scrapeTimeout: 10s
       scheme: https
+      # Coraza CR metrics use a `namespace` label for the resource namespace. Without
+      # honorLabels, Prometheus overwrites it with the operator pod namespace.
+      # Operator metrics must not emit `job` or `instance` labels; the guard below
+      # drops them if they ever appear so scrape-target identity stays authoritative.
+      honorLabels: true
       bearerTokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token
       tlsConfig:
         {{- if and .Values.metrics.certSecret .Values.metrics.caName }}
@@ -27,9 +35,11 @@ spec:
         # self-signed or unverifiable metrics certificate.
         insecureSkipVerify: true
         {{- end }}
-      {{- with .Values.metrics.serviceMonitor.metricRelabelings }}
       metricRelabelings:
-        {{- toYaml . | nindent 8 }}
+        - action: labeldrop
+          regex: ^(job|instance)$
+      {{- with .Values.metrics.serviceMonitor.metricRelabelings }}
+      {{- toYaml . | nindent 8 }}
       {{- end }}
       {{- with .Values.metrics.serviceMonitor.relabelings }}
       relabelings:

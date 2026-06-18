@@ -128,6 +128,11 @@ func RegisterUSEMetrics(reg prometheus.Registerer, c *RuleSetCache, gc GarbageCo
 				return err
 			}
 		}
+		// Expose GC counters at 0 before the first prune cycle so Prometheus/Grafana
+		// can graph a zero baseline instead of "no data".
+		gcPrunedEntriesTotal.WithLabelValues(PruneReasonAge)
+		gcPrunedEntriesTotal.WithLabelValues(PruneReasonSize)
+		gcSizeLimitExceededTotal.WithLabelValues()
 		return nil
 	}
 

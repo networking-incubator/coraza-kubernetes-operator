@@ -22,6 +22,9 @@ KIND_CLUSTER_NAME ?= coraza-kubernetes-operator-integration
 # use openshift-gateway (match operator istio.revision) or empty for default-revision Istio.
 ISTIO_GATEWAY_REVISION ?= coraza
 ISTIO_VERSION ?= 1.28.2
+# Used by promtool in CI: make observability.promtool.install
+PROM_VERSION ?= 3.12.0
+PROM_SHA256_LINUX_AMD64 ?= 20da47f8e5303f74aecb78edd7f7e39041dac08ac4939dba75efd7a900ae8867
 METALLB_VERSION ?= 0.15.3
 METALLB_POOL_SIZE ?= 128 # Defines the size of MetalLB pool, when being used
 
@@ -471,6 +474,12 @@ helm.sync: helm.sync-crds helm.sync-rbac ## Sync all generated resources into th
 .PHONY: helm.validate
 helm.validate: ## Validate Helm templates render correctly for key flag combinations
 	hack/test-helm-manifests.sh
+
+.PHONY: observability.promtool.install
+observability.promtool.install: ## Install promtool (PROM_VERSION) to INSTALL_DIR (default: GOBIN)
+	PROM_VERSION=$(PROM_VERSION) PROM_SHA256=$(PROM_SHA256_LINUX_AMD64) \
+		INSTALL_DIR=$(or $(INSTALL_DIR),$(GOBIN)) \
+		hack/observability/install-promtool.sh
 
 .PHONY: test.metrics
 test.metrics: ## Run metrics integration tests (requires KIND cluster)

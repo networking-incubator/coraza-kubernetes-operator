@@ -16,7 +16,8 @@ import (
 // -----------------------------------------------------------------------------
 
 // cacheRules stores the aggregated rules in the cache and patches the RuleSet
-// status to Ready.
+// status to Ready. Cache Put duration is observed only when the cache content
+// was updated (not when status is patched for content already in the cache).
 func (r *RuleSetReconciler) cacheRules(
 	ctx context.Context,
 	log logr.Logger,
@@ -27,11 +28,28 @@ func (r *RuleSetReconciler) cacheRules(
 	unsupportedMsg string,
 ) error {
 	cacheKey := fmt.Sprintf("%s/%s", ruleset.Namespace, ruleset.Name)
-	cacheStart := time.Now()
-	r.Cache.Put(cacheKey, aggregatedRules, dataFiles)
-	r.Metrics.ObserveCacheSet(ruleset.Namespace, time.Since(cacheStart))
-	logInfo(log, req, "RuleSet", "Stored rules in cache", "cacheKey", cacheKey)
+	alreadyReady := isConditionCurrent(ruleset.Status.Conditions, conditionReady, ruleSetReadyReasonRulesCached, ruleset.Generation)
+
+	cacheUpdated := false
+	var cacheDur time.Duration
+	if !r.Cache.EntryMatches(cacheKey, aggregatedRules, dataFiles) {
+		cacheStart := time.Now()
+		r.Cache.Put(cacheKey, aggregatedRules, dataFiles)
+		cacheDur = time.Since(cacheStart)
+		cacheUpdated = true
+		logInfo(log, req, "RuleSet", "Stored rules in cache", "cacheKey", cacheKey)
+	}
+
+	if alreadyReady {
+		return nil
+	}
 
 	statusMsg := buildCacheReadyMessage(ruleset.Namespace, ruleset.Name, unsupportedMsg)
-	return patchReady(ctx, r.Status(), r.Recorder, log, req, "RuleSet", ruleset, &ruleset.Status.Conditions, ruleset.Generation, "RulesCached", statusMsg)
+	if err := patchReady(ctx, r.Status(), r.Recorder, log, req, "RuleSet", ruleset, &ruleset.Status.Conditions, ruleset.Generation, ruleSetReadyReasonRulesCached, statusMsg); err != nil {
+		return err
+	}
+	if cacheUpdated {
+		r.Metrics.ObserveCacheSet(ruleset.Namespace, cacheDur)
+	}
+	return nil
 }
