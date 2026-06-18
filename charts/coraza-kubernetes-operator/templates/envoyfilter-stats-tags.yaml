@@ -25,9 +25,9 @@ spec:
           stats_config:
             stats_tags:
               - tag_name: engine
-                regex: "_engine=([a-zA-Z0-9]([-a-zA-Z0-9]*[a-zA-Z0-9])?)"
+                regex: "_engine=([a-zA-Z0-9](?:[-a-zA-Z0-9]*[a-zA-Z0-9])?)"
               - tag_name: namespace
-                regex: "_namespace=([a-zA-Z0-9]([-a-zA-Z0-9]*[a-zA-Z0-9])?)"
+                regex: "_namespace=([a-zA-Z0-9](?:[-a-zA-Z0-9]*[a-zA-Z0-9])?)"
               - tag_name: driver_type
                 regex: "_driver_type=([a-z]+)"
               - tag_name: outcome
