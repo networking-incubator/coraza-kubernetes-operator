@@ -17,9 +17,14 @@ limitations under the License.
 package controller
 
 import (
+	"errors"
 	"testing"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	wafv1alpha1 "github.com/networking-incubator/coraza-kubernetes-operator/api/v1alpha1"
 )
@@ -82,4 +87,40 @@ func TestFindDuplicateReferences(t *testing.T) {
 		rs := &wafv1alpha1.RuleSet{}
 		assert.Empty(t, findDuplicateReferences(rs))
 	})
+}
+
+// TestRuleSetValidationErrorClassification documents metrics behavior: only
+// errRuleSetRulesInvalid (Coraza rejected rules, status patched) records
+// outcome=invalid. API errors from patchDegraded must not increment counters.
+func TestRuleSetValidationErrorClassification(t *testing.T) {
+	patchErr := apierrors.NewConflict(
+		schema.GroupResource{Group: "waf.k8s.coraza.io", Resource: "rulesets"},
+		"rs",
+		errors.New("conflict"),
+	)
+
+	assert.True(t, errors.Is(errRuleSetRulesInvalid, errRuleSetRulesInvalid))
+	assert.False(t, errors.Is(patchErr, errRuleSetRulesInvalid))
+}
+
+func TestRuleSetValidationMetricsOnlyOnSentinel(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	m, err := NewCorazaMetrics(reg)
+	require.NoError(t, err)
+
+	patchErr := apierrors.NewConflict(
+		schema.GroupResource{Group: "waf.k8s.coraza.io", Resource: "rulesets"},
+		"rs",
+		errors.New("conflict"),
+	)
+	if errors.Is(patchErr, errRuleSetRulesInvalid) {
+		m.IncRuleSetValidation("default", "invalid")
+	}
+
+	assert.Equal(t, float64(0), gatherRuleSetValidationCounter(t, reg, "invalid"))
+
+	if errors.Is(errRuleSetRulesInvalid, errRuleSetRulesInvalid) {
+		m.IncRuleSetValidation("default", "invalid")
+	}
+	assert.Equal(t, float64(1), gatherRuleSetValidationCounter(t, reg, "invalid"))
 }

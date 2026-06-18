@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -104,8 +105,8 @@ func (r *RuleSetReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		).
 		Watches(
 			&wafv1alpha1.RuleData{},
-			handler.EnqueueRequestsFromMapFunc(r.findRuleSetsForRuleData),
-			builder.WithPredicates(predicate.GenerationChangedPredicate{}),
+			handler.EnqueueRequestsFromMapFunc(r.enqueueForRuleDataChange),
+			builder.WithPredicates(ruleDataWatchPredicate()),
 		).
 		WithOptions(controller.Options{
 			RateLimiter: workqueue.NewTypedItemExponentialFailureRateLimiter[ctrl.Request](
@@ -179,32 +180,58 @@ func (r *RuleSetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{RequeueAfter: requeueAfter}, nil
 	}
 
-	logInfo(log, req, "RuleSet", "Validating aggregated rules")
-	validationStart := time.Now()
-	if err := validation.ValidatePMFromFileData(aggregatedRules, dataFiles); err != nil {
-		vd := time.Since(validationStart)
-		r.Metrics.IncRuleSetValidation(req.Namespace, "invalid")
-		r.Metrics.ObserveRuleSetValidation(req.Namespace, "invalid", vd)
-		msg := fmt.Sprintf("Ruleset is invalid\n%v", err)
-		if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "RuleSet", &ruleset, &ruleset.Status.Conditions, ruleset.Generation, "InvalidRuleSet", msg); patchErr != nil {
-			return ctrl.Result{}, patchErr
+	alreadyInvalid := isConditionCurrent(ruleset.Status.Conditions, conditionDegraded, ruleSetDegradedReasonInvalidRuleSet, ruleset.Generation)
+	alreadyCached := isConditionCurrent(ruleset.Status.Conditions, conditionReady, ruleSetReadyReasonRulesCached, ruleset.Generation)
+	cacheKey := fmt.Sprintf("%s/%s", ruleset.Namespace, ruleset.Name)
+	if alreadyCached && r.Cache.EntryMatches(cacheKey, aggregatedRules, dataFiles) {
+		// Annotation-only reconciles (e.g. removing skip-unsupported-rules-check) do not
+		// bump generation; still re-run unsupported-rule policy before skipping work.
+		if ruleset.Annotations[wafv1alpha1.AnnotationSkipUnsupportedRulesCheck] != "true" {
+			foundUnsupportedRules, _, err := r.rejectUnsupportedRules(ctx, log, req, &ruleset, aggregatedRules)
+			if err != nil {
+				return ctrl.Result{}, err
+			}
+			if foundUnsupportedRules {
+				return ctrl.Result{}, nil
+			}
 		}
 		return ctrl.Result{}, nil
 	}
+
+	logInfo(log, req, "RuleSet", "Validating aggregated rules")
+
+	pmStart := time.Now()
+	if err := validation.ValidatePMFromFileData(aggregatedRules, dataFiles); err != nil {
+		pmDur := time.Since(pmStart)
+		if !alreadyInvalid {
+			msg := fmt.Sprintf("Ruleset is invalid\n%v", err)
+			if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "RuleSet", &ruleset, &ruleset.Status.Conditions, ruleset.Generation, ruleSetDegradedReasonInvalidRuleSet, msg); patchErr != nil {
+				return ctrl.Result{}, patchErr
+			}
+			r.Metrics.IncRuleSetValidation(req.Namespace, "invalid")
+			r.Metrics.ObserveRuleSetValidation(req.Namespace, "invalid", pmDur)
+		}
+		return ctrl.Result{}, nil
+	}
+	pmDur := time.Since(pmStart)
+
 	fsRules := getDataFilesystem(dataFiles)
 	conf := coraza.NewWAFConfig().WithDirectives(aggregatedRules)
 	if fsRules != nil {
 		conf = conf.WithRootFS(fsRules)
 	}
-	if err := r.validateAggregatedRules(ctx, log, req, &ruleset, conf); err != nil {
-		vd := time.Since(validationStart)
-		r.Metrics.IncRuleSetValidation(req.Namespace, "invalid")
-		r.Metrics.ObserveRuleSetValidation(req.Namespace, "invalid", vd)
+	corazaDur, err := r.validateAggregatedRules(ctx, log, req, &ruleset, conf)
+	if err != nil {
+		if errors.Is(err, errRuleSetRulesInvalid) {
+			if !alreadyInvalid {
+				r.Metrics.IncRuleSetValidation(req.Namespace, "invalid")
+				r.Metrics.ObserveRuleSetValidation(req.Namespace, "invalid", pmDur+corazaDur)
+			}
+			return ctrl.Result{}, nil
+		}
 		return ctrl.Result{}, err
 	}
-	vd := time.Since(validationStart)
-	r.Metrics.IncRuleSetValidation(req.Namespace, "valid")
-	r.Metrics.ObserveRuleSetValidation(req.Namespace, "valid", vd)
+	validationDur := pmDur + corazaDur
 
 	logDebug(log, req, "RuleSet", "Checking for unsupported rules")
 	foundUnsupportedRules, unsupportedMsg, err := r.rejectUnsupportedRules(ctx, log, req, &ruleset, aggregatedRules)
@@ -219,6 +246,10 @@ func (r *RuleSetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	if err := r.cacheRules(ctx, log, req, &ruleset, aggregatedRules, dataFiles, unsupportedMsg); err != nil {
 		return ctrl.Result{}, err
 	}
+	if !alreadyCached {
+		r.Metrics.IncRuleSetValidation(req.Namespace, "valid")
+		r.Metrics.ObserveRuleSetValidation(req.Namespace, "valid", validationDur)
+	}
 	return ctrl.Result{}, nil
 }
 
@@ -231,10 +262,9 @@ func (r *RuleSetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 // not referenced by any RuleSet. Called from both the not-found path (RuleSet
 // deleted) and the defer block (normal reconcile).
 //
-// Because there is no dedicated RuleData reconciler, these counts only refresh
-// when a RuleSet in the same namespace reconciles. Orphaned RuleData created or
-// deleted without a corresponding RuleSet change will appear stale until the
-// next RuleSet reconciliation in that namespace.
+// Because there is no dedicated RuleData reconciler, namespace totals refresh when
+// a RuleSet in the same namespace reconciles, or when a RuleData watch event has
+// no referencing RuleSet (enqueueForRuleDataChange).
 func (r *RuleSetReconciler) reconcileRuleDataMetrics(ctx context.Context, ns string) {
 	if r.Metrics == nil {
 		return

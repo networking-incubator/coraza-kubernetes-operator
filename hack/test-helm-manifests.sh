@@ -36,6 +36,8 @@ echo "$out" | grep -q "kind: ServiceMonitor" && fail "ServiceMonitor should not 
 section "ServiceMonitor enabled"
 out=$(render --set metrics.enabled=true --set metrics.serviceMonitor.enabled=true)
 echo "$out" | grep -q "kind: ServiceMonitor" && pass "ServiceMonitor rendered" || fail "ServiceMonitor missing"
+echo "$out" | grep -q "honorLabels: true" && pass "ServiceMonitor honorLabels enabled" || fail "ServiceMonitor honorLabels missing"
+echo "$out" | grep -q 'action: labeldrop' && echo "$out" | grep -qF '^(job|instance)$' && pass "ServiceMonitor drops reserved scrape labels" || fail "ServiceMonitor labeldrop guard missing"
 echo "$out" | grep -q "monitoring.coreos.com" && pass "monitoring.coreos.com API group" || fail "Wrong API group"
 
 # ── Test 3: PrometheusRule enabled ───────────────────────────────────────────
@@ -78,8 +80,8 @@ echo "$out" | grep -q "kind: PodMonitor" && fail "PodMonitor should be gated on 
 # ── Test 8: additionalLabels merged into PrometheusRule ──────────────────────
 section "PrometheusRule additionalLabels"
 out=$(render --set metrics.enabled=true --set metrics.prometheusRule.enabled=true \
-  --set 'metrics.prometheusRule.additionalLabels.release=prometheus')
-echo "$out" | grep -q "release: prometheus" && pass "additionalLabels merged" || fail "additionalLabels not merged"
+  --set 'metrics.prometheusRule.additionalLabels.release=kube-prometheus-stack')
+echo "$out" | grep -q "release: kube-prometheus-stack" && pass "additionalLabels merged" || fail "additionalLabels not merged"
 
 # ── Test 9: PodMonitor port name override ────────────────────────────────────
 section "PodMonitor portName override"
@@ -98,8 +100,8 @@ echo "$out" | grep -q "CustomAlert" && pass "Custom alert rule injected" || fail
 section "PodMonitor additionalLabels"
 out=$(render --set metrics.podMonitor.enabled=true \
   --set 'metrics.podMonitor.gatewaySelector.app=my-gateway' \
-  --set 'metrics.podMonitor.additionalLabels.release=prometheus')
-echo "$out" | grep -q "release: prometheus" && pass "PodMonitor additionalLabels merged" || fail "PodMonitor additionalLabels not merged"
+  --set 'metrics.podMonitor.additionalLabels.release=kube-prometheus-stack')
+echo "$out" | grep -q "release: kube-prometheus-stack" && pass "PodMonitor additionalLabels merged" || fail "PodMonitor additionalLabels not merged"
 
 # ── Test 12: PodMonitor metricRelabelings injection ──────────────────────────
 section "PodMonitor metricRelabelings"
@@ -109,7 +111,13 @@ out=$(render --set metrics.podMonitor.enabled=true \
 echo "$out" | grep -q "coraza_waf_requests_total" && pass "User metricRelabelings injected" || fail "User metricRelabelings missing"
 echo "$out" | grep -qF 'coraza_waf_.*' && pass "Mandatory cardinality guard still present" || fail "Mandatory cardinality guard missing"
 
-# ── Test 13: promtool check rules (optional) ─────────────────────────────────
+# ── Test 13: ServiceMonitor additionalLabels ─────────────────────────────────
+section "ServiceMonitor additionalLabels"
+out=$(render --set metrics.enabled=true --set metrics.serviceMonitor.enabled=true \
+  --set 'metrics.serviceMonitor.additionalLabels.release=kube-prometheus-stack')
+echo "$out" | grep -q "release: kube-prometheus-stack" && pass "ServiceMonitor additionalLabels merged" || fail "ServiceMonitor additionalLabels not merged"
+
+# ── Test 14: promtool check rules (optional) ─────────────────────────────────
 if command -v promtool &>/dev/null; then
   section "promtool check rules"
   tmpfile=$(mktemp /tmp/prometheusrule-XXXXXX.yaml)

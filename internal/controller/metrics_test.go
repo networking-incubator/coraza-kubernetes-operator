@@ -714,6 +714,46 @@ func gatherRuleSetValidationCounter(t *testing.T, reg *prometheus.Registry, outc
 	return gatherCounterOutcome(t, reg, "coraza_ruleset_validations_total", outcome)
 }
 
+func gatherNamespaceGauge(t *testing.T, reg *prometheus.Registry, metricName, ns string) float64 {
+	t.Helper()
+	gathered, err := reg.Gather()
+	require.NoError(t, err)
+	for _, mf := range gathered {
+		if mf.GetName() != metricName {
+			continue
+		}
+		for _, metric := range mf.GetMetric() {
+			labels := make(map[string]string)
+			for _, lp := range metric.GetLabel() {
+				labels[lp.GetName()] = lp.GetValue()
+			}
+			if labels["namespace"] == ns {
+				return metric.GetGauge().GetValue()
+			}
+		}
+	}
+	return 0
+}
+
+func gatherCacheSetDurationSampleCount(t *testing.T, reg *prometheus.Registry) uint64 {
+	t.Helper()
+	gathered, err := reg.Gather()
+	require.NoError(t, err)
+	for _, mf := range gathered {
+		if mf.GetName() != "coraza_cache_set_duration_seconds" {
+			continue
+		}
+		var total uint64
+		for _, metric := range mf.GetMetric() {
+			if h := metric.GetHistogram(); h != nil {
+				total += h.GetSampleCount()
+			}
+		}
+		return total
+	}
+	return 0
+}
+
 func gatherCounterOutcome(t *testing.T, reg *prometheus.Registry, metricName, outcome string) float64 {
 	t.Helper()
 	gathered, err := reg.Gather()

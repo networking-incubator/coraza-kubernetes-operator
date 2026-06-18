@@ -98,6 +98,60 @@ func TestRuleSourceReconciler_PatchOnlyFragment(t *testing.T) {
 	assert.Nil(t, deg)
 	assert.Equal(t, float64(1), gatherValidationCounter(t, reg, "skipped"))
 	assert.Equal(t, float64(0), gatherValidationCounter(t, reg, "valid"))
+	assert.Equal(t, 0, testutil.CollectAndCount(reg, "coraza_rulesource_validation_duration_seconds"),
+		"skipped outcomes must not emit validation duration histograms")
+}
+
+func TestRuleSourceReconciler_MalformedPatchOnlyFragment(t *testing.T) {
+	// Patch-only classification is syntactic; Coraza cannot validate patches in isolation.
+	// Malformed patch text still reaches Ready here; RuleSet aggregate validation is authoritative.
+	ctx := context.Background()
+	rs := utils.NewTestRuleSource("rs-ctrl-patch-bad", testNamespace,
+		`SecRuleUpdateTargetById 999999 "this is not valid patch syntax"`)
+	require.NoError(t, k8sClient.Create(ctx, rs))
+	t.Cleanup(func() { _ = k8sClient.Delete(ctx, rs) })
+
+	reg := prometheus.NewRegistry()
+	m, err := NewCorazaMetrics(reg)
+	require.NoError(t, err)
+
+	rec := &RuleSourceReconciler{Client: k8sClient, Recorder: utils.NewTestRecorder(), Metrics: m}
+	_, err = rec.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: rs.Name, Namespace: rs.Namespace}})
+	require.NoError(t, err)
+
+	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: rs.Name, Namespace: rs.Namespace}, rs))
+	ready := apimeta.FindStatusCondition(rs.Status.Conditions, conditionReady)
+	require.NotNil(t, ready)
+	assert.Equal(t, metav1.ConditionTrue, ready.Status)
+	assert.Equal(t, ruleSourceReadyReasonValidated, ready.Reason)
+	assert.Equal(t, float64(1), gatherValidationCounter(t, reg, "skipped"))
+	assert.Equal(t, float64(0), gatherValidationCounter(t, reg, "valid"))
+	assert.Equal(t, 0, testutil.CollectAndCount(reg, "coraza_rulesource_validation_duration_seconds"),
+		"skipped outcomes must not emit validation duration histograms")
+}
+
+func TestRuleSourceReconciler_MetricsNotIncrementedOnResync(t *testing.T) {
+	ctx := context.Background()
+	rs := utils.NewTestRuleSource("rs-ctrl-resync", testNamespace,
+		`SecRule REQUEST_URI "@contains /x" "id:1,phase:1,pass,nolog"`)
+	require.NoError(t, k8sClient.Create(ctx, rs))
+	t.Cleanup(func() { _ = k8sClient.Delete(ctx, rs) })
+
+	reg := prometheus.NewRegistry()
+	m, err := NewCorazaMetrics(reg)
+	require.NoError(t, err)
+
+	rec := &RuleSourceReconciler{Client: k8sClient, Recorder: utils.NewTestRecorder(), Metrics: m}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: rs.Name, Namespace: rs.Namespace}}
+
+	_, err = rec.Reconcile(ctx, req)
+	require.NoError(t, err)
+	assert.Equal(t, float64(1), gatherValidationCounter(t, reg, "valid"))
+
+	_, err = rec.Reconcile(ctx, req)
+	require.NoError(t, err)
+	assert.Equal(t, float64(1), gatherValidationCounter(t, reg, "valid"),
+		"second reconcile with unchanged Ready condition must not increment validation counter")
 }
 
 // TestRuleSourceReconciler_MetricsRecordOnSuccess verifies that after a

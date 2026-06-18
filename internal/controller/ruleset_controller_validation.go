@@ -2,7 +2,9 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"time"
 
 	"github.com/corazawaf/coraza/v3"
 	"github.com/go-logr/logr"
@@ -17,23 +19,38 @@ import (
 // RuleSet Validation
 // -----------------------------------------------------------------------------
 
+const (
+	ruleSetDegradedReasonInvalidRuleSet = "InvalidRuleSet"
+	ruleSetReadyReasonRulesCached       = "RulesCached"
+)
+
+// errRuleSetRulesInvalid indicates aggregate Coraza validation failed and the
+// RuleSet status was patched to Degraded. Reconcile should stop without error.
+var errRuleSetRulesInvalid = errors.New("aggregated rules failed Coraza validation")
+
 // validateAggregatedRules validates the aggregated rule set via Coraza.
 // Sets Degraded status and emits Warning events on failure.
+// The returned duration covers Coraza parsing only (not status patches).
 func (r *RuleSetReconciler) validateAggregatedRules(
 	ctx context.Context,
 	log logr.Logger,
 	req ctrl.Request,
 	ruleset *wafv1alpha1.RuleSet,
 	conf coraza.WAFConfig,
-) error {
+) (time.Duration, error) {
+	start := time.Now()
 	if _, err := coraza.NewWAF(conf); err != nil {
-		msg := fmt.Sprintf("Ruleset is invalid\n%v", validation.SanitizeErrorMessage(err))
-		if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "RuleSet", ruleset, &ruleset.Status.Conditions, ruleset.Generation, "InvalidRuleSet", msg); patchErr != nil {
-			return patchErr
+		d := time.Since(start)
+		if isConditionCurrent(ruleset.Status.Conditions, conditionDegraded, ruleSetDegradedReasonInvalidRuleSet, ruleset.Generation) {
+			return d, errRuleSetRulesInvalid
 		}
-		return nil
+		msg := fmt.Sprintf("Ruleset is invalid\n%v", validation.SanitizeErrorMessage(err))
+		if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "RuleSet", ruleset, &ruleset.Status.Conditions, ruleset.Generation, ruleSetDegradedReasonInvalidRuleSet, msg); patchErr != nil {
+			return d, patchErr
+		}
+		return d, errRuleSetRulesInvalid
 	}
-	return nil
+	return time.Since(start), nil
 }
 
 // rejectUnsupportedRules checks rules for IDs unsupported in WASM mode.

@@ -78,34 +78,25 @@ func (c *RuleSetCache) SetLogger(l logr.Logger) {
 func (c *RuleSetCache) Get(instance string) (*RuleSetEntry, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	entries, ok := c.entries[instance]
-	if ok && len(entries.Entries) > 0 {
-		for _, entry := range entries.Entries {
-			if entry.UUID == entries.Latest {
-				var copiedDataFiles map[string][]byte
-				if entry.DataFiles != nil {
-					copiedDataFiles = make(map[string][]byte, len(entry.DataFiles))
-					for name, contents := range entry.DataFiles {
-						copiedDataFiles[name] = bytes.Clone(contents)
-					}
-				}
-				copiedEntry := &RuleSetEntry{
-					UUID:      entry.UUID,
-					Timestamp: entry.Timestamp,
-					Rules:     entry.Rules,
-					DataFiles: copiedDataFiles,
-				}
-				return copiedEntry, true
-			}
-		}
-		c.logger.Info("cache invariant violation: Latest UUID not found among entries",
-			"instance", instance,
-			"latestUUID", entries.Latest,
-			"entryCount", len(entries.Entries),
-		)
+
+	entry, ok := c.latestEntryLocked(instance)
+	if !ok {
+		return nil, false
 	}
 
-	return nil, false
+	var copiedDataFiles map[string][]byte
+	if entry.DataFiles != nil {
+		copiedDataFiles = make(map[string][]byte, len(entry.DataFiles))
+		for name, contents := range entry.DataFiles {
+			copiedDataFiles[name] = bytes.Clone(contents)
+		}
+	}
+	return &RuleSetEntry{
+		UUID:      entry.UUID,
+		Timestamp: entry.Timestamp,
+		Rules:     entry.Rules,
+		DataFiles: copiedDataFiles,
+	}, true
 }
 
 // Put stores rules for the given instance with a new UUID and timestamp.
@@ -193,6 +184,55 @@ func (c *RuleSetCache) TotalEntries() int {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.totalEntries
+}
+
+// EntryMatches reports whether the latest cached entry for instance has the same
+// rules text and data files as the candidate content. Comparison is done under
+// the read lock against immutable stored entries without copying data file bytes.
+func (c *RuleSetCache) EntryMatches(instance, rules string, dataFiles map[string][]byte) bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	entry, ok := c.latestEntryLocked(instance)
+	if !ok {
+		return false
+	}
+	if entry.Rules != rules {
+		return false
+	}
+	return dataFilesEqual(entry.DataFiles, dataFiles)
+}
+
+// latestEntryLocked returns the latest revision for instance. Caller must hold c.mu.
+func (c *RuleSetCache) latestEntryLocked(instance string) (*RuleSetEntry, bool) {
+	entries, ok := c.entries[instance]
+	if !ok || len(entries.Entries) == 0 {
+		return nil, false
+	}
+	for _, entry := range entries.Entries {
+		if entry.UUID == entries.Latest {
+			return entry, true
+		}
+	}
+	c.logger.Info("cache invariant violation: Latest UUID not found among entries",
+		"instance", instance,
+		"latestUUID", entries.Latest,
+		"entryCount", len(entries.Entries),
+	)
+	return nil, false
+}
+
+func dataFilesEqual(a, b map[string][]byte) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for name, aData := range a {
+		bData, ok := b[name]
+		if !ok || !bytes.Equal(aData, bData) {
+			return false
+		}
+	}
+	return true
 }
 
 // CountEntries returns the number of entries for an instance.

@@ -346,10 +346,12 @@ func TestServer_HandleRules_Authentication(t *testing.T) {
 	server := NewServer(c, testServerAddr, logger, nil, fake)
 
 	t.Run("missing authorization header", func(t *testing.T) {
+		before := testutil.ToFloat64(authFailuresTotal)
 		req := httptest.NewRequest(http.MethodGet, "/rules/test-ns/my-ruleset", nil)
 		w := httptest.NewRecorder()
 		server.handleRules(w, req)
 		assert.Equal(t, http.StatusForbidden, w.Code)
+		assert.Equal(t, before+1, testutil.ToFloat64(authFailuresTotal))
 	})
 
 	t.Run("invalid bearer token", func(t *testing.T) {

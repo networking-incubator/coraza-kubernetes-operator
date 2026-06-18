@@ -21,16 +21,19 @@ import (
 	"fmt"
 	"sort"
 	"testing"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	wafv1alpha1 "github.com/networking-incubator/coraza-kubernetes-operator/api/v1alpha1"
@@ -1086,6 +1089,64 @@ func TestRuleSetReconciler_UnsupportedRules(t *testing.T) {
 		assert.True(t, recorder.HasEvent("Warning", "UnsupportedRules"),
 			"expected Warning/UnsupportedRules event even with annotation override; got: %v", recorder.Events)
 	})
+
+	t.Run("removing skip annotation degrades cached ruleset with unsupported rules", func(t *testing.T) {
+		ruleSetCache := cache.NewRuleSetCache()
+
+		const unsupportedRule = `SecRule ARGS "@rx error" "id:922110,phase:2,deny,status:403,msg:'Multipart charset'"`
+		rs := utils.NewTestRuleSource("remove-skip-rules-src", testNamespace, unsupportedRule)
+		require.NoError(t, k8sClient.Create(ctx, rs))
+		t.Cleanup(func() {
+			if err := k8sClient.Delete(ctx, rs); err != nil {
+				t.Logf("Failed to delete RuleSource: %v", err)
+			}
+		})
+
+		ruleSet := utils.NewTestRuleSet(utils.RuleSetOptions{
+			Name:      "remove-skip-ruleset",
+			Namespace: testNamespace,
+			Sources:   []wafv1alpha1.SourceReference{{Name: "remove-skip-rules-src"}},
+		})
+		ruleSet.Annotations = map[string]string{
+			wafv1alpha1.AnnotationSkipUnsupportedRulesCheck: "true",
+		}
+		require.NoError(t, k8sClient.Create(ctx, ruleSet))
+		t.Cleanup(func() {
+			if err := k8sClient.Delete(ctx, ruleSet); err != nil {
+				t.Logf("Failed to delete RuleSet: %v", err)
+			}
+		})
+
+		reconciler := &RuleSetReconciler{
+			Client:   k8sClient,
+			Scheme:   scheme,
+			Recorder: utils.NewFakeRecorder(),
+			Cache:    ruleSetCache,
+		}
+		nn := types.NamespacedName{Name: ruleSet.Name, Namespace: ruleSet.Namespace}
+
+		_, err := reconcileRuleSetWithRuleSources(ctx, t, nn, reconciler)
+		require.NoError(t, err)
+
+		require.NoError(t, k8sClient.Get(ctx, nn, ruleSet))
+		ready := apimeta.FindStatusCondition(ruleSet.Status.Conditions, conditionReady)
+		require.NotNil(t, ready)
+		assert.Equal(t, metav1.ConditionTrue, ready.Status)
+
+		patch := client.MergeFrom(ruleSet.DeepCopy())
+		delete(ruleSet.Annotations, wafv1alpha1.AnnotationSkipUnsupportedRulesCheck)
+		require.NoError(t, k8sClient.Patch(ctx, ruleSet, patch))
+
+		_, err = reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: nn})
+		require.NoError(t, err)
+
+		require.NoError(t, k8sClient.Get(ctx, nn, ruleSet))
+		degraded := apimeta.FindStatusCondition(ruleSet.Status.Conditions, conditionDegraded)
+		require.NotNil(t, degraded, "RuleSet must degrade when skip-unsupported annotation is removed")
+		assert.Equal(t, metav1.ConditionTrue, degraded.Status)
+		assert.Equal(t, "UnsupportedRules", degraded.Reason)
+		assert.Contains(t, degraded.Message, "922110")
+	})
 }
 
 func TestRuleSetReconciler_DuplicateSourceReferences(t *testing.T) {
@@ -1578,6 +1639,150 @@ func TestRuleSetReconciler_MetricsValidationInvalid(t *testing.T) {
 	assert.Equal(t, float64(0), gatherRuleSetValidationCounter(t, reg, "valid"))
 }
 
+// TestRuleSetReconciler_MetricsCorazaAggregateInvalid verifies Coraza parse
+// failure in validateAggregatedRules records outcome=invalid, not valid.
+func TestRuleSetReconciler_MetricsCorazaAggregateInvalid(t *testing.T) {
+	ctx, cleanup := setupTest(t)
+	t.Cleanup(cleanup)
+
+	src := utils.NewTestRuleSource("metrics-coraza-invalid-src", testNamespace,
+		`SecDefaultActionXPTO "INVALID"`)
+	src.Annotations = map[string]string{wafv1alpha1.AnnotationSkipValidation: "false"}
+	require.NoError(t, k8sClient.Create(ctx, src))
+	t.Cleanup(func() { _ = k8sClient.Delete(ctx, src) })
+
+	rsRec := &RuleSourceReconciler{Client: k8sClient, Recorder: utils.NewTestRecorder()}
+	_, err := rsRec.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: src.Name, Namespace: src.Namespace}})
+	require.NoError(t, err)
+
+	ruleSet := utils.NewTestRuleSet(utils.RuleSetOptions{
+		Name:      "metrics-coraza-invalid-rs",
+		Namespace: testNamespace,
+		Sources:   []wafv1alpha1.SourceReference{{Name: "metrics-coraza-invalid-src"}},
+	})
+	require.NoError(t, k8sClient.Create(ctx, ruleSet))
+	t.Cleanup(func() { _ = k8sClient.Delete(ctx, ruleSet) })
+
+	reg := prometheus.NewRegistry()
+	m, err := NewCorazaMetrics(reg)
+	require.NoError(t, err)
+
+	reconciler := &RuleSetReconciler{
+		Client:   k8sClient,
+		Scheme:   scheme,
+		Recorder: utils.NewTestRecorder(),
+		Cache:    cache.NewRuleSetCache(),
+		Metrics:  m,
+	}
+
+	_, err = reconcileRuleSetWithRuleSources(ctx, t, types.NamespacedName{Name: ruleSet.Name, Namespace: ruleSet.Namespace}, reconciler)
+	require.NoError(t, err)
+
+	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: ruleSet.Name, Namespace: ruleSet.Namespace}, ruleSet))
+	ready := apimeta.FindStatusCondition(ruleSet.Status.Conditions, "Ready")
+	require.NotNil(t, ready)
+	assert.Equal(t, metav1.ConditionFalse, ready.Status)
+	assert.Equal(t, "InvalidRuleSet", ready.Reason)
+	assert.Equal(t, float64(1), gatherRuleSetValidationCounter(t, reg, "invalid"))
+	assert.Equal(t, float64(0), gatherRuleSetValidationCounter(t, reg, "valid"))
+}
+
+func TestRuleSetReconciler_MetricsNotIncrementedOnResync(t *testing.T) {
+	ctx, cleanup := setupTest(t)
+	t.Cleanup(cleanup)
+
+	src := utils.NewTestRuleSource("metrics-resync-src", testNamespace,
+		`SecRule REQUEST_URI "@contains /r" "id:901,phase:1,pass,nolog"`)
+	require.NoError(t, k8sClient.Create(ctx, src))
+	t.Cleanup(func() { _ = k8sClient.Delete(ctx, src) })
+
+	ruleSet := utils.NewTestRuleSet(utils.RuleSetOptions{
+		Name:      "metrics-resync-rs",
+		Namespace: testNamespace,
+		Sources:   []wafv1alpha1.SourceReference{{Name: "metrics-resync-src"}},
+	})
+	require.NoError(t, k8sClient.Create(ctx, ruleSet))
+	t.Cleanup(func() { _ = k8sClient.Delete(ctx, ruleSet) })
+
+	reg := prometheus.NewRegistry()
+	m, err := NewCorazaMetrics(reg)
+	require.NoError(t, err)
+
+	reconciler := &RuleSetReconciler{
+		Client:   k8sClient,
+		Scheme:   scheme,
+		Recorder: utils.NewTestRecorder(),
+		Cache:    cache.NewRuleSetCache(),
+		Metrics:  m,
+	}
+
+	nn := types.NamespacedName{Name: ruleSet.Name, Namespace: ruleSet.Namespace}
+	_, err = reconcileRuleSetWithRuleSources(ctx, t, nn, reconciler)
+	require.NoError(t, err)
+	assert.Equal(t, float64(1), gatherRuleSetValidationCounter(t, reg, "valid"))
+	assert.Equal(t, uint64(1), gatherCacheSetDurationSampleCount(t, reg))
+
+	_, err = reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: nn})
+	require.NoError(t, err)
+	assert.Equal(t, float64(1), gatherRuleSetValidationCounter(t, reg, "valid"),
+		"second reconcile with unchanged cached content must not increment validation counter")
+	assert.Equal(t, uint64(1), gatherCacheSetDurationSampleCount(t, reg),
+		"second reconcile with unchanged cached content must not observe cache duration")
+}
+
+func TestRuleSetReconciler_MetricsCacheDurationOnlyOnPut(t *testing.T) {
+	ctx, cleanup := setupTest(t)
+	t.Cleanup(cleanup)
+
+	src := utils.NewTestRuleSource("cache-dur-src", testNamespace,
+		`SecRule REQUEST_URI "@contains /r" "id:901,phase:1,pass,nolog"`)
+	require.NoError(t, k8sClient.Create(ctx, src))
+	t.Cleanup(func() { _ = k8sClient.Delete(ctx, src) })
+
+	ruleSet := utils.NewTestRuleSet(utils.RuleSetOptions{
+		Name:      "cache-dur-rs",
+		Namespace: testNamespace,
+		Sources:   []wafv1alpha1.SourceReference{{Name: "cache-dur-src"}},
+	})
+	require.NoError(t, k8sClient.Create(ctx, ruleSet))
+	t.Cleanup(func() { _ = k8sClient.Delete(ctx, ruleSet) })
+
+	ruleSetCache := cache.NewRuleSetCache()
+	reg := prometheus.NewRegistry()
+	m, err := NewCorazaMetrics(reg)
+	require.NoError(t, err)
+
+	reconciler := &RuleSetReconciler{
+		Client:   k8sClient,
+		Scheme:   scheme,
+		Recorder: utils.NewTestRecorder(),
+		Cache:    ruleSetCache,
+		Metrics:  m,
+	}
+
+	nn := types.NamespacedName{Name: ruleSet.Name, Namespace: ruleSet.Namespace}
+	_, err = reconcileRuleSetWithRuleSources(ctx, t, nn, reconciler)
+	require.NoError(t, err)
+	assert.Equal(t, uint64(1), gatherCacheSetDurationSampleCount(t, reg))
+
+	require.NoError(t, k8sClient.Get(ctx, nn, ruleSet))
+	patch := client.MergeFrom(ruleSet.DeepCopy())
+	setConditionFalse(&ruleSet.Status.Conditions, ruleSet.Generation, conditionReady, "StatusReset", "test reset")
+	require.NoError(t, k8sClient.Status().Patch(ctx, ruleSet, patch))
+
+	reg2 := prometheus.NewRegistry()
+	m2, err := NewCorazaMetrics(reg2)
+	require.NoError(t, err)
+	reconciler.Metrics = m2
+
+	_, err = reconcileRuleSetWithRuleSources(ctx, t, nn, reconciler)
+	require.NoError(t, err)
+	assert.Equal(t, uint64(0), gatherCacheSetDurationSampleCount(t, reg2),
+		"status-only reconcile with unchanged cache must not observe cache Put duration")
+	assert.Equal(t, uint64(1), gatherCacheSetDurationSampleCount(t, reg),
+		"original cache Put observation must be unchanged")
+}
+
 // TestRuleSetReconciler_MetricsForgetOnNotFound verifies that a not-found
 // reconcile calls ForgetRuleSet and removes all series from the registry.
 func TestRuleSetReconciler_MetricsForgetOnNotFound(t *testing.T) {
@@ -1909,4 +2114,45 @@ func TestRuleSetReconciler_MetricsRuleSetDeletionCleansUpRuleData(t *testing.T) 
 		"coraza_ruledata_info must be cleared when the only referencing RuleSet is deleted")
 	assert.Equal(t, 0, testutil.CollectAndCount(reg, "coraza_ruledata_condition"),
 		"coraza_ruledata_condition must be cleared when the only referencing RuleSet is deleted")
+}
+
+// TestRuleSetReconciler_MetricsRuleDataDeleteRefreshesNamespaceTotal verifies that
+// deleting an unreferenced RuleData refreshes coraza_ruledatas even when no
+// RuleSet exists to reconcile.
+func TestRuleSetReconciler_MetricsRuleDataDeleteRefreshesNamespaceTotal(t *testing.T) {
+	ctx, cleanup := setupTest(t)
+	t.Cleanup(cleanup)
+
+	const ns = "ruledata-metrics-delete"
+	require.NoError(t, k8sClient.Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ns}}))
+	t.Cleanup(func() { _ = k8sClient.Delete(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ns}}) })
+
+	rd := utils.NewTestRuleData("orphan-rd", ns, map[string]string{"orphan.data": "x"})
+	require.NoError(t, k8sClient.Create(ctx, rd))
+	t.Cleanup(func() { _ = k8sClient.Delete(ctx, rd) })
+
+	reg := prometheus.NewRegistry()
+	m, err := NewCorazaMetrics(reg)
+	require.NoError(t, err)
+
+	reconciler := &RuleSetReconciler{
+		Client:  k8sClient,
+		Scheme:  scheme,
+		Metrics: m,
+	}
+
+	reconciler.enqueueForRuleDataChange(ctx, rd)
+	assert.Equal(t, float64(1), gatherNamespaceGauge(t, reg, "coraza_ruledatas", ns))
+
+	require.NoError(t, k8sClient.Delete(ctx, rd))
+	require.Eventually(t, func() bool {
+		var list wafv1alpha1.RuleDataList
+		if err := k8sClient.List(ctx, &list, client.InNamespace(ns)); err != nil {
+			return false
+		}
+		return len(list.Items) == 0
+	}, 5*time.Second, 50*time.Millisecond, "RuleData should disappear from the test cache after delete")
+	reconciler.enqueueForRuleDataChange(ctx, rd)
+	assert.Equal(t, 0, testutil.CollectAndCount(reg, "coraza_ruledatas"),
+		"coraza_ruledatas series must be removed when the last RuleData in a namespace is deleted")
 }
