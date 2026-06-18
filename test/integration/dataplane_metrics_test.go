@@ -75,6 +75,11 @@ func TestDataplaneMetrics(t *testing.T) {
 	require.True(t, found, "WasmPlugin pluginConfig.namespace should be set")
 	assert.Equal(t, ns, namespaceLabel)
 
+	metricsMode, found, err := unstructured.NestedString(wasmPlugin.Object, "spec", "pluginConfig", "metrics_mode")
+	require.NoError(t, err)
+	require.True(t, found, "WasmPlugin pluginConfig.metrics_mode should be set")
+	assert.Equal(t, "contract", metricsMode)
+
 	s.Step("deploy echo backend and route")
 	s.CreateEchoBackend(ns, "echo")
 	s.CreateHTTPRoute(ns, "echo-route", "metrics-gw", "echo")

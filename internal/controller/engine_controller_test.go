@@ -189,6 +189,11 @@ func TestEngineReconciler_BuildWasmPlugin_CacheToken(t *testing.T) {
 		require.NoError(t, err)
 		require.True(t, found, "namespace should be present in pluginConfig")
 		assert.Equal(t, engine.Namespace, namespace)
+
+		metricsMode, found, err := getNestedString(pluginConfig, "metrics_mode")
+		require.NoError(t, err)
+		require.True(t, found, "metrics_mode should be present in pluginConfig")
+		assert.Equal(t, "contract", metricsMode)
 	})
 }
 

@@ -35,15 +35,30 @@ Drivers that do not implement this contract cannot be merged into the coraza-kub
 
 ## Label Injection
 
-The operator will inject `engine` and `namespace` labels into the driver at load time via the WasmPlugin `pluginConfig` JSON field:
+The operator enables contract metrics via WasmPlugin `pluginConfig`:
 
 ```json
-{"engine": "my-engine", "namespace": "my-ns"}
+{
+  "engine": "my-engine",
+  "namespace": "my-ns",
+  "metrics_mode": "contract"
+}
 ```
 
-The operator injects these fields via `buildWasmPlugin` in `internal/controller/engine_controller_wasm_driver.go`.
+### metrics_mode
 
-The driver MUST read these fields at initialization and apply them as Prometheus labels to **all** emitted metrics. If either field is missing or empty, the driver MUST continue WAF initialization and traffic processing normally, MUST NOT emit any `coraza_waf_*` metrics, and MUST log a warning that dataplane metrics are unavailable until `engine` and `namespace` are provided in `pluginConfig`.
+The WASM driver supports two metrics backends selected by `metrics_mode`:
+
+| Value | Behavior |
+|---|---|
+| `legacy` (default when omitted) | Existing `waf_filter_*` stats via `NewWAFMetrics()` and `metric_labels`. Unchanged from pre-contract releases. |
+| `contract` | Emit `coraza_waf_*` metrics defined in this document. Requires non-empty `engine` and `namespace`. |
+
+When `metrics_mode` is omitted or `legacy`, the driver MUST NOT emit any `coraza_waf_*` metrics. Existing `waf_filter_*` behavior MUST remain unchanged.
+
+When `metrics_mode` is `contract`, the driver MUST read `engine` and `namespace` and apply them as Prometheus labels to **all** `coraza_waf_*` metrics. If either field is missing or empty, the driver MUST continue WAF initialization and traffic processing normally, MUST NOT emit any `coraza_waf_*` metrics, and MUST log a warning that contract dataplane metrics are unavailable.
+
+The operator injects `engine`, `namespace`, and `metrics_mode: contract` via `buildWasmPlugin` in `internal/controller/engine_controller_wasm_driver.go`.
 
 ## Mandatory Metrics
 
@@ -220,25 +235,21 @@ Labels:
 - `engine` — injected from pluginConfig
 - `namespace` — injected from pluginConfig
 - `driver_type` — one of `wasm`, `dynamic_module`
-- `category` — attack category (see CRS tag mapping below)
+- `category` — attack category derived from CRS `attack-*` rule tags (see below)
 - `severity` — one of `CRITICAL`, `ERROR`, `WARNING`, `NOTICE`, `INFO`
 
 **Severity note:** INFO-severity rules do not produce blocking actions in standard Coraza/CRS configurations. However, `SecRuleUpdateActionById` can elevate an INFO rule's action to `block`. If the driver encounters a block attributed to an INFO-severity rule, it MUST emit the counter with `severity="INFO"` — it MUST NOT silently remap to `NOTICE` or drop the increment.
 
-**CRS tag to category mapping:**
+**Category derivation from CRS tags:**
 
-| CRS tag | `category` label value |
-|---|---|
-| `attack-sqli` | `sqli` |
-| `attack-xss` | `xss` |
-| `attack-rce` | `rce` |
-| `attack-lfi` | `lfi` |
-| `attack-rfi` | `rfi` |
-| `attack-command-injection` | `command_injection` |
-| `attack-protocol` | `protocol_attack` |
-| `attack-session-fixation` | `session_fixation` |
-| `attack-java` | `java_attack` |
-| (none of the above) | `other` |
+The driver MUST derive `category` from the matched rule's tags without a hardcoded mapping table:
+
+1. Consider tags in rule order; use the **first** tag with prefix `attack-`.
+2. Strip the prefix and replace remaining hyphens with underscores to form the label value (e.g. `attack-sqli` → `sqli`, `attack-injection-php` → `injection_php`, `attack-command-injection` → `command_injection`).
+3. The label MUST match `[a-z][a-z0-9_]*` and be at most 63 characters; otherwise skip that tag.
+4. If no qualifying `attack-*` tag exists, use `other`.
+
+Custom rules SHOULD use `tag:'attack-<category>'` to participate in this scheme. Non-attack tags (e.g. `OWASP_CRS`, `paranoia-level/1`) are ignored.
 
 When a blocking transaction matches multiple rules with different categories, the driver MUST emit one counter increment per distinct category present on the blocking rule chain.
 
@@ -263,7 +274,7 @@ coraza_waf_blocked_requests_total{engine="gw-waf",namespace="prod",driver_type="
 | `coraza_waf_rule_overrides` | 10 × (overrides per engine) × 4 types × 2 driver types; overrides are operator-controlled | Gauge reflects current state; alert on `changes()`, not cardinality |
 | `coraza_waf_plugin_loads_total` | 10 × 2 driver types × 2 statuses = 40 | Fixed label set |
 | `coraza_waf_plugin_rule_count` | 10 × 2 driver types = 20 | Gauge; no unbounded dimension |
-| `coraza_waf_blocked_requests_total` | 10 × 9 categories × 5 severities × 2 driver types = 900 | Fixed category and severity set |
+| `coraza_waf_blocked_requests_total` | 10 × ~30 categories × 5 severities × 2 driver types ≈ 3,000 | Categories bounded by distinct `attack-*` tags in the deployed ruleset (~30 for full OWASP CRS); severity set is fixed |
 
 The dominant cardinality risk is `coraza_waf_rule_hits_total`. The top-N bound with `rule_id="other"` overflow is the primary mitigation and is non-negotiable. In deployments with many Gateway replicas, consider reducing N below 200 to keep total Prometheus series within budget.
 

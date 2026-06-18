@@ -177,6 +177,7 @@ func (r *EngineReconciler) buildWasmPlugin(engine *wafv1alpha1.Engine, wasmURL s
 		"cache_token":           cacheToken,
 		"engine":                engine.Name,
 		"namespace":             engine.Namespace,
+		"metrics_mode":          "contract",
 	}
 
 	if engine.Spec.RuleSetCacheServer != nil {
