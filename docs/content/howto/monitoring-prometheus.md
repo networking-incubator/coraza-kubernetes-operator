@@ -128,7 +128,17 @@ The operator injects `engine` and `namespace` into the WasmPlugin `pluginConfig`
 
 ### Scraping Gateway pods
 
-Enable the Helm PodMonitor to collect dataplane metrics from Gateway pods:
+Prefer the operator-managed PodMonitor (one per Engine, automatic gateway selector):
+
+```yaml
+# values.yaml
+dataplanePodMonitor:
+  enabled: true
+  additionalLabels:
+    release: kube-prometheus-stack   # match your Prometheus release label
+```
+
+Alternatively, enable the static Helm PodMonitor for a fixed gateway selector (not per-Engine):
 
 ```yaml
 # values.yaml
@@ -139,22 +149,9 @@ metrics:
       gateway.networking.k8s.io/gateway-name: my-gateway
 ```
 
-The PodMonitor keeps only series matching `coraza_waf_.*` to avoid ingesting Envoy's internal stats.
+Do **not** enable both `dataplanePodMonitor` and `metrics.podMonitor` — that causes duplicate scrapes.
 
-### Extracting Prometheus labels
-
-Proxy-WASM encodes labels into flat stat names. To export them as Prometheus labels, enable the opt-in EnvoyFilter that merges `stats_config.stats_tags` regexes on Gateway workloads:
-
-```yaml
-# values.yaml
-metrics:
-  envoyStatsTags:
-    enabled: true
-    gatewaySelector:
-      gateway.networking.k8s.io/gateway-name: my-gateway
-```
-
-Without this EnvoyFilter (or an equivalent mesh-level `stats_tags` configuration), metrics appear as unlabeled flat stat names.
+Both paths include **metricRelabelings** that decode flat Envoy stat names into Prometheus labels (required on Istio 1.21+ Gateway workloads).
 
 ### Example dataplane queries
 
@@ -178,4 +175,6 @@ topk(5,
 
 ### Blocked request logs
 
-When a request is interrupted, the WASM driver emits a structured JSON log line with `event=coraza_waf_blocked_request`, including rule ID, client IP, request URI, and a truncated matched-data snippet. Collect Gateway pod logs with your cluster logging stack to investigate individual blocks.
+When a request is interrupted in contract mode, the WASM driver emits structured JSON via `proxywasm.LogWarn` with `event=coraza_waf_blocked_request` (rule ID, client IP, URI, truncated matched data). Lines appear in **Gateway pod logs** (`wasm log …` prefix).
+
+Collect with Promtail → Loki (see [Observability demo]({{< relref "observability-demo" >}})) or `kubectl logs` on Gateway pods.

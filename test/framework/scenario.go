@@ -220,6 +220,12 @@ func (s *Scenario) StreamGatewayLogs(namespace, gatewayName string) io.ReadClose
 				}
 				podName = pod.Name
 				containerName = pod.Spec.Containers[0].Name
+				for _, c := range pod.Spec.Containers {
+					if c.Name == "istio-proxy" {
+						containerName = c.Name
+						break
+					}
+				}
 				return true
 			}
 			return false

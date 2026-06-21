@@ -107,6 +107,7 @@ func TestMain(m *testing.M) {
 		CRDInstallOptions: envtest.CRDInstallOptions{
 			Paths: []string{
 				filepath.Join("..", "..", "config", "crd", "bases"),
+				filepath.Join("..", "..", "config", "crd", "test"),
 				istioCRDDir,
 				gatewayAPICRDDir,
 			},

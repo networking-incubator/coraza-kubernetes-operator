@@ -20,18 +20,19 @@ spec:
     {{- fail "metrics.podMonitor.gatewaySelector must be set when podMonitor is enabled; an empty selector matches ALL pods in the cluster and causes thousands of failed scrape attempts" }}
     {{- end }}
   podMetricsEndpoints:
-    - port: {{ .Values.metrics.podMonitor.portName | default "http-envoy-prom" | quote }}
+    {{- $pmPort := .Values.metrics.podMonitor.portName | default "15090" }}
+    - {{- if regexMatch "^[0-9]+$" $pmPort }}
+      targetPort: {{ $pmPort }}
+      {{- else }}
+      port: {{ $pmPort | quote }}
+      {{- end }}
       path: /stats/prometheus
       interval: {{ .Values.metrics.podMonitor.interval | default "30s" | quote }}
       scrapeTimeout: {{ .Values.metrics.podMonitor.scrapeTimeout | default "10s" | quote }}
       metricRelabelings:
         # Mandatory cardinality guard: keep ONLY coraza_waf_* metrics.
-        # Envoy emits thousands of internal stats; without this filter a single
-        # Gateway pod scrape can produce 10,000+ time series.
-        # This rule is always first and cannot be overridden by user config.
-        - sourceLabels: [__name__]
-          regex: 'coraza_waf_.*'
-          action: keep
+        {{- include "coraza-operator.podMonitorFlatLabelRelabelings" . | nindent 8 }}
+        # No-op when stats_tags already export short __name__ values with labels.
         {{- with .Values.metrics.podMonitor.metricRelabelings }}
         {{- toYaml . | nindent 8 }}
         {{- end }}

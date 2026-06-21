@@ -1,0 +1,298 @@
+{
+  "uid": "coraza-waf-dataplane",
+  "title": "Coraza WAF — Dataplane",
+  "tags": [
+    "coraza",
+    "dataplane",
+    "operator",
+    "waf"
+  ],
+  "panels": [
+    {
+      "id": 1,
+      "type": "text",
+      "title": "",
+      "gridPos": {
+        "h": 3,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "id": 2,
+      "type": "row",
+      "title": "Traffic summary",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 3
+      }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Request rate",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 4
+      },
+      "exprs": [
+        "sum(rate(coraza_waf_requests_total{namespace=~\"$namespace\", engine=~\"$engine\"}[5m]))"
+      ]
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Block rate",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 6,
+        "y": 4
+      },
+      "exprs": [
+        "sum(rate(coraza_waf_requests_total{namespace=~\"$namespace\", engine=~\"$engine\", outcome=\"block\"}[5m]))"
+      ]
+    },
+    {
+      "id": 5,
+      "type": "stat",
+      "title": "Block ratio",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 12,
+        "y": 4
+      },
+      "exprs": [
+        "(sum(rate(coraza_waf_requests_total{namespace=~\"$namespace\", engine=~\"$engine\", outcome=\"block\"}[5m])) / sum(rate(coraza_waf_requests_total{namespace=~\"$namespace\", engine=~\"$engine\"}[5m]))) and sum(rate(coraza_waf_requests_total{namespace=~\"$namespace\", engine=~\"$engine\"}[5m])) \u003e 0"
+      ]
+    },
+    {
+      "id": 6,
+      "type": "stat",
+      "title": "Loaded rules",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 18,
+        "y": 4
+      },
+      "exprs": [
+        "max(coraza_waf_plugin_rule_count{namespace=~\"$namespace\", engine=~\"$engine\"})"
+      ]
+    },
+    {
+      "id": 7,
+      "type": "row",
+      "title": "Request outcomes",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 8
+      }
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Requests by outcome",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 9
+      },
+      "exprs": [
+        "sum by (outcome) (rate(coraza_waf_requests_total{namespace=~\"$namespace\", engine=~\"$engine\"}[5m]))"
+      ]
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "Blocked by category",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 9
+      },
+      "exprs": [
+        "sum by (category) (rate(coraza_waf_blocked_requests_total{namespace=~\"$namespace\", engine=~\"$engine\"}[5m]))"
+      ]
+    },
+    {
+      "id": 10,
+      "type": "row",
+      "title": "Rule activity",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 17
+      }
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "Rule hits (top rules)",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 18
+      },
+      "exprs": [
+        "topk(10, sum by (rule_id) (rate(coraza_waf_rule_hits_total{namespace=~\"$namespace\", engine=~\"$engine\"}[5m])))"
+      ]
+    },
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "Blocked by severity",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 18
+      },
+      "exprs": [
+        "sum by (severity) (rate(coraza_waf_blocked_requests_total{namespace=~\"$namespace\", engine=~\"$engine\"}[5m]))"
+      ]
+    },
+    {
+      "id": 13,
+      "type": "row",
+      "title": "Anomaly scoring",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 26
+      }
+    },
+    {
+      "id": 14,
+      "type": "timeseries",
+      "title": "Anomaly score quantiles",
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 27
+      },
+      "exprs": [
+        "histogram_quantile(0.50, sum by (le) (rate(coraza_waf_request_anomaly_score_bucket{namespace=~\"$namespace\", engine=~\"$engine\"}[5m])))",
+        "histogram_quantile(0.99, sum by (le) (rate(coraza_waf_request_anomaly_score_bucket{namespace=~\"$namespace\", engine=~\"$engine\"}[5m])))"
+      ]
+    },
+    {
+      "id": 15,
+      "type": "row",
+      "title": "Plugin lifecycle",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 35
+      }
+    },
+    {
+      "id": 16,
+      "type": "timeseries",
+      "title": "Plugin loads",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 36
+      },
+      "exprs": [
+        "sum by (status) (rate(coraza_waf_plugin_loads_total{namespace=~\"$namespace\", engine=~\"$engine\"}[5m]))"
+      ]
+    },
+    {
+      "id": 17,
+      "type": "timeseries",
+      "title": "Rule overrides",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 36
+      },
+      "exprs": [
+        "sum by (type) (coraza_waf_rule_overrides{namespace=~\"$namespace\", engine=~\"$engine\"})"
+      ]
+    },
+    {
+      "id": 18,
+      "type": "row",
+      "title": "WAF audit logs (Loki)",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 44
+      }
+    },
+    {
+      "id": 19,
+      "type": "timeseries",
+      "title": "Blocked request log events",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 45
+      },
+      "exprs": [
+        "sum(count_over_time({namespace=~\"$namespace\", engine=~\"$engine\", event=\"coraza_waf_blocked_request\"} [5m]))"
+      ]
+    },
+    {
+      "id": 20,
+      "type": "timeseries",
+      "title": "Blocked logs by category",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 45
+      },
+      "exprs": [
+        "sum by (category) (count_over_time({namespace=~\"$namespace\", engine=~\"$engine\", event=\"coraza_waf_blocked_request\"} [5m]))"
+      ]
+    }
+  ],
+  "links": [
+    {
+      "title": "Control-plane overview",
+      "url": "/d/coraza-operator-overview/coraza-operator-overview?${__url_time_range}"
+    }
+  ],
+  "variables": [
+    {
+      "name": "DS_PROMETHEUS",
+      "type": "datasource"
+    },
+    {
+      "name": "engine",
+      "type": "query",
+      "definition": "label_values(coraza_waf_requests_total{namespace=~\"$namespace\"}, engine)",
+      "multi": true,
+      "includeAll": true
+    },
+    {
+      "name": "namespace",
+      "type": "query",
+      "definition": "label_values(coraza_waf_requests_total, namespace)",
+      "multi": true,
+      "includeAll": true
+    }
+  ]
+}

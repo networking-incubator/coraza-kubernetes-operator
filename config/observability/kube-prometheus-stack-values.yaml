@@ -9,6 +9,8 @@ prometheus:
     serviceMonitorNamespaceSelector: {}
     ruleSelectorNilUsesHelmValues: false
     ruleNamespaceSelector: {}
+    podMonitorSelectorNilUsesHelmValues: false
+    podMonitorNamespaceSelector: {}
     retention: 2d
     resources:
       requests:

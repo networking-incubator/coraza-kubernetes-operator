@@ -48,3 +48,14 @@ Manager service FQDN (used in Istio resources and envoy cluster name).
 {{- define "coraza-operator.serviceFQDN" -}}
 {{- printf "%s.%s.svc.cluster.local" (include "coraza-operator.fullname" .) .Release.Namespace }}
 {{- end }}
+
+{{/*
+Comma-separated key=value string for --dataplane-podmonitor-labels.
+*/}}
+{{- define "coraza-operator.dataplanePodMonitorLabels" -}}
+{{- $pairs := list -}}
+{{- range $k, $v := .Values.dataplanePodMonitor.additionalLabels }}
+{{- $pairs = append $pairs (printf "%s=%s" $k $v) -}}
+{{- end -}}
+{{- join "," $pairs -}}
+{{- end -}}

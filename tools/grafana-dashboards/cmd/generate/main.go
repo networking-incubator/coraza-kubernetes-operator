@@ -31,6 +31,9 @@ func main() {
 	if err := generateDashboard(outDir, "coraza-operator-resources.json", dashboards.BuildResources); err != nil {
 		os.Exit(1)
 	}
+	if err := generateDashboard(outDir, "coraza-waf-dataplane.json", dashboards.BuildDataplane); err != nil {
+		os.Exit(1)
+	}
 }
 
 func generateDashboard(outDir, name string, build func() (dashboard.Dashboard, error)) error {

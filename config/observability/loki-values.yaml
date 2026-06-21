@@ -1,0 +1,38 @@
+# grafana/loki chart — SingleBinary mode for local KIND demo clusters.
+# Installed by: make observability.loki.deploy
+
+deploymentMode: SingleBinary
+singleBinary:
+  replicas: 1
+read:
+  replicas: 0
+write:
+  replicas: 0
+backend:
+  replicas: 0
+gateway:
+  enabled: false
+lokiCanary:
+  enabled: false
+test:
+  enabled: false
+
+loki:
+  auth_enabled: false
+  commonConfig:
+    replication_factor: 1
+  storage:
+    type: filesystem
+  useTestSchema: true
+  limits_config:
+    retention_period: 48h
+    # Promtail promotes K8s discovery labels plus WAF fields (event, engine, rule_id, …).
+    max_label_names_per_series: 30
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi

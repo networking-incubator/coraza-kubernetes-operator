@@ -195,6 +195,39 @@ func TestEngineReconciler_BuildWasmPlugin_CacheToken(t *testing.T) {
 		require.True(t, found, "metrics_mode should be present in pluginConfig")
 		assert.Equal(t, "contract", metricsMode)
 	})
+
+	t.Run("suppress_crs_audit_logs omitted by default", func(t *testing.T) {
+		w := reconciler.buildWasmPlugin(engine, "oci://test.example/wasm:latest", "my-jwt-token")
+
+		spec, found, err := getNestedMap(w.Object, "spec")
+		require.NoError(t, err)
+		require.True(t, found)
+
+		pluginConfig, found, err := getNestedMap(spec, "pluginConfig")
+		require.NoError(t, err)
+		require.True(t, found)
+
+		_, found = pluginConfig["suppress_crs_audit_logs"]
+		assert.False(t, found, "suppress_crs_audit_logs should not be set by default")
+	})
+
+	t.Run("suppress_crs_audit_logs set when enabled on reconciler", func(t *testing.T) {
+		r := *reconciler
+		r.wasmSuppressCrsAuditLogs = true
+		w := r.buildWasmPlugin(engine, "oci://test.example/wasm:latest", "my-jwt-token")
+
+		spec, found, err := getNestedMap(w.Object, "spec")
+		require.NoError(t, err)
+		require.True(t, found)
+
+		pluginConfig, found, err := getNestedMap(spec, "pluginConfig")
+		require.NoError(t, err)
+		require.True(t, found)
+
+		v, found := pluginConfig["suppress_crs_audit_logs"]
+		require.True(t, found)
+		assert.Equal(t, true, v)
+	})
 }
 
 func TestEngineReconciler_ReconcileMissingRuleSet(t *testing.T) {
@@ -1438,6 +1471,73 @@ func TestEngineReconciler_NetworkPolicyCreated(t *testing.T) {
 	)
 	require.NoError(t, err)
 	assert.Empty(t, npList.Items, "NetworkPolicy should be deleted after finalizer runs")
+}
+
+func TestEngineReconciler_PodMonitorCreated(t *testing.T) {
+	ctx := context.Background()
+
+	createTestGateway(t, ctx, k8sClient, "podmon-gw", testNamespace)
+
+	ruleset := utils.NewTestRuleSet(utils.RuleSetOptions{
+		Name:      "podmon-test-ruleset",
+		Namespace: testNamespace,
+	})
+	require.NoError(t, k8sClient.Create(ctx, ruleset))
+	t.Cleanup(func() {
+		_ = k8sClient.Delete(ctx, ruleset)
+	})
+
+	engine := utils.NewTestEngine(utils.EngineOptions{
+		Name:        "podmon-test-engine",
+		Namespace:   testNamespace,
+		RuleSetName: ruleset.Name,
+		GatewayName: "podmon-gw",
+	})
+	require.NoError(t, k8sClient.Create(ctx, engine))
+	t.Cleanup(func() {
+		_ = k8sClient.Delete(ctx, engine)
+	})
+
+	reconciler := &EngineReconciler{
+		Client:                           k8sClient,
+		Scheme:                           scheme,
+		Recorder:                         utils.NewTestRecorder(),
+		kubeClient:                       testKubeClient,
+		ruleSetCacheServerCluster:        "test-cluster",
+		defaultWasmImage:                 defaults.DefaultCorazaWasmOCIReference,
+		operatorNamespace:                testNamespace,
+		dataplanePodMonitorEnabled:       true,
+		podMonitorCRDAvailable:           true,
+		dataplanePodMonitorLabels:        map[string]string{"release": "test"},
+		dataplanePodMonitorInterval:      "30s",
+		dataplanePodMonitorScrapeTimeout: "10s",
+		dataplanePodMonitorPortName:      "http-envoy-prom",
+	}
+	engineReq := ctrl.Request{NamespacedName: types.NamespacedName{Name: engine.Name, Namespace: engine.Namespace}}
+
+	result, err := reconciler.Reconcile(ctx, engineReq)
+	require.NoError(t, err)
+	assert.NotZero(t, result.RequeueAfter)
+
+	result, err = reconciler.Reconcile(ctx, engineReq)
+	require.NoError(t, err)
+	assert.NotZero(t, result.RequeueAfter)
+
+	pm := &unstructured.Unstructured{}
+	pm.SetGroupVersionKind(podMonitorGVK())
+	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{
+		Name:      podMonitorName(engine.Name),
+		Namespace: engine.Namespace,
+	}, pm))
+
+	labels := pm.GetLabels()
+	assert.Equal(t, engine.Name, labels[networkPolicyEngineLabelName])
+	assert.Equal(t, "test", labels["release"])
+
+	matchLabels, found, err := unstructured.NestedStringMap(pm.Object, "spec", "selector", "matchLabels")
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, "podmon-gw", matchLabels[gatewayNameLabel])
 }
 
 // -----------------------------------------------------------------------------

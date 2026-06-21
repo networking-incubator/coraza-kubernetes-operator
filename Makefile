@@ -29,6 +29,15 @@ KUBE_PROM_STACK_RELEASE ?= kube-prometheus-stack
 MONITORING_NAMESPACE ?= monitoring
 DEMO_NAMESPACE ?= integration-tests
 GRAFANA_ADMIN_PASSWORD ?= coraza-demo
+LOKI_RELEASE ?= loki
+PROMTAIL_RELEASE ?= promtail
+LOKI_CHART_VERSION ?= 6.30.1
+PROMTAIL_CHART_VERSION ?= 6.17.0
+# Contract-mode WASM image for observability.demo dataplane (met5 includes contract metrics + block JSON logs).
+CORAZA_DEMO_WASM_IMAGE ?= oci://docker.io/rpkatz/wasmplugin:met5
+DEMO_GATEWAY_NAME ?= coraza-gateway
+# Set to 1 by observability.demo to enable per-Engine PodMonitor and contract WASM.
+OBSERVABILITY_DATAPLANE ?= 0
 # Matches Prometheus bundled in kube-prometheus-stack $(KUBE_PROM_STACK_VERSION).
 # Used by promtool in CI and: make observability.promtool.install
 PROM_VERSION ?= 3.12.0
@@ -504,6 +513,7 @@ observability.dashboard.test: ## Run grafana-dashboards unit and golden tests
 .PHONY: observability.dashboard.validate
 observability.dashboard.validate: observability.dashboard.test ## Go tests + lint committed chart dashboard JSON
 	hack/observability/validate-dashboards.sh
+	hack/observability/validate-promtail-patterns.sh
 
 .PHONY: observability.promtool.install
 observability.promtool.install: ## Install promtool (PROM_VERSION) to INSTALL_DIR (default: GOBIN)
@@ -517,6 +527,11 @@ observability.prometheus.deploy: ## Install kube-prometheus-stack on the KIND cl
 	ctx="kind-$(KIND_CLUSTER_NAME)"; \
 	cfg="$(CURDIR)/config/observability"; \
 	kubectl --context "$$ctx" cluster-info >/dev/null; \
+	loki_values=""; \
+	if [ "$(OBSERVABILITY_DATAPLANE)" = "1" ]; then \
+		loki_values="-f $$cfg/grafana-loki-datasource-values.yaml"; \
+		echo "=== Provisioning Grafana Loki datasource ==="; \
+	fi; \
 	echo "=== Installing $(KUBE_PROM_STACK_RELEASE) ($(KUBE_PROM_STACK_VERSION)) ==="; \
 	helm --kube-context "$$ctx" repo add prometheus-community https://prometheus-community.github.io/helm-charts 2>/dev/null || true; \
 	helm --kube-context "$$ctx" repo update prometheus-community; \
@@ -525,6 +540,7 @@ observability.prometheus.deploy: ## Install kube-prometheus-stack on the KIND cl
 		--namespace "$(MONITORING_NAMESPACE)" \
 		--version "$(KUBE_PROM_STACK_VERSION)" \
 		--values "$$cfg/kube-prometheus-stack-values.yaml" \
+		$$loki_values \
 		--set-string grafana.adminPassword="$(GRAFANA_ADMIN_PASSWORD)" \
 		--wait --timeout 10m; \
 	kubectl --context "$$ctx" -n "$(MONITORING_NAMESPACE)" wait --for=condition=Available \
@@ -536,6 +552,37 @@ observability.prometheus.deploy: ## Install kube-prometheus-stack on the KIND cl
 	sed -e "s/PLACEHOLDER_PROMETHEUS_SA/$(KUBE_PROM_STACK_RELEASE)-prometheus/g" \
 		-e "s/PLACEHOLDER_MONITORING_NS/$(MONITORING_NAMESPACE)/g" \
 		"$$cfg/prometheus-rbac.yaml" | kubectl --context "$$ctx" apply -f -
+
+.PHONY: observability.loki.deploy
+observability.loki.deploy: ## Deploy Loki + Promtail (grafana/loki + grafana/promtail charts)
+	@set -e; \
+	ctx="kind-$(KIND_CLUSTER_NAME)"; \
+	cfg="$(CURDIR)/config/observability"; \
+	kubectl --context "$$ctx" cluster-info >/dev/null; \
+	helm --kube-context "$$ctx" repo add grafana https://grafana.github.io/helm-charts 2>/dev/null || true; \
+	helm --kube-context "$$ctx" repo update grafana; \
+	echo "=== Installing $(LOKI_RELEASE) (grafana/loki $(LOKI_CHART_VERSION)) ==="; \
+	helm --kube-context "$$ctx" upgrade --install "$(LOKI_RELEASE)" grafana/loki \
+		--namespace "$(MONITORING_NAMESPACE)" \
+		--version "$(LOKI_CHART_VERSION)" \
+		--values "$$cfg/loki-values.yaml" \
+		--wait --timeout 10m; \
+	kubectl --context "$$ctx" -n "$(MONITORING_NAMESPACE)" wait --for=condition=Ready \
+		pod -l app.kubernetes.io/name=loki,app.kubernetes.io/component=single-binary --timeout=300s; \
+	echo "=== Installing $(PROMTAIL_RELEASE) (grafana/promtail $(PROMTAIL_CHART_VERSION)) ==="; \
+	helm --kube-context "$$ctx" upgrade --install "$(PROMTAIL_RELEASE)" grafana/promtail \
+		--namespace "$(MONITORING_NAMESPACE)" \
+		--version "$(PROMTAIL_CHART_VERSION)" \
+		--values "$$cfg/promtail-values.yaml" \
+		--wait --timeout 10m; \
+	kubectl --context "$$ctx" -n "$(MONITORING_NAMESPACE)" wait --for=condition=Ready \
+		pod -l app.kubernetes.io/name=promtail --timeout=300s
+
+.PHONY: observability.logs.show
+observability.logs.show: ## Print coraza_waf_blocked_request JSON from Gateway pod logs
+	KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) DEMO_NAMESPACE=$(DEMO_NAMESPACE) \
+		GATEWAY_NAME=$(DEMO_GATEWAY_NAME) \
+		hack/observability/show-blocked-logs.sh
 
 .PHONY: observability.prometheus.undeploy
 observability.prometheus.undeploy: ## Remove kube-prometheus-stack from the KIND cluster
@@ -558,18 +605,33 @@ observability.operator.monitoring: ## Enable ServiceMonitor, PrometheusRule, and
 		helm_extra=""; \
 	fi; \
 	echo "=== Enabling operator monitoring ==="; \
+	image_helm="--set image.repository=$(CONTROLLER_MANAGER_CONTAINER_IMAGE_BASE) \
+		--set image.tag=$(CONTROLLER_MANAGER_CONTAINER_IMAGE_TAG) \
+		--set image.pullPolicy=Never"; \
+	dataplane_helm=""; \
+	if [ "$(OBSERVABILITY_DATAPLANE)" = "1" ]; then \
+		echo "=== Dataplane demo: per-Engine PodMonitor + WASM $(CORAZA_DEMO_WASM_IMAGE) ==="; \
+		dataplane_helm="--set defaultWasmImage=$(CORAZA_DEMO_WASM_IMAGE) \
+			--set dataplanePodMonitor.enabled=true \
+			--set-string dataplanePodMonitor.additionalLabels.release=$(KUBE_PROM_STACK_RELEASE)"; \
+	fi; \
 	helm --kube-context "$$ctx" upgrade --install "$(HELM_RELEASE_NAME)" "$(HELM_CHART_DIR)" \
 		--namespace "$(HELM_RELEASE_NAMESPACE)" \
 		--create-namespace \
 		$$helm_extra \
+		$$image_helm \
 		--set metrics.serviceMonitor.enabled=true \
 		--set metrics.serviceMonitor.additionalLabels.release="$(KUBE_PROM_STACK_RELEASE)" \
 		--set metrics.prometheusRule.enabled=true \
 		--set metrics.prometheusRule.additionalLabels.release="$(KUBE_PROM_STACK_RELEASE)" \
 		--set metrics.grafanaDashboard.enabled=true \
+		$$dataplane_helm \
 		--wait --timeout 5m; \
 	kubectl --context "$$ctx" -n "$(HELM_RELEASE_NAMESPACE)" wait --for=condition=Available \
 		deployment/"$(HELM_RELEASE_NAME)" --timeout=300s
+
+.PHONY: observability.operator.redeploy
+observability.operator.redeploy: build.image cluster.load-images observability.operator.monitoring ## Rebuild operator image, load into KIND, enable monitoring
 
 .PHONY: observability.demo.workload
 observability.demo.workload: ## Apply demo CRs and seed traffic for dashboard metrics
@@ -579,6 +641,11 @@ observability.demo.workload: ## Apply demo CRs and seed traffic for dashboard me
 	echo "=== Applying demo workload (config/samples) to $(DEMO_NAMESPACE) ==="; \
 	kubectl --context "$$ctx" create namespace "$(DEMO_NAMESPACE)" 2>/dev/null || true; \
 	kubectl --context "$$ctx" apply -n "$(DEMO_NAMESPACE)" -k "$(CURDIR)/config/samples"; \
+	if [ "$(OBSERVABILITY_DATAPLANE)" = "1" ]; then \
+		KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) DEMO_NAMESPACE=$(DEMO_NAMESPACE) \
+			CORAZA_DEMO_WASM_IMAGE=$(CORAZA_DEMO_WASM_IMAGE) \
+			hack/observability/configure-demo-engine.sh; \
+	fi; \
 	kubectl --context "$$ctx" -n "$(DEMO_NAMESPACE)" wait --for=condition=Available \
 		deployment/echo --timeout=300s; \
 	echo "=== Waiting for Engine Ready ==="; \
@@ -591,16 +658,42 @@ observability.demo.workload: ## Apply demo CRs and seed traffic for dashboard me
 		sleep 5; \
 	done; \
 	if [ "$$ready" != "True" ]; then echo "ERROR: Engine coraza not Ready within timeout" >&2; exit 1; fi; \
+	if [ "$(OBSERVABILITY_DATAPLANE)" = "1" ]; then \
+		KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) DEMO_NAMESPACE=$(DEMO_NAMESPACE) \
+			hack/observability/wait-podmonitor.sh; \
+	fi; \
 	echo "=== Waiting for RuleSet Ready ==="; \
 	if ! kubectl --context "$$ctx" -n "$(DEMO_NAMESPACE)" wait --for=condition=Ready \
 		ruleset/default-ruleset --timeout=300s 2>/dev/null; then \
 		echo "ERROR: RuleSet default-ruleset not Ready within timeout" >&2; exit 1; \
 	fi
 	KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) DEMO_NAMESPACE=$(DEMO_NAMESPACE) \
+		GATEWAY_NAME=$(DEMO_GATEWAY_NAME) \
 		hack/observability/seed-traffic.sh
+	@if [ "$(OBSERVABILITY_DATAPLANE)" = "1" ]; then \
+		KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) DEMO_NAMESPACE=$(DEMO_NAMESPACE) \
+			GATEWAY_NAME=$(DEMO_GATEWAY_NAME) \
+			hack/observability/wait-dataplane-metrics.sh; \
+		$(MAKE) observability.logs.show; \
+		KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) DEMO_NAMESPACE=$(DEMO_NAMESPACE) \
+			MONITORING_NAMESPACE=$(MONITORING_NAMESPACE) \
+			hack/observability/wait-loki-waf-logs.sh; \
+	fi
 
 .PHONY: observability.demo
-observability.demo: observability.prometheus.deploy observability.operator.monitoring observability.demo.workload observability.grafana.url ## Full observability demo on existing KIND cluster
+observability.demo: ## Full observability demo (metrics + logs) on existing KIND cluster
+	$(MAKE) OBSERVABILITY_DATAPLANE=1 observability.demo.run
+
+.PHONY: observability.demo.operator
+observability.demo.operator: ## Operator Helm upgrade for observability demo (rebuilds image when dataplane=1)
+	@if [ "$(OBSERVABILITY_DATAPLANE)" = "1" ]; then \
+		$(MAKE) observability.operator.redeploy; \
+	else \
+		$(MAKE) observability.operator.monitoring; \
+	fi
+
+.PHONY: observability.demo.run
+observability.demo.run: observability.prometheus.deploy observability.loki.deploy observability.demo.operator observability.demo.workload observability.grafana.url ## Internal: observability demo steps
 
 .PHONY: observability.grafana.port-forward
 observability.grafana.port-forward: ## Port-forward Grafana to http://localhost:3000
@@ -618,6 +711,11 @@ observability.grafana.url: ## Print Grafana URL, credentials, and dashboard link
 	@echo "Dashboards (folder: Coraza WAF):"
 	@echo "  - Coraza Operator — Overview:   /d/coraza-operator-overview"
 	@echo "  - Coraza Operator — Resources:  /d/coraza-operator-resources"
+	@if [ "$(OBSERVABILITY_DATAPLANE)" = "1" ]; then \
+		echo "  - Coraza WAF — Dataplane:       /d/coraza-waf-dataplane"; \
+		echo "Dataplane demo WASM image: $(CORAZA_DEMO_WASM_IMAGE)"; \
+		echo "Gateway pod logs: make observability.logs.show"; \
+	fi
 
 # -------------------------------------------------------------------------------
 # Documentation

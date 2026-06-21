@@ -25,6 +25,7 @@ func TestCommittedDashboardsMatchGenerator(t *testing.T) {
 	}{
 		{"overview", "coraza-operator-overview.json", func() (any, error) { return BuildOverview() }},
 		{"resources", "coraza-operator-resources.json", func() (any, error) { return BuildResources() }},
+		{"dataplane", "coraza-waf-dataplane.json", func() (any, error) { return BuildDataplane() }},
 	}
 
 	for _, tc := range cases {
@@ -63,6 +64,7 @@ func TestDashboardSemanticsGolden(t *testing.T) {
 	}{
 		{"overview", "overview.semantic.json", func() (any, error) { return BuildOverview() }},
 		{"resources", "resources.semantic.json", func() (any, error) { return BuildResources() }},
+		{"dataplane", "dataplane.semantic.json", func() (any, error) { return BuildDataplane() }},
 	}
 
 	for _, tc := range cases {

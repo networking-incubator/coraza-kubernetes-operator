@@ -77,6 +77,15 @@ type EngineReconciler struct {
 	defaultWasmImage  string
 	operatorNamespace string
 
+	// Dataplane PodMonitor: one PodMonitor per accepted Gateway Engine.
+	dataplanePodMonitorEnabled       bool
+	podMonitorCRDAvailable           bool
+	dataplanePodMonitorLabels        map[string]string
+	dataplanePodMonitorInterval      string
+	dataplanePodMonitorScrapeTimeout string
+	dataplanePodMonitorPortName      string
+	wasmSuppressCrsAuditLogs         bool
+
 	// tokenStore is a thread-safe store for cache client tokens, keyed by
 	// "namespace/engineName/rulesetName". Uses sync.Map for simple concurrent access.
 	// Each Engine+RuleSet pair has its own token (no sharing), so no per-key mutex is needed.

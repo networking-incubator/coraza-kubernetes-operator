@@ -2,11 +2,12 @@
 title: "Observability demo on KIND"
 linkTitle: "Observability demo"
 weight: 46
-description: "Run Prometheus, Grafana, and Coraza control-plane dashboards on a local KIND cluster."
+description: "Run Prometheus, Grafana, Loki, and Coraza control-plane and dataplane dashboards on a local KIND cluster."
 ---
 
-This guide walks through the local observability demo: Prometheus Operator, Grafana,
-Coraza operator metrics scraping, and the bundled control-plane dashboards.
+This guide walks through the local observability demo: Prometheus Operator, Grafana, Loki,
+Coraza operator metrics scraping, bundled control-plane dashboards, and **coraza_waf_*** dataplane
+metrics from Envoy Gateway pods.
 
 ## Prerequisites
 
@@ -23,8 +24,11 @@ top of an existing cluster.
 # 1. Create the KIND cluster (Istio, Gateway, operator) — unchanged from other guides
 make cluster.kind
 
-# 2. Deploy Prometheus, enable operator monitoring, seed demo workload
+# 2. Deploy Prometheus, Loki, enable operator monitoring, seed demo workload
 make observability.demo
+
+The demo **rebuilds and reloads the operator image** into KIND so per-Engine PodMonitor
+provisioning and contract-mode WASM flags are active. Re-running is safe.
 
 # 3. Open Grafana (port-forward)
 make observability.grafana.port-forward
@@ -41,8 +45,46 @@ Dashboards appear under folder **Coraza WAF**:
 
 - **Coraza Operator — Overview** — health summary, validation rates/latency, reconciliation, cache RED/USE, Kubernetes API & workqueue
 - **Coraza Operator — Resources** — per-namespace CR drill-down with condition tables
+- **Coraza WAF — Dataplane** — live `coraza_waf_*` request, block, rule-hit, anomaly metrics and Loki block logs
 
 Run `make observability.grafana.url` to print credentials and dashboard UIDs.
+
+### Dataplane demo requirements
+
+`make observability.demo` enables:
+
+- **Per-Engine PodMonitor** (operator-managed) scraping Envoy `:15090/stats/prometheus` with flat-stat label decode
+- **Contract-mode WASM** via `CORAZA_DEMO_WASM_IMAGE` (default `oci://docker.io/rpkatz/wasmplugin:met5`)
+- **Loki + Promtail** for Gateway pod logs (structured `coraza_waf_blocked_request` JSON)
+
+Override the WASM image:
+
+```bash
+make observability.demo CORAZA_DEMO_WASM_IMAGE=oci://docker.io/rpkatz/wasmplugin:met5
+```
+
+Inspect WAF block logs from the Gateway pod:
+
+```bash
+make observability.logs.show
+```
+
+Loki query (Grafana Explore):
+
+```logql
+{namespace=~"$namespace", engine=~"$engine", event="coraza_waf_blocked_request"}
+```
+
+During **FTW conformance** (`make test.conformance`), select the generated namespace
+(e.g. `crs-conformance-<id>`) and engine `conformance-engine` in the dataplane dashboard
+dropdowns. CRS blocks emit ModSecurity-style audit lines; Promtail derives the `category`
+label from the first `attack-*` rule tag (e.g. `xss`, `injection_php`).
+
+Control-plane only (no dataplane scrape or contract WASM):
+
+```bash
+make OBSERVABILITY_DATAPLANE=0 observability.demo.run
+```
 
 ### Overview dashboard sections
 
@@ -55,11 +97,12 @@ Run `make observability.grafana.url` to print credentials and dashboard UIDs.
 
 ## What `make observability.demo` does
 
-1. **`observability.prometheus.deploy`** — installs [kube-prometheus-stack](https://github.com/prometheus-community/helm-charts/tree/main/charts/kube-prometheus-stack) in `monitoring`, configures Grafana dashboard sidecar (`searchNamespace: ALL`), and grants Prometheus RBAC to scrape the operator's authenticated `/metrics` endpoint.
-2. **`observability.operator.monitoring`** — Helm upgrade enabling `metrics.serviceMonitor`, `metrics.prometheusRule`, and `metrics.grafanaDashboard` with labels matching the Prometheus release.
-3. **`observability.demo.workload`** — applies `config/samples` into `integration-tests` and sends HTTP traffic through `coraza-gateway` to populate cache and CR metrics.
+1. **`observability.prometheus.deploy`** — kube-prometheus-stack with Grafana sidecar; provisions the **Loki datasource** when dataplane mode is on.
+2. **`observability.loki.deploy`** — **Loki + Promtail** (`loki-values.yaml`, `promtail-values.yaml`).
+3. **`observability.operator.monitoring`** — operator ServiceMonitor, PrometheusRule, Grafana dashboards; dataplane mode enables **per-Engine PodMonitor** and contract WASM (`met5`).
+4. **`observability.demo.workload`** — applies `config/samples`, seeds traffic, waits for Prometheus metrics and Loki block logs, prints sample JSON via `observability.logs.show`.
 
-Prometheus/Grafana config: `config/observability/`. Demo orchestration is `make observability.*`; only traffic seeding uses `hack/observability/seed-traffic.sh`.
+Prometheus/Grafana/Loki config: `config/observability/`. Scripts: `hack/observability/*.sh`.
 
 ## Production deployment
 
@@ -70,7 +113,7 @@ metrics:
   serviceMonitor:
     enabled: true
     additionalLabels:
-      release: kube-prometheus-stack   # match your Prometheus release label
+      release: kube-prometheus-stack
   prometheusRule:
     enabled: true
     additionalLabels:
@@ -78,7 +121,15 @@ metrics:
   grafanaDashboard:
     enabled: true
     folder: "Coraza WAF"
+
+# Per-Engine PodMonitor — preferred for any Gateway + Engine pair.
+dataplanePodMonitor:
+  enabled: true
+  additionalLabels:
+    release: kube-prometheus-stack
 ```
+
+Keep `metrics.podMonitor.enabled=false` when using `dataplanePodMonitor` to avoid duplicate scrapes.
 
 Ensure Prometheus can authenticate to `/metrics` — see [Monitoring with Prometheus]({{< relref "monitoring-prometheus" >}}).
 

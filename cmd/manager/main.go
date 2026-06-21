@@ -109,7 +109,15 @@ func main() {
 	rulesetCache := setupCacheServer(mgr, cfg, kubeClient)
 	setupIstioPrerequisites(mgr, cfg, podNamespace)
 
-	if err := controller.SetupControllers(mgr, rulesetCache, cfg.envoyClusterName, cfg.istioRevision, cfg.defaultWasmImage, podNamespace, kubeClient); err != nil {
+	if err := controller.SetupControllers(mgr, rulesetCache, cfg.envoyClusterName, cfg.istioRevision, cfg.defaultWasmImage, podNamespace, kubeClient, controller.DataplanePodMonitorOptions{
+		Enabled:                  cfg.dataplanePodMonitorEnabled,
+		CRDAvailable:             controller.PodMonitorCRDAvailable(mgr.GetConfig()),
+		Labels:                   controller.ParseCommaSeparatedLabels(cfg.dataplanePodMonitorLabels),
+		Interval:                 cfg.dataplanePodMonitorInterval,
+		ScrapeTimeout:            cfg.dataplanePodMonitorScrapeTimeout,
+		PortName:                 cfg.dataplanePodMonitorPortName,
+		WasmSuppressCrsAuditLogs: cfg.wasmSuppressCrsAuditLogs,
+	}); err != nil {
 		setupLog.Error(err, "unable to setup controllers")
 		os.Exit(1)
 	}
@@ -144,6 +152,13 @@ type config struct {
 	istioRevision     string
 	defaultWasmImage  string
 	operatorName      string
+
+	dataplanePodMonitorEnabled       bool
+	dataplanePodMonitorLabels        string
+	dataplanePodMonitorInterval      string
+	dataplanePodMonitorScrapeTimeout string
+	dataplanePodMonitorPortName      string
+	wasmSuppressCrsAuditLogs         bool
 }
 
 func parseFlags() config {
@@ -166,6 +181,19 @@ func parseFlags() config {
 	flag.StringVar(&cfg.defaultWasmImage, "default-wasm-image", resolveDefaultWasmImage(),
 		"Default OCI reference for the Coraza WASM plugin when an Engine omits spec.driver.wasm.image")
 	flag.StringVar(&cfg.operatorName, "operator-name", "", "The operator release name used to derive managed resource names (when unset, Istio prerequisites are skipped)")
+	flag.BoolVar(&cfg.dataplanePodMonitorEnabled, "dataplane-podmonitor", false,
+		"When true, create a PodMonitor per accepted Gateway Engine (requires Prometheus Operator PodMonitor CRD)")
+	flag.StringVar(&cfg.dataplanePodMonitorLabels, "dataplane-podmonitor-labels", "",
+		"Comma-separated key=value labels added to Engine PodMonitors (e.g. release=kube-prometheus-stack)")
+	flag.StringVar(&cfg.dataplanePodMonitorInterval, "dataplane-podmonitor-interval", "30s",
+		"PodMonitor scrape interval for dataplane metrics")
+	flag.StringVar(&cfg.dataplanePodMonitorScrapeTimeout, "dataplane-podmonitor-scrape-timeout", "10s",
+		"PodMonitor scrape timeout for dataplane metrics")
+	flag.StringVar(&cfg.dataplanePodMonitorPortName, "dataplane-podmonitor-port", "15090",
+		"PodMonitor port (number or name) exposing Envoy prometheus stats on Gateway pods")
+	flag.BoolVar(&cfg.wasmSuppressCrsAuditLogs, "wasm-suppress-crs-audit-logs", false,
+		"When true, omit ModSecurity-style Coraza audit lines from Gateway pod logs (structured JSON remains). "+
+			"Do not enable for FTW/conformance tests that read raw pod logs.")
 
 	opts := zap.Options{Development: false}
 	opts.BindFlags(flag.CommandLine)

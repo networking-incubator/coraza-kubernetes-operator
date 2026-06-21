@@ -127,6 +127,7 @@ grep -q "kind: ConfigMap" "${dash_tmp}" && pass "Dashboard ConfigMap rendered" |
 grep -q "grafana_dashboard" "${dash_tmp}" && pass "grafana_dashboard label present" || fail "grafana_dashboard label missing"
 grep -q "coraza-operator-overview.json" "${dash_tmp}" && pass "Overview dashboard embedded" || fail "Overview dashboard missing"
 grep -q "coraza-operator-resources.json" "${dash_tmp}" && pass "Resources dashboard embedded" || fail "Resources dashboard missing"
+grep -q "coraza-waf-dataplane.json" "${dash_tmp}" && pass "Dataplane dashboard embedded" || fail "Dataplane dashboard missing"
 grep -q "grafana_folder" "${dash_tmp}" && pass "grafana_folder annotation present" || fail "grafana_folder annotation missing"
 rm -f "${dash_tmp}"
 

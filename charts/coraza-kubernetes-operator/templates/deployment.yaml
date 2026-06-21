@@ -62,6 +62,18 @@ spec:
             {{- if .Values.defaultWasmImage }}
             - --default-wasm-image={{ .Values.defaultWasmImage }}
             {{- end }}
+            {{- if .Values.dataplanePodMonitor.enabled }}
+            - --dataplane-podmonitor=true
+            - --dataplane-podmonitor-interval={{ .Values.dataplanePodMonitor.interval }}
+            - --dataplane-podmonitor-scrape-timeout={{ .Values.dataplanePodMonitor.scrapeTimeout }}
+            - --dataplane-podmonitor-port={{ .Values.dataplanePodMonitor.portName }}
+            {{- if .Values.dataplanePodMonitor.additionalLabels }}
+            - --dataplane-podmonitor-labels={{ include "coraza-operator.dataplanePodMonitorLabels" . }}
+            {{- end }}
+            {{- if .Values.dataplanePodMonitor.suppressCrsAuditLogs }}
+            - --wasm-suppress-crs-audit-logs=true
+            {{- end }}
+            {{- end }}
             {{- if .Values.logging.development }}
             - --zap-devel=true
             {{- else }}

@@ -65,7 +65,7 @@ metrics:
     # When true, deploys a PodMonitor CR to scrape coraza_waf_* metrics
     # from Envoy stats on Gateway pods. Requires:
     # - monitoring.coreos.com/v1 CRD (Prometheus Operator)
-    # - Istio with Envoy stats port 15090 (http-envoy-prom) exposed on Gateway pods
+    # - Istio with Envoy stats port 15090 exposed on Gateway pods
     # Disabled by default.
     enabled: false
     # Scrape interval for WAF data-plane metrics.
@@ -79,9 +79,9 @@ metrics:
     # Use this to match your Prometheus instance's podMonitorSelector.
     # Example: additionalLabels: {release: kube-prometheus-stack}
     additionalLabels: {}
-    # Port name on Gateway pods that exposes Envoy stats.
-    # Default is the Istio convention; override for non-Istio service meshes.
-    portName: "http-envoy-prom"
+    # Port (number or name) on Gateway pods that exposes Envoy stats.
+    # Numeric values use targetPort (reliable); named values use port.
+    portName: "15090"
     # Additional metricRelabelings appended AFTER the mandatory cardinality guard.
     # The guard (keep only coraza_waf_.*) is always enforced first.
     metricRelabelings: []
@@ -129,6 +129,20 @@ istio:
 # Default WASM plugin OCI URL when an Engine omits spec.driver.wasm.image.
 # When empty, the operator's built-in default (internal/defaults.DefaultCorazaWasmOCIReference) is used.
 defaultWasmImage: ""
+
+# Per-Engine PodMonitor for coraza_waf_* dataplane metrics (Gateway pods).
+# Requires Prometheus Operator PodMonitor CRD. When enabled, the Engine controller
+# creates one PodMonitor per accepted Gateway Engine; keep metrics.podMonitor.enabled=false
+# to avoid duplicate scrapes.
+dataplanePodMonitor:
+  enabled: false
+  additionalLabels: {}
+  interval: 30s
+  scrapeTimeout: 10s
+  portName: "15090"
+  # When true, omit duplicate CRS audit lines from Gateway pod logs.
+  # Structured coraza_waf_blocked_request JSON remains. Leave false for FTW/conformance.
+  suppressCrsAuditLogs: false
 
 openshift:
   enabled: false

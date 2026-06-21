@@ -109,6 +109,13 @@ func (r *EngineReconciler) provisionWasmDriver(ctx context.Context, log logr.Log
 		return ctrl.Result{}, err
 	}
 
+	if err := r.applyPodMonitor(ctx, log, req, engine); err != nil {
+		if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "Engine", engine, &engine.Status.Conditions, engine.Generation, "PodMonitorFailed", fmt.Sprintf("Failed to create or update PodMonitor: %v", err)); patchErr != nil {
+			return ctrl.Result{}, patchErr
+		}
+		return ctrl.Result{}, err
+	}
+
 	logDebug(log, req, "Engine", "Updating status after successful provisioning")
 	if patchErr := patchReady(ctx, r.Status(), r.Recorder, log, req, "Engine", engine, &engine.Status.Conditions, engine.Generation, "Configured", "WasmPlugin successfully created/updated"); patchErr != nil {
 		return ctrl.Result{}, patchErr
@@ -182,6 +189,10 @@ func (r *EngineReconciler) buildWasmPlugin(engine *wafv1alpha1.Engine, wasmURL s
 
 	if engine.Spec.RuleSetCacheServer != nil {
 		pluginConfig["rule_reload_interval_seconds"] = engine.Spec.RuleSetCacheServer.PollIntervalSeconds
+	}
+
+	if r.wasmSuppressCrsAuditLogs {
+		pluginConfig["suppress_crs_audit_logs"] = true
 	}
 
 	ws := targetLabelSelector(engine)

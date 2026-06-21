@@ -109,6 +109,10 @@ func (r *EngineReconciler) cleanupNotAccepted(ctx context.Context, log logr.Logg
 		return err
 	}
 
+	if err := r.cleanupPodMonitor(ctx, log, req); err != nil {
+		return err
+	}
+
 	tokenKey := fmt.Sprintf("%s/%s/%s", engine.Namespace, engine.Name, engine.Spec.RuleSet.Name)
 	r.tokenStore.Delete(tokenKey)
 

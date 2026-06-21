@@ -40,6 +40,7 @@ done
 echo "=== PromQL metric references ==="
 OVERVIEW="${DASH_DIR}/coraza-operator-overview.json"
 RESOURCES="${DASH_DIR}/coraza-operator-resources.json"
+DATAPLANE="${DASH_DIR}/coraza-waf-dataplane.json"
 
 # Collect expr fields from panel targets (nested rows included), not arbitrary JSON text.
 collect_exprs() {
@@ -73,6 +74,21 @@ check_metric_in_exprs "${RESOURCES}" controller_runtime_reconcile_total "resourc
 for metric in coraza_engine_condition coraza_ruleset_condition; do
   check_metric_in_exprs "${RESOURCES}" "${metric}" "resources"
 done
+
+for metric in \
+  coraza_waf_requests_total \
+  coraza_waf_blocked_requests_total \
+  coraza_waf_rule_hits_total \
+  coraza_waf_request_anomaly_score_bucket \
+  coraza_waf_plugin_rule_count; do
+  check_metric_in_exprs "${DATAPLANE}" "${metric}" "dataplane"
+done
+
+if collect_exprs "${DATAPLANE}" | grep -q 'event="coraza_waf_blocked_request"'; then
+  pass "dataplane uses event label for blocked-request Loki query"
+else
+  fail "dataplane missing event=coraza_waf_blocked_request Loki query"
+fi
 
 echo "=== ConfigMap size budget ==="
 # Per-file limit (Kubernetes ConfigMap value size). Combined budget leaves headroom

@@ -52,8 +52,19 @@ const DefaultRuleSetCacheServerPort = 18080
 // Manager - Setup
 // -----------------------------------------------------------------------------
 
+// DataplanePodMonitorOptions configures per-Engine PodMonitor provisioning.
+type DataplanePodMonitorOptions struct {
+	Enabled                  bool
+	CRDAvailable             bool
+	Labels                   map[string]string
+	Interval                 string
+	ScrapeTimeout            string
+	PortName                 string
+	WasmSuppressCrsAuditLogs bool
+}
+
 // SetupControllers initializes all controllers
-func SetupControllers(mgr ctrl.Manager, rulesetCache *cache.RuleSetCache, envoyClusterName, istioRevision string, defaultWasmImage, operatorNamespace string, kubeClient kubernetes.Interface) error {
+func SetupControllers(mgr ctrl.Manager, rulesetCache *cache.RuleSetCache, envoyClusterName, istioRevision string, defaultWasmImage, operatorNamespace string, kubeClient kubernetes.Interface, podMonitor DataplanePodMonitorOptions) error {
 	corazaMetrics, err := NewCorazaMetrics(metrics.Registry)
 	if err != nil {
 		return fmt.Errorf("register coraza metrics: %w", err)
@@ -78,15 +89,22 @@ func SetupControllers(mgr ctrl.Manager, rulesetCache *cache.RuleSetCache, envoyC
 	}
 
 	if err := (&EngineReconciler{
-		Client:                    mgr.GetClient(),
-		Scheme:                    mgr.GetScheme(),
-		Recorder:                  mgr.GetEventRecorder("engine-controller"),
-		Metrics:                   corazaMetrics,
-		kubeClient:                kubeClient,
-		ruleSetCacheServerCluster: envoyClusterName,
-		istioRevision:             istioRevision,
-		defaultWasmImage:          defaultWasmImage,
-		operatorNamespace:         operatorNamespace,
+		Client:                           mgr.GetClient(),
+		Scheme:                           mgr.GetScheme(),
+		Recorder:                         mgr.GetEventRecorder("engine-controller"),
+		Metrics:                          corazaMetrics,
+		kubeClient:                       kubeClient,
+		ruleSetCacheServerCluster:        envoyClusterName,
+		istioRevision:                    istioRevision,
+		defaultWasmImage:                 defaultWasmImage,
+		operatorNamespace:                operatorNamespace,
+		dataplanePodMonitorEnabled:       podMonitor.Enabled,
+		podMonitorCRDAvailable:           podMonitor.CRDAvailable,
+		dataplanePodMonitorLabels:        podMonitor.Labels,
+		dataplanePodMonitorInterval:      podMonitor.Interval,
+		dataplanePodMonitorScrapeTimeout: podMonitor.ScrapeTimeout,
+		dataplanePodMonitorPortName:      podMonitor.PortName,
+		wasmSuppressCrsAuditLogs:         podMonitor.WasmSuppressCrsAuditLogs,
 	}).SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("unable to create controller Engine: %w", err)
 	}

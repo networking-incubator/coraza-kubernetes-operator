@@ -1,0 +1,91 @@
+# grafana/promtail chart — ship Gateway pod logs to Loki.
+# Installed by: make observability.loki.deploy
+
+config:
+  clients:
+    - url: http://loki.monitoring.svc:3100/loki/api/v1/push
+  snippets:
+    # Gateway API pods use gateway.networking.k8s.io/gateway-name; ensure the label
+    # is present on Loki streams (not all default relabel configs include it).
+    extraRelabelConfigs:
+      - action: replace
+        source_labels:
+          - __meta_kubernetes_pod_label_gateway_networking_k8s_io_gateway_name
+        target_label: gateway_networking_k8s_io_gateway_name
+    pipelineStages:
+      - cri: {}
+      # Contract-mode JSON (LogWarn). Primary path for observability.demo.
+      - match:
+          selector: '{container="istio-proxy"} |~ "coraza_waf_blocked_request"'
+          stages:
+            - regex:
+                expression: '.*(?P<waf_json>\{"event":"coraza_waf_blocked_request".*\}).*'
+            - json:
+                expressions:
+                  event: event
+                  rule_id: rule_id
+                  category: category
+                  engine: engine
+                  severity: severity
+                  phase: phase
+                  uri: uri
+                  client_ip: client_ip
+                  method: method
+                source: waf_json
+            - regex:
+                expression: '.*wasm log (?:(?:[^.]+\.)?coraza-engine-(?P<engine_from_log>[^:]+):).*'
+            - template:
+                source: engine
+                template: '{{ if .engine }}{{ .engine }}{{ else }}{{ .engine_from_log }}{{ end }}'
+            - template:
+                source: event
+                template: 'coraza_waf_blocked_request'
+            - template:
+                source: category
+                template: '{{ if .category }}{{ replace "-" "_" .category }}{{ else if .rule_id }}other{{ end }}'
+            - template:
+                source: severity
+                template: '{{ if .severity }}{{ ToUpper .severity }}{{ end }}'
+            - labels:
+                event:
+                rule_id:
+                category:
+                engine:
+                severity:
+      # CRS / ModSecurity audit lines (FTW conformance). No JSON on the same line.
+      - match:
+          selector: '{container="istio-proxy"} |~ "Coraza: Access denied" !~ "coraza_waf_blocked_request"'
+          stages:
+            - regex:
+                expression: '.*\[client "(?P<client_ip>[^"]+)"\].*'
+            - regex:
+                expression: '.*Coraza: Access denied.*\[id "(?P<rule_id>[^"]+)"\].*'
+            - regex:
+                expression: '.*\[severity "(?P<severity>[^"]+)"\].*'
+            - regex:
+                expression: '\[tag "attack-(?P<attack_tag>[^"]+)"\]'
+            - regex:
+                expression: '.*wasm log (?:(?:[^.]+\.)?coraza-engine-(?P<engine>[^:]+):).*'
+            - template:
+                source: event
+                template: 'coraza_waf_blocked_request'
+            - template:
+                source: category
+                template: '{{ if .attack_tag }}{{ replace "-" "_" .attack_tag }}{{ else if .rule_id }}other{{ end }}'
+            - template:
+                source: severity
+                template: '{{ if .severity }}{{ ToUpper .severity }}{{ end }}'
+            - labels:
+                event:
+                rule_id:
+                category:
+                engine:
+                severity:
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 200m
+    memory: 128Mi

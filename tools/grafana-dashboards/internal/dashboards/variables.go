@@ -47,6 +47,46 @@ func promDatasourceRef() common.DataSourceRef {
 	}
 }
 
+func lokiDatasourceRef() common.DataSourceRef {
+	return common.DataSourceRef{
+		Type: cog.ToPtr("loki"),
+		Uid:  cog.ToPtr("loki"),
+	}
+}
+
+const (
+	dataplaneNamespaceQuery = `label_values(coraza_waf_requests_total, namespace)`
+	dataplaneEngineQuery    = `label_values(coraza_waf_requests_total{namespace=~"$namespace"}, engine)`
+)
+
+func dataplaneCustomVariable(name, label, defaultValue string) *dashboard.CustomVariableBuilder {
+	current := dashboard.VariableOption{
+		Selected: cog.ToPtr(true),
+		Text:     dashboard.StringOrArrayOfString{String: cog.ToPtr(defaultValue)},
+		Value:    dashboard.StringOrArrayOfString{String: cog.ToPtr(defaultValue)},
+	}
+	return dashboard.NewCustomVariableBuilder(name).
+		Label(label).
+		Values(dashboard.StringOrMap{String: cog.ToPtr(defaultValue)}).
+		Current(current).
+		Options([]dashboard.VariableOption{current}).
+		IncludeAll(true).
+		Multi(true).
+		AllValue(".+").
+		AllowCustomValue(true)
+}
+
+func prometheusDatasourceVariable() *dashboard.DatasourceVariableBuilder {
+	return dashboard.NewDatasourceVariableBuilder("DS_PROMETHEUS").
+		Label("Datasource").
+		Type("prometheus").
+		Current(dashboard.VariableOption{
+			Selected: cog.ToPtr(true),
+			Text:     dashboard.StringOrArrayOfString{String: cog.ToPtr("Prometheus")},
+			Value:    dashboard.StringOrArrayOfString{String: cog.ToPtr("prometheus")},
+		})
+}
+
 func builtInAnnotations() *dashboard.AnnotationQueryBuilder {
 	return dashboard.NewAnnotationQueryBuilder().
 		Name("Annotations & Alerts").

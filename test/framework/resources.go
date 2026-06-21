@@ -34,7 +34,6 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 
 	wafv1alpha1 "github.com/networking-incubator/coraza-kubernetes-operator/api/v1alpha1"
-	"github.com/networking-incubator/coraza-kubernetes-operator/internal/defaults"
 )
 
 // Resource builders, GVRs, and CRUD helpers for integration tests.
@@ -100,8 +99,9 @@ type EngineOpts struct {
 	// GatewayName is the name of the Gateway resource to target.
 	GatewayName string
 
-	// WasmImage is the OCI image for the WASM plugin. Defaults to the
-	// CORAZA_WASM_IMAGE env var, or a built-in default.
+	// WasmImage is the OCI image for the WASM plugin. When empty and
+	// CORAZA_WASM_IMAGE is unset, the operator's --default-wasm-image
+	// flag controls the image used by the WasmPlugin.
 	WasmImage string
 
 	// FailurePolicy determines behavior when the WAF is not ready.
@@ -118,10 +118,7 @@ type EngineOpts struct {
 // -----------------------------------------------------------------------------
 
 func defaultWasmImage() string {
-	if img := os.Getenv("CORAZA_WASM_IMAGE"); img != "" {
-		return img
-	}
-	return defaults.DefaultCorazaWasmOCIReference
+	return os.Getenv("CORAZA_WASM_IMAGE")
 }
 
 const fallbackEchoImage = "registry.k8s.io/gateway-api/echo-basic:v20251204-v1.4.1"
