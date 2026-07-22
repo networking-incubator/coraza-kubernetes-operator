@@ -22,7 +22,7 @@ from lib import (
 DEFAULT_NAMESPACE = "integration-tests"
 GATEWAY_API_URL = (
     "https://github.com/kubernetes-sigs/gateway-api"
-    "/releases/download/v1.4.1/standard-install.yaml"
+    "/releases/download/v1.6.1/standard-install.yaml"
 )
 SAIL_REPO = "https://istio-ecosystem.github.io/sail-operator"
 

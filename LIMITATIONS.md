@@ -117,7 +117,7 @@ Paranoia Level 4 generates false positives due to Envoy populating the `:path` p
 
 ---
 
-## Coraza/WASM Bugs (13 tests)
+## Coraza/WASM Bugs (20 tests)
 
 These issues should be fixed in Coraza or coraza-proxy-wasm.
 

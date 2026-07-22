@@ -124,7 +124,7 @@ func defaultWasmImage() string {
 	return defaults.DefaultCorazaWasmOCIReference
 }
 
-const fallbackEchoImage = "registry.k8s.io/gateway-api/echo-basic:v20251204-v1.4.1"
+const fallbackEchoImage = "registry.k8s.io/gateway-api/conformance/echo-basic:v0.1.0"
 
 func defaultEchoImage() string {
 	if img := os.Getenv("ECHO_IMAGE"); img != "" {

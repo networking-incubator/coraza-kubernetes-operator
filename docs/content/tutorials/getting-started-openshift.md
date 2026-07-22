@@ -101,7 +101,7 @@ spec:
     spec:
       containers:
         - name: echo
-          image: gcr.io/k8s-staging-gateway-api/echo-basic:v20231214-v1.0.0-140-gf544a46e
+          image: registry.k8s.io/gateway-api/conformance/echo-basic:v0.1.0
           ports:
             - containerPort: 3000
 ---
