@@ -38,7 +38,7 @@ kubectl coraza --help
 Download the CoreRuleSet release archive and extract the rules:
 
 ```bash
-export CRS_VERSION=4.24.1
+export CRS_VERSION=4.28.0
 curl -fsSL "https://github.com/coreruleset/coreruleset/archive/refs/tags/v${CRS_VERSION}.tar.gz" \
   | tar xz
 ```

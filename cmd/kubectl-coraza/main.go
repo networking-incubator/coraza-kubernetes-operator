@@ -70,7 +70,7 @@ namespace as the RuleSet; set --namespace when you need metadata.namespace on ev
 	flags := coreruleset.Flags()
 	flags.String("rules-dir", "", "directory containing CoreRuleSet *.conf (and optional *.data) [required]")
 	_ = coreruleset.MarkFlagRequired("rules-dir")
-	flags.String("version", "", "CoreRuleSet version (e.g. 4.24.1 or v4.24.1) [required]")
+	flags.String("version", "", "CoreRuleSet version (e.g. 4.28.0 or v4.28.0) [required]")
 	_ = coreruleset.MarkFlagRequired("version")
 	flags.String("ignore-rules", "", "comma-separated rule IDs to drop")
 	flags.Bool("ignore-pmFromFile", false, "strip SecRule lines that use @pmFromFile")

@@ -11,13 +11,13 @@ import (
 
 func TestBuild_minimal_statsAndConfResults(t *testing.T) {
 	dir := filepath.Join("testdata", "minimal", "rules")
-	ver := mustParseCRSVersion(t, "4.24.1")
+	ver := mustParseCRSVersion(t, "4.28.0")
 	scan, err := Scan(dir)
 	require.NoError(t, err)
 
 	bundle, err := Build(Options{
 		RulesDir:       dir,
-		Version:        "4.24.1",
+		Version:        "4.28.0",
 		RuleSetName:    "default-ruleset",
 		DataSourceName: "coreruleset-data",
 	}, scan, ver)
@@ -37,7 +37,7 @@ func TestBuild_minimal_statsAndConfResults(t *testing.T) {
 	require.NotEmpty(t, bundle.ConfFileResults[1].YAML)
 	require.Equal(t, "simple", bundle.ConfFileResults[1].SourceName)
 
-	require.Contains(t, bundle.BaseRuleSourceYAML, "ver:'OWASP_CRS/4.24.1'")
+	require.Contains(t, bundle.BaseRuleSourceYAML, "ver:'OWASP_CRS/4.28.0'")
 	require.Contains(t, bundle.RuleSetDoc, "name: default-ruleset")
 	require.Contains(t, bundle.RuleSetDoc, "- name: base-rules")
 	require.Contains(t, bundle.RuleSetDoc, "- name: simple")
@@ -153,13 +153,13 @@ SecRule ARGS "@rx b" "id:200,phase:2,pass,nolog"
 `), 0o644)
 	require.NoError(t, err)
 
-	ver := mustParseCRSVersion(t, "4.24.1")
+	ver := mustParseCRSVersion(t, "4.28.0")
 	scan, err := Scan(tmp)
 	require.NoError(t, err)
 
 	bundle, err := Build(Options{
 		RulesDir:       tmp,
-		Version:        "4.24.1",
+		Version:        "4.28.0",
 		RuleSetName:    "default-ruleset",
 		DataSourceName: "coreruleset-data",
 		IgnoreRuleIDs:  map[string]struct{}{"100": {}},
@@ -223,13 +223,13 @@ func TestBuild_excludesUnsupportedRulesWithWASMProfile(t *testing.T) {
 			"SecRule ARGS \"@rx b\" \"id:42,phase:2,pass,nolog\"\n"), 0o644)
 	require.NoError(t, err)
 
-	ver := mustParseCRSVersion(t, "4.24.1")
+	ver := mustParseCRSVersion(t, "4.28.0")
 	scan, err := Scan(tmp)
 	require.NoError(t, err)
 
 	bundle, err := Build(Options{
 		RulesDir:               tmp,
-		Version:                "4.24.1",
+		Version:                "4.28.0",
 		RuleSetName:            "rs",
 		DataSourceName:         "ds",
 		IgnoreUnsupportedRules: "wasm",
@@ -249,13 +249,13 @@ func TestBuild_includesUnsupportedRulesWhenProfileNone(t *testing.T) {
 			"SecRule ARGS \"@rx b\" \"id:42,phase:2,pass,nolog\"\n"), 0o644)
 	require.NoError(t, err)
 
-	ver := mustParseCRSVersion(t, "4.24.1")
+	ver := mustParseCRSVersion(t, "4.28.0")
 	scan, err := Scan(tmp)
 	require.NoError(t, err)
 
 	bundle, err := Build(Options{
 		RulesDir:               tmp,
-		Version:                "4.24.1",
+		Version:                "4.28.0",
 		RuleSetName:            "rs",
 		DataSourceName:         "ds",
 		IgnoreUnsupportedRules: "none",
@@ -276,13 +276,13 @@ func TestBuild_profileMergesWithUserIgnoreIDs(t *testing.T) {
 			"SecRule ARGS \"@rx c\" \"id:99,phase:2,pass,nolog\"\n"), 0o644)
 	require.NoError(t, err)
 
-	ver := mustParseCRSVersion(t, "4.24.1")
+	ver := mustParseCRSVersion(t, "4.28.0")
 	scan, err := Scan(tmp)
 	require.NoError(t, err)
 
 	bundle, err := Build(Options{
 		RulesDir:               tmp,
-		Version:                "4.24.1",
+		Version:                "4.28.0",
 		RuleSetName:            "rs",
 		DataSourceName:         "ds",
 		IgnoreRuleIDs:          map[string]struct{}{"42": {}},
@@ -334,13 +334,13 @@ func TestBuild_unknownProfileSkipsRegistryMerge(t *testing.T) {
 	require.NoError(t, os.WriteFile(path, []byte(
 		"SecRule ARGS \"@rx a\" \"id:922110,phase:2,pass,nolog\"\n"), 0o644))
 
-	ver := mustParseCRSVersion(t, "4.24.1")
+	ver := mustParseCRSVersion(t, "4.28.0")
 	scan, err := Scan(tmp)
 	require.NoError(t, err)
 
 	bundle, err := Build(Options{
 		RulesDir:               tmp,
-		Version:                "4.24.1",
+		Version:                "4.28.0",
 		RuleSetName:            "rs",
 		DataSourceName:         "ds",
 		IgnoreUnsupportedRules: "ext_proc",
@@ -357,13 +357,13 @@ func TestBuild_emptyIgnoreUnsupportedRulesSkipsRegistryMerge(t *testing.T) {
 	require.NoError(t, os.WriteFile(path, []byte(
 		"SecRule ARGS \"@rx a\" \"id:922110,phase:2,pass,nolog\"\n"), 0o644))
 
-	ver := mustParseCRSVersion(t, "4.24.1")
+	ver := mustParseCRSVersion(t, "4.28.0")
 	scan, err := Scan(tmp)
 	require.NoError(t, err)
 
 	bundle, err := Build(Options{
 		RulesDir:       tmp,
-		Version:        "4.24.1",
+		Version:        "4.28.0",
 		RuleSetName:    "rs",
 		DataSourceName: "ds",
 	}, scan, ver)
@@ -380,13 +380,13 @@ func TestBuild_redundantTierWASMUnsupportedStripped(t *testing.T) {
 		"SecRule ARGS \"@rx a\" \"id:920100,phase:2,pass,nolog\"\n"+
 			"SecRule ARGS \"@rx b\" \"id:42,phase:2,pass,nolog\"\n"), 0o644))
 
-	ver := mustParseCRSVersion(t, "4.24.1")
+	ver := mustParseCRSVersion(t, "4.28.0")
 	scan, err := Scan(tmp)
 	require.NoError(t, err)
 
 	bundle, err := Build(Options{
 		RulesDir:               tmp,
-		Version:                "4.24.1",
+		Version:                "4.28.0",
 		RuleSetName:            "rs",
 		DataSourceName:         "ds",
 		IgnoreUnsupportedRules: "wasm",
@@ -405,13 +405,13 @@ func TestBuild_wasmProfileTrimmedAndCaseInsensitive(t *testing.T) {
 		"SecRule ARGS \"@rx a\" \"id:922110,phase:2,pass,nolog\"\n"+
 			"SecRule ARGS \"@rx b\" \"id:42,phase:2,pass,nolog\"\n"), 0o644))
 
-	ver := mustParseCRSVersion(t, "4.24.1")
+	ver := mustParseCRSVersion(t, "4.28.0")
 	scan, err := Scan(tmp)
 	require.NoError(t, err)
 
 	bundle, err := Build(Options{
 		RulesDir:               tmp,
-		Version:                "4.24.1",
+		Version:                "4.28.0",
 		RuleSetName:            "rs",
 		DataSourceName:         "ds",
 		IgnoreUnsupportedRules: "  WaSm  ",
@@ -429,13 +429,13 @@ func TestBuild_explicitSkipValidationRuleSourceAnnotation(t *testing.T) {
 	require.NoError(t, os.WriteFile(path, []byte(
 		"SecRule ARGS \"@rx a\" \"id:42,phase:2,pass,nolog\"\n"), 0o644))
 
-	ver := mustParseCRSVersion(t, "4.24.1")
+	ver := mustParseCRSVersion(t, "4.28.0")
 	scan, err := Scan(tmp)
 	require.NoError(t, err)
 
 	bundle, err := Build(Options{
 		RulesDir:                  tmp,
-		Version:                   "4.24.1",
+		Version:                   "4.28.0",
 		RuleSetName:               "rs",
 		DataSourceName:            "ds",
 		SkipValidationRuleSources: map[string]struct{}{"simple": {}},

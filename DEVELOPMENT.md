@@ -511,9 +511,9 @@ make helm.sync
 | `IMAGE_REGISTRY` | Registry and org prefix for all images | `ghcr.io/networking-incubator` |
 | `CONTROLLER_MANAGER_CONTAINER_IMAGE` | Full operator image reference | `$(IMAGE_REGISTRY)/coraza-kubernetes-operator:v0.0.0-dev` |
 | `KIND_CLUSTER_NAME` | KIND cluster name for tests | `coraza-kubernetes-operator-integration` |
-| `ISTIO_VERSION` | Istio version for deployment | `1.28.2` |
-| `METALLB_VERSION` | MetalLB version for KIND | `0.15.3` |
-| `CORERULESET_VERSION` | CoreRuleSet version | `v4.24.1` |
+| `ISTIO_VERSION` | Istio version for deployment | `1.30.3` |
+| `METALLB_VERSION` | MetalLB version for KIND | `0.16.1` |
+| `CORERULESET_VERSION` | CoreRuleSet version | `v4.28.0` |
 | `CORAZA_WASM_IMAGE` | WASM plugin image for tests | (See `test/framework/resources.go`) |
 | `NAMESPACE` | Target namespace for deployments | `default` |
 

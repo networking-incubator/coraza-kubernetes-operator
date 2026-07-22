@@ -21,7 +21,7 @@ KIND_CLUSTER_NAME ?= coraza-kubernetes-operator-integration
 # Default coraza matches kind + operator Helm in hack/kind_cluster.py. For OpenShift,
 # use openshift-gateway (match operator istio.revision) or empty for default-revision Istio.
 ISTIO_GATEWAY_REVISION ?= coraza
-ISTIO_VERSION ?= 1.28.2
+ISTIO_VERSION ?= 1.30.3
 # Pin kube-prometheus-stack chart version (https://artifacthub.io/packages/helm/prometheus-community/kube-prometheus-stack).
 # Override at install time: make observability.prometheus.deploy KUBE_PROM_STACK_VERSION=x.y.z
 KUBE_PROM_STACK_VERSION ?= 86.2.3
@@ -33,7 +33,7 @@ GRAFANA_ADMIN_PASSWORD ?= coraza-demo
 # Used by promtool in CI and: make observability.promtool.install
 PROM_VERSION ?= 3.12.0
 PROM_SHA256_LINUX_AMD64 ?= 20da47f8e5303f74aecb78edd7f7e39041dac08ac4939dba75efd7a900ae8867
-METALLB_VERSION ?= 0.15.3
+METALLB_VERSION ?= 0.16.1
 METALLB_POOL_SIZE ?= 128 # Defines the size of MetalLB pool, when being used
 
 VERSION ?= v0.0.0-dev
@@ -301,7 +301,7 @@ test.tools:
 # Coraza Coreruleset targets
 # -------------------------------------------------------------------------------
 
-CORERULESET_VERSION ?= v4.24.1
+CORERULESET_VERSION ?= v4.28.0
 LOCALRULES ?= $(shell pwd)/tmp/rules
 CORERULESET_DIR ?= $(shell pwd)/tmp/coreruleset
 TMP_DOWNLOAD_DIR ?= $(shell pwd)/tmp/download

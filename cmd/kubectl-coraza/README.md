@@ -17,7 +17,7 @@ kubectl coraza --version
 ```bash
 kubectl coraza generate coreruleset \
   --rules-dir /path/to/rules \
-  --version 4.24.1 \
+  --version 4.28.0 \
   [--namespace my-ns] \
   [--ruleset-name default-ruleset] \
   [flags...]
@@ -30,7 +30,7 @@ Reads `*.conf` and optional `*.data` from a single directory (non-recursive). Ou
 | Flag | Description |
 |------|-------------|
 | `--rules-dir` | Directory with `*.conf` / `*.data` (required) |
-| `--version` | CRS version, e.g. `4.24.1` (required) |
+| `--version` | CRS version, e.g. `4.28.0` (required) |
 | `-n`, `--namespace` | Set `metadata.namespace` on every object |
 | `--ruleset-name` | RuleSet name (default `default-ruleset`) |
 | `--data-source-name` | `RuleData` name for `*.data` files (default `coreruleset-data`) |
@@ -48,11 +48,11 @@ Reads `*.conf` and optional `*.data` from a single directory (non-recursive). Ou
 Generation logic lives in [`../../tools/corerulesetgen`](../../tools/corerulesetgen) and can be used directly without the kubectl wrapper.
 
 ```go
-ver, _ := corerulesetgen.ParseCRSVersion("4.24.1")
+ver, _ := corerulesetgen.ParseCRSVersion("4.28.0")
 scan, _ := corerulesetgen.Scan("/path/to/rules")
 bundle, _ := corerulesetgen.Build(corerulesetgen.Options{
     RulesDir:    "/path/to/rules",
-    Version:     "4.24.1",
+    Version:     "4.28.0",
     RuleSetName: "my-ruleset",
 }, scan, ver)
 corerulesetgen.WriteManifests(os.Stdout, bundle)

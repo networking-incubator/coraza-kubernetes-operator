@@ -38,7 +38,7 @@ import (
 func TestGenCRS_minimalFixture(t *testing.T) {
 	dir := testdataDir(t, "minimal")
 	cmd, stdout, _ := newTestCommand(t)
-	cmd.SetArgs([]string{"generate", "coreruleset", "--rules-dir", dir, "--version", "4.24.1"})
+	cmd.SetArgs([]string{"generate", "coreruleset", "--rules-dir", dir, "--version", "4.28.0"})
 
 	err := cmd.Execute()
 	require.NoError(t, err)
@@ -51,7 +51,7 @@ func TestGenCRS_minimalFixture(t *testing.T) {
 func TestGenCRS_ignoreRules(t *testing.T) {
 	dir := testdataDir(t, "minimal")
 	cmd, stdout, _ := newTestCommand(t)
-	cmd.SetArgs([]string{"generate", "coreruleset", "--rules-dir", dir, "--version", "4.24.1", "--ignore-rules", "100"})
+	cmd.SetArgs([]string{"generate", "coreruleset", "--rules-dir", dir, "--version", "4.28.0", "--ignore-rules", "100"})
 
 	err := cmd.Execute()
 	require.NoError(t, err)
@@ -62,7 +62,7 @@ func TestGenCRS_ignoreRules(t *testing.T) {
 func TestGenCRS_ignoreRulesMultiple(t *testing.T) {
 	dir := testdataDir(t, "minimal")
 	cmd, stdout, _ := newTestCommand(t)
-	cmd.SetArgs([]string{"generate", "coreruleset", "--rules-dir", dir, "--version", "4.24.1", "--ignore-rules", " 200 , 100 , "})
+	cmd.SetArgs([]string{"generate", "coreruleset", "--rules-dir", dir, "--version", "4.28.0", "--ignore-rules", " 200 , 100 , "})
 
 	err := cmd.Execute()
 	require.NoError(t, err)
@@ -73,7 +73,7 @@ func TestGenCRS_ignoreRulesMultiple(t *testing.T) {
 func TestGenCRS_ignoreRulesEmpty(t *testing.T) {
 	dir := testdataDir(t, "minimal")
 	cmd, _, stderr := newTestCommand(t)
-	cmd.SetArgs([]string{"generate", "coreruleset", "--rules-dir", dir, "--version", "4.24.1", "--ignore-rules", " , , "})
+	cmd.SetArgs([]string{"generate", "coreruleset", "--rules-dir", dir, "--version", "4.28.0", "--ignore-rules", " , , "})
 
 	err := cmd.Execute()
 	require.NoError(t, err)
@@ -84,7 +84,7 @@ func TestGenCRS_ignoreRulesEmpty(t *testing.T) {
 func TestGenCRS_ignoreRulesWritesToCmdStderr(t *testing.T) {
 	dir := testdataDir(t, "minimal")
 	cmd, _, stderr := newTestCommand(t)
-	cmd.SetArgs([]string{"generate", "coreruleset", "--rules-dir", dir, "--version", "4.24.1", "--ignore-rules", "100"})
+	cmd.SetArgs([]string{"generate", "coreruleset", "--rules-dir", dir, "--version", "4.28.0", "--ignore-rules", "100"})
 
 	err := cmd.Execute()
 	require.NoError(t, err)
@@ -98,7 +98,7 @@ func TestGenCRS_ignoreRulesWritesToCmdStderr(t *testing.T) {
 func TestGenCRS_dryRun(t *testing.T) {
 	dir := testdataDir(t, "minimal")
 	cmd, stdout, _ := newTestCommand(t)
-	cmd.SetArgs([]string{"generate", "coreruleset", "--rules-dir", dir, "--version", "4.24.1", "--dry-run", "client"})
+	cmd.SetArgs([]string{"generate", "coreruleset", "--rules-dir", dir, "--version", "4.28.0", "--dry-run", "client"})
 
 	err := cmd.Execute()
 	require.NoError(t, err)
@@ -110,7 +110,7 @@ func TestGenCRS_dryRun(t *testing.T) {
 func TestGenCRS_dryRunCaseInsensitive(t *testing.T) {
 	dir := testdataDir(t, "minimal")
 	cmd, stdout, _ := newTestCommand(t)
-	cmd.SetArgs([]string{"generate", "coreruleset", "--rules-dir", dir, "--version", "4.24.1", "--dry-run", " CLIENT "})
+	cmd.SetArgs([]string{"generate", "coreruleset", "--rules-dir", dir, "--version", "4.28.0", "--dry-run", " CLIENT "})
 
 	err := cmd.Execute()
 	require.NoError(t, err)
@@ -122,7 +122,7 @@ func TestGenCRS_dryRunCaseInsensitive(t *testing.T) {
 func TestGenCRS_namespace(t *testing.T) {
 	dir := testdataDir(t, "minimal")
 	cmd, stdout, _ := newTestCommand(t)
-	cmd.SetArgs([]string{"generate", "coreruleset", "--rules-dir", dir, "--version", "4.24.1", "-n", "waf-system"})
+	cmd.SetArgs([]string{"generate", "coreruleset", "--rules-dir", dir, "--version", "4.28.0", "-n", "waf-system"})
 
 	err := cmd.Execute()
 	require.NoError(t, err)
@@ -132,7 +132,7 @@ func TestGenCRS_namespace(t *testing.T) {
 func TestGenCRS_customRulesetName(t *testing.T) {
 	dir := testdataDir(t, "minimal")
 	cmd, stdout, _ := newTestCommand(t)
-	cmd.SetArgs([]string{"generate", "coreruleset", "--rules-dir", dir, "--version", "4.24.1", "--ruleset-name", "my-ruleset"})
+	cmd.SetArgs([]string{"generate", "coreruleset", "--rules-dir", dir, "--version", "4.28.0", "--ruleset-name", "my-ruleset"})
 
 	err := cmd.Execute()
 	require.NoError(t, err)
@@ -144,7 +144,7 @@ func TestGenCRS_customRulesetName(t *testing.T) {
 
 func TestGenCRS_invalidRulesDir(t *testing.T) {
 	cmd, _, _ := newTestCommand(t)
-	cmd.SetArgs([]string{"generate", "coreruleset", "--rules-dir", "/nonexistent/path", "--version", "4.24.1"})
+	cmd.SetArgs([]string{"generate", "coreruleset", "--rules-dir", "/nonexistent/path", "--version", "4.28.0"})
 
 	err := cmd.Execute()
 	require.Error(t, err)
@@ -162,7 +162,7 @@ func TestGenCRS_invalidVersion(t *testing.T) {
 func TestGenCRS_invalidRulesetName(t *testing.T) {
 	dir := testdataDir(t, "minimal")
 	cmd, _, _ := newTestCommand(t)
-	cmd.SetArgs([]string{"generate", "coreruleset", "--rules-dir", dir, "--version", "4.24.1", "--ruleset-name", "INVALID NAME!"})
+	cmd.SetArgs([]string{"generate", "coreruleset", "--rules-dir", dir, "--version", "4.28.0", "--ruleset-name", "INVALID NAME!"})
 
 	err := cmd.Execute()
 	require.Error(t, err)
@@ -192,7 +192,7 @@ func TestGenCRS_excludesUnsupportedByDefault(t *testing.T) {
 			"SecRule ARGS \"@rx b\" \"id:42,phase:2,pass,nolog\"\n"), 0o644))
 
 	cmd, stdout, _ := newTestCommand(t)
-	cmd.SetArgs([]string{"generate", "coreruleset", "--rules-dir", dir, "--version", "4.24.1"})
+	cmd.SetArgs([]string{"generate", "coreruleset", "--rules-dir", dir, "--version", "4.28.0"})
 
 	require.NoError(t, cmd.Execute())
 	assert.NotContains(t, stdout.String(), "id:922110,")
@@ -207,7 +207,7 @@ func TestGenCRS_ignoreUnsupportedRulesNone(t *testing.T) {
 			"SecRule ARGS \"@rx b\" \"id:42,phase:2,pass,nolog\"\n"), 0o644))
 
 	cmd, stdout, _ := newTestCommand(t)
-	cmd.SetArgs([]string{"generate", "coreruleset", "--rules-dir", dir, "--version", "4.24.1", "--ignore-unsupported-rules=none"})
+	cmd.SetArgs([]string{"generate", "coreruleset", "--rules-dir", dir, "--version", "4.28.0", "--ignore-unsupported-rules=none"})
 
 	require.NoError(t, cmd.Execute())
 	assert.Contains(t, stdout.String(), "id:922110,")
@@ -222,7 +222,7 @@ func TestGenCRS_ignoreUnsupportedRulesExplicitWASM(t *testing.T) {
 			"SecRule ARGS \"@rx b\" \"id:42,phase:2,pass,nolog\"\n"), 0o644))
 
 	cmd, stdout, _ := newTestCommand(t)
-	cmd.SetArgs([]string{"generate", "coreruleset", "--rules-dir", dir, "--version", "4.24.1", "--ignore-unsupported-rules=wasm"})
+	cmd.SetArgs([]string{"generate", "coreruleset", "--rules-dir", dir, "--version", "4.28.0", "--ignore-unsupported-rules=wasm"})
 
 	require.NoError(t, cmd.Execute())
 	assert.NotContains(t, stdout.String(), "id:922110,")
@@ -236,7 +236,7 @@ func TestGenCRS_unknownIgnoreUnsupportedProfileKeepsRegistryRule(t *testing.T) {
 		"SecRule ARGS \"@rx a\" \"id:922110,phase:2,pass,nolog\"\n"), 0o644))
 
 	cmd, stdout, _ := newTestCommand(t)
-	cmd.SetArgs([]string{"generate", "coreruleset", "--rules-dir", dir, "--version", "4.24.1", "--ignore-unsupported-rules=ext_proc"})
+	cmd.SetArgs([]string{"generate", "coreruleset", "--rules-dir", dir, "--version", "4.28.0", "--ignore-unsupported-rules=ext_proc"})
 
 	require.NoError(t, cmd.Execute())
 	assert.Contains(t, stdout.String(), "id:922110,", "unknown profile should not apply WASM registry until implemented")
@@ -249,7 +249,7 @@ func TestGenCRS_ignoreUnsupportedRulesWASMAllowsMixedCase(t *testing.T) {
 		"SecRule ARGS \"@rx a\" \"id:922110,phase:2,pass,nolog\"\n"), 0o644))
 
 	cmd, stdout, _ := newTestCommand(t)
-	cmd.SetArgs([]string{"generate", "coreruleset", "--rules-dir", dir, "--version", "4.24.1", "--ignore-unsupported-rules=WaSm"})
+	cmd.SetArgs([]string{"generate", "coreruleset", "--rules-dir", dir, "--version", "4.28.0", "--ignore-unsupported-rules=WaSm"})
 
 	require.NoError(t, cmd.Execute())
 	assert.NotContains(t, stdout.String(), "id:922110,")
@@ -265,7 +265,7 @@ func TestGenCRS_skipValidationRuleSourceFlag(t *testing.T) {
 	cmd.SetArgs([]string{
 		"generate", "coreruleset",
 		"--rules-dir", dir,
-		"--version", "4.24.1",
+		"--version", "4.28.0",
 		"--skip-validation-rulesource=patch",
 	})
 
@@ -284,7 +284,7 @@ func TestGenCRS_missingRequiredFlags(t *testing.T) {
 func TestGenCRS_versionWithPrefix(t *testing.T) {
 	dir := testdataDir(t, "minimal")
 	cmd, stdout, _ := newTestCommand(t)
-	cmd.SetArgs([]string{"generate", "coreruleset", "--rules-dir", dir, "--version", "v4.24.1"})
+	cmd.SetArgs([]string{"generate", "coreruleset", "--rules-dir", dir, "--version", "v4.28.0"})
 
 	err := cmd.Execute()
 	require.NoError(t, err)
@@ -297,7 +297,7 @@ func TestGenCRS_generatedManifestsParseAsYAML(t *testing.T) {
 		fixture string
 		version string
 	}{
-		{"minimal", "minimal", "4.24.1"},
+		{"minimal", "minimal", "4.28.0"},
 		{"withRuleData", "withdata", "4.0.0"},
 	}
 	for _, tc := range cases {

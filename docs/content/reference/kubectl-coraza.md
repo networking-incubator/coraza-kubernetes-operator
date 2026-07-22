@@ -38,7 +38,7 @@ Generate **RuleSource** resources (one per `*.conf` file), an optional **RuleDat
 | Flag | Description |
 |------|-------------|
 | `--rules-dir` | Directory containing CoreRuleSet `*.conf` and optional `*.data` files. The directory is not traversed recursively. |
-| `--version` | CoreRuleSet version (e.g., `4.24.1` or `v4.24.1`). The leading `v` is normalized automatically. |
+| `--version` | CoreRuleSet version (e.g., `4.28.0` or `v4.28.0`). The leading `v` is normalized automatically. |
 
 #### Optional Flags
 
@@ -71,7 +71,7 @@ Generate rules with default settings:
 ```bash
 kubectl coraza generate coreruleset \
   --rules-dir /path/to/coreruleset/rules \
-  --version 4.24.1
+  --version 4.28.0
 ```
 
 Generate rules for a specific namespace, excluding certain rule IDs:
@@ -79,7 +79,7 @@ Generate rules for a specific namespace, excluding certain rule IDs:
 ```bash
 kubectl coraza generate coreruleset \
   --rules-dir /path/to/coreruleset/rules \
-  --version 4.24.1 \
+  --version 4.28.0 \
   --namespace production \
   --ignore-rules 949110,980130
 ```
@@ -89,7 +89,7 @@ Generate rules without `@pmFromFile` directives:
 ```bash
 kubectl coraza generate coreruleset \
   --rules-dir /path/to/coreruleset/rules \
-  --version 4.24.1 \
+  --version 4.28.0 \
   --ignore-pmFromFile
 ```
 
@@ -98,6 +98,6 @@ Preview output without applying:
 ```bash
 kubectl coraza generate coreruleset \
   --rules-dir /path/to/coreruleset/rules \
-  --version 4.24.1 \
+  --version 4.28.0 \
   --dry-run=client
 ```

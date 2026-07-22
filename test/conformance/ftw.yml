@@ -77,6 +77,16 @@ testoverride:
     '932300-10': 'CORAZA BUG: Failing only with multiphase evaluation'
     '933120-2': 'CORAZA BUG: Failing only with multiphase evaluation'
 
+    # CRS 4.28 Regressions - Coraza 3.7.0 + CRS 4.28.0 (7 tests)
+    # See: https://github.com/corazawaf/coraza-proxy-wasm/blob/main/ftw/ftw.yml
+    '920540-4': 'CORAZA/WASM BUG: Log target not formatted as ARGS:<name>'
+    '920540-5': 'CORAZA/WASM BUG: REQBODY_PROCESSOR not set to JSON for empty-body JSON requests, ctl:ruleRemoveById=920540 never triggers'
+    '931130-24': 'CORAZA/WASM BUG: Log target not formatted as ARGS:<name>'
+    '941310-1': 'CORAZA/WASM BUG: Raw non-ASCII bytes in body not matched by RE2-based regex engine (requires valid UTF-8 rune matching)'
+    '941310-3': 'CORAZA/WASM BUG: Raw non-ASCII bytes in body not matched by RE2-based regex engine (requires valid UTF-8 rune matching)'
+    '941310-12': 'CORAZA/WASM BUG: Raw non-ASCII bytes in body not matched by RE2-based regex engine (requires valid UTF-8 rune matching)'
+    '941310-13': 'CORAZA/WASM BUG: XML attribute values (XML://@*) not inspected - added in CRS 4.28 GHSA-6jp8 fix'
+
     # ---------------------------------------------------------------------------
     # CATEGORY 4: UNDER INVESTIGATION - Edge cases and behavioral differences
     # These tests may be fixable or may be acceptable differences
@@ -120,9 +130,9 @@ testoverride:
     '980170-3': 'INVESTIGATE: retry_once mechanism not working in environment'
 
     # =============================================================================
-    # Summary of Ignored Tests by Category (Total: 53 tests):
+    # Summary of Ignored Tests by Category (Total: 60 tests):
     #
-    # NOTE: 42 ENHANCED SECURITY tests moved to .ftw-overrides.yml as platform
+    # NOTE: 43 ENHANCED SECURITY tests moved to .ftw-overrides.yml as platform
     # overrides (they now run with adjusted expectations instead of being skipped).
     #
     # CATEGORY 2: TOOL LIMITATION (21 tests)
@@ -130,12 +140,13 @@ testoverride:
     #   - Multipart charset detection: 17 tests
     #   - PL4 false positives: 4 tests
     #
-    # CATEGORY 3: CORAZA/WASM ISSUES (13 tests)
+    # CATEGORY 3: CORAZA/WASM ISSUES (20 tests)
     #   - Bugs that need fixing in Coraza or coraza-proxy-wasm
     #   - GET/HEAD with body: 2 tests
     #   - Protocol version: 4 tests
     #   - Enclosed alphanumerics: 5 tests
     #   - Multiphase evaluation: 2 tests
+    #   - CRS 4.28 regressions (log target formatting, RE2/XML): 7 tests
     #
     # CATEGORY 4: UNDER INVESTIGATION (19 tests)
     #   - Edge cases, behavioral differences, needs investigation
@@ -148,5 +159,5 @@ testoverride:
     #   - PL4 false positives: 2 tests
     #   - retry_once: 5 tests
     #
-    # Test Pass Rate: ~98% (53 ignored + 42 overridden out of ~4,600 total tests)
+    # Test Pass Rate: ~98% (60 ignored + 43 overridden out of ~4,600 total tests)
     # =============================================================================

@@ -250,3 +250,11 @@ test_overrides:
       status: 200
       log:
         no_expect_ids: [942280]
+
+  - rule_id: 932390
+    test_ids: [9]
+    reason: "Referer header sanitized by Envoy (invalid characters removed)"
+    output:
+      status: 200
+      log:
+        no_expect_ids: [932390]

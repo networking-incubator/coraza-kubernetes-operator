@@ -27,7 +27,7 @@ type CRSVersion struct {
 	Setup      string
 }
 
-// ParseCRSVersion parses a CoreRuleSet version (e.g. "4.24.1" or "v4.24.1").
+// ParseCRSVersion parses a CoreRuleSet version (e.g. "4.28.0" or "v4.28.0").
 func ParseCRSVersion(v string) (CRSVersion, error) {
 	norm, setup, err := normalizeCRSVersion(v)
 	if err != nil {
@@ -39,7 +39,7 @@ func ParseCRSVersion(v string) (CRSVersion, error) {
 func normalizeCRSVersion(v string) (normalized, setupDigits string, err error) {
 	normalized = strings.TrimPrefix(strings.TrimSpace(v), "v")
 	if !validVersionRe.MatchString(normalized) {
-		return "", "", fmt.Errorf("invalid CoreRuleSet version format %q: expected digits and dots (e.g. 4.24.1 or v4.24.1)", v)
+		return "", "", fmt.Errorf("invalid CoreRuleSet version format %q: expected digits and dots (e.g. 4.28.0 or v4.28.0)", v)
 	}
 	setupDigits = strings.ReplaceAll(normalized, ".", "")
 	return normalized, setupDigits, nil

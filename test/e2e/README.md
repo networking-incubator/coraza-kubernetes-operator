@@ -21,7 +21,7 @@ behavior (reconciliation, status updates).
 # Kind cluster
 make test.e2e \
   KIND_CLUSTER_NAME=coraza-kubernetes-operator-integration \
-  ISTIO_VERSION=1.28.2
+  ISTIO_VERSION=1.30.3
 
 # OpenShift (override default GatewayClass)
 GATEWAY_CLASS=openshift-default make test.e2e
