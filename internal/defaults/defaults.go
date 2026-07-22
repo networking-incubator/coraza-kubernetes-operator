@@ -20,4 +20,4 @@ package defaults
 // DefaultCorazaWasmOCIReference is the built-in default OCI URL for the Coraza WASM
 // plugin when an Engine omits spec.driver.wasm.image. Override at runtime via
 // --default-wasm-image, CORAZA_DEFAULT_WASM_IMAGE, or per-Engine spec.
-const DefaultCorazaWasmOCIReference = "oci://ghcr.io/networking-incubator/coraza-proxy-wasm:9ca29e4f4cf3a8c1710a7ed7a8ec399b56cb7296"
+const DefaultCorazaWasmOCIReference = "oci://ghcr.io/networking-incubator/coraza-proxy-wasm:64800ac102924d1205097ba6efc95fbd5a99f9d3"
