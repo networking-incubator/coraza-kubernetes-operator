@@ -315,7 +315,7 @@ func downloadIstioCRDs() (string, error) {
 func downloadGatewayAPICRDs() (string, error) {
 	// Use the standard Gateway API CRDs. The version should be compatible with
 	// the Istio version used in tests.
-	const gatewayAPICRDURL = "https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.2.1/standard-install.yaml"
+	const gatewayAPICRDURL = "https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.6.1/standard-install.yaml"
 
 	tmpDir, err := os.MkdirTemp("", "gateway-api-crds-*")
 	if err != nil {

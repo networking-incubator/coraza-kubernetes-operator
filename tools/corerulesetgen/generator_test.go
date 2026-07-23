@@ -16,7 +16,7 @@ func TestGenerate_minimalFixture(t *testing.T) {
 	var errBuf bytes.Buffer
 	_, err := Generate(&out, Options{
 		RulesDir: filepath.Join(dir, "rules"),
-		Version:  "4.24.1",
+		Version:  "4.28.0",
 		Stderr:   &errBuf,
 	})
 	require.NoError(t, err)
@@ -45,14 +45,14 @@ func TestGenerate_withDataSource(t *testing.T) {
 func TestBuildPipeline_minimalFixture(t *testing.T) {
 	dir := filepath.Join("testdata", "minimal")
 	rulesPath := filepath.Join(dir, "rules")
-	ver, err := ParseCRSVersion("4.24.1")
+	ver, err := ParseCRSVersion("4.28.0")
 	require.NoError(t, err)
 	scan, err := Scan(rulesPath)
 	require.NoError(t, err)
 
 	bundle, err := Build(Options{
 		RulesDir:       rulesPath,
-		Version:        "4.24.1",
+		Version:        "4.28.0",
 		RuleSetName:    "default-ruleset",
 		DataSourceName: "coreruleset-data",
 	}, scan, ver)
@@ -95,7 +95,7 @@ func TestGenerate_ignoreRuleID(t *testing.T) {
 	var out bytes.Buffer
 	_, err := Generate(&out, Options{
 		RulesDir:      dir,
-		Version:       "4.24.1",
+		Version:       "4.28.0",
 		IgnoreRuleIDs: map[string]struct{}{"100": {}},
 		Stderr:        io.Discard,
 	})
@@ -104,10 +104,10 @@ func TestGenerate_ignoreRuleID(t *testing.T) {
 }
 
 func TestParseCRSVersion(t *testing.T) {
-	ver, err := ParseCRSVersion("v4.24.1")
+	ver, err := ParseCRSVersion("v4.28.0")
 	require.NoError(t, err)
-	require.Equal(t, "4.24.1", ver.Normalized)
-	require.Equal(t, "4241", ver.Setup)
+	require.Equal(t, "4.28.0", ver.Normalized)
+	require.Equal(t, "4280", ver.Setup)
 
 	_, err = ParseCRSVersion("not-a-version")
 	require.Error(t, err)

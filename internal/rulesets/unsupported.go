@@ -33,7 +33,7 @@ import (
 var ruleIDPattern = regexp.MustCompile(`\bid:['"]?(\d+)['"]?`)
 
 // unsupportedRules is the registry of all known unsupported rule IDs.
-// Coupled to CoreRuleSet v4.24.1 (source: LIMITATIONS.md, test/conformance/ftw.yml).
+// Coupled to CoreRuleSet v4.28.0 (source: LIMITATIONS.md, test/conformance/ftw.yml).
 var unsupportedRules = buildRegistry()
 
 // -----------------------------------------------------------------------------
@@ -197,6 +197,14 @@ func buildRegistry() map[int]UnsupportedRule {
 		Description: "fails with multiphase evaluation enabled (Coraza bug)",
 	}
 
+	// CRS 4.28 regressions (Coraza 3.7.0 + CRS 4.28.0)
+	r[941310] = UnsupportedRule{
+		ID:          941310,
+		Category:    "regex/XML attribute inspection",
+		Tier:        TierIncompatible,
+		Description: "raw non-ASCII bytes in body not matched by RE2-based regex engine, and XML attribute values (XML://@*) not inspected (Coraza bug, CRS 4.28 GHSA-6jp8 fix)",
+	}
+
 	// -------------------------------------------------------------------------
 	// Under Investigation - incompatible rules with unclear cause
 	// -------------------------------------------------------------------------
@@ -258,7 +266,7 @@ func buildRegistry() map[int]UnsupportedRule {
 	}
 
 	// Header sanitization: Envoy sanitizes malicious payloads in headers.
-	for _, id := range []int{932161, 932207, 932237, 932239, 941101, 941110, 941120, 942280} {
+	for _, id := range []int{932161, 932207, 932237, 932239, 932390, 941101, 941110, 941120, 942280} {
 		r[id] = UnsupportedRule{
 			ID:          id,
 			Category:    "header sanitization",

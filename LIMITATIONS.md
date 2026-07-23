@@ -25,18 +25,18 @@ Both tiers are rejected by default. For the complete list of affected rule IDs, 
 
 ## Overview
 
-Out of approximately 4,600 CoreRuleSet conformance tests, 53 tests are currently ignored and 42 are overridden with adjusted expectations, resulting in a ~98% pass rate. These fall into four categories:
+Out of approximately 4,600 CoreRuleSet conformance tests, 60 tests are currently ignored and 43 are overridden with adjusted expectations, resulting in a ~98% pass rate. These fall into four categories:
 
 | Category | Tests | Type | Impact |
 |----------|-------|------|--------|
-| Enhanced Security | 42 | Overridden | Positive - Envoy provides additional protection |
+| Enhanced Security | 43 | Overridden | Positive - Envoy provides additional protection |
 | Tool Limitations | 21 | Ignored | Requires alternative controls or monitoring |
-| Coraza/WASM Bugs | 13 | Ignored | Requires fixes in Coraza or coraza-proxy-wasm |
+| Coraza/WASM Bugs | 20 | Ignored | Requires fixes in Coraza or coraza-proxy-wasm |
 | Under Investigation | 19 | Ignored | Requires further analysis |
 
 ---
 
-## Enhanced Security (42 overridden tests)
+## Enhanced Security (43 overridden tests)
 
 These tests are overridden with adjusted expectations (in `.ftw-overrides.yml`) rather than ignored. Envoy blocks or sanitizes attacks before they reach the WAF. This represents defense-in-depth, not a security gap.
 
@@ -61,11 +61,11 @@ Envoy normalizes missing or empty HTTP headers during HTTP/2 processing to enfor
 
 **Impact:** Positive. Ensures protocol compliance and prevents attacks relying on missing headers.
 
-### Malicious Header Sanitization (20 tests)
+### Malicious Header Sanitization (21 tests)
 
 Envoy sanitizes HTTP headers containing malicious payloads (XSS, SQLi, RCE) before they reach the WAF.
 
-**Affected rules:** 932161, 932207, 932237, 932239, 941101, 941110, 941120, 942280
+**Affected rules:** 932161, 932207, 932237, 932239, 932390, 941101, 941110, 941120, 942280
 
 **Examples:**
 - Referer headers with invalid characters: Removed
@@ -117,7 +117,7 @@ Paranoia Level 4 generates false positives due to Envoy populating the `:path` p
 
 ---
 
-## Coraza/WASM Bugs (13 tests)
+## Coraza/WASM Bugs (20 tests)
 
 These issues should be fixed in Coraza or coraza-proxy-wasm.
 
@@ -153,6 +153,20 @@ Some rules fail only when multiphase evaluation is enabled.
 
 **Impact:** RCE and PHP injection attacks may bypass detection with multiphase evaluation.
 
+### CRS 4.28 Regressions (7 tests)
+
+New CRS 4.28.0 rules and rule updates introduced test failures against Coraza 3.7.0 that require investigation.
+
+**Affected rules:** 920540, 931130, 941310
+
+**Examples:**
+- Log target not formatted as `ARGS:<name>` (920540, 931130)
+- `REQBODY_PROCESSOR` not set to JSON for empty-body JSON requests, so `ctl:ruleRemoveById=920540` never triggers (920540)
+- Raw non-ASCII bytes in the request body not matched by `\x{bc}`/`\x{be}` against the RE2-based regex engine, which requires valid UTF-8 rune matching (941310)
+- XML attribute values (`XML://@*`) not inspected — added in the CRS 4.28 GHSA-6jp8 fix (941310)
+
+**Impact:** Attack patterns using non-ASCII byte sequences or XML attribute injection may bypass detection. The log-target formatting issues do not affect blocking behavior, only anomaly-log accuracy.
+
 ---
 
 ## Under Investigation (19 tests)
@@ -172,11 +186,11 @@ These require further analysis to determine appropriate action:
 
 ## Version Information
 
-- **Coraza**: v3.6.0
-- **CoreRuleSet**: v4.24.1
+- **Coraza**: v3.7.0
+- **CoreRuleSet**: v4.28.0
 - **Envoy/Istio**: WASM filter environment
 - **coraza-proxy-wasm**: Latest
-- **Documentation Date**: 2026-04-16
-- **Test Coverage**: ~98% pass rate (53 ignored + 42 overridden / ~4,600 total)
+- **Documentation Date**: 2026-07-22
+- **Test Coverage**: ~98% pass rate (60 ignored + 43 overridden / ~4,600 total)
 
 For configuration details of ignored tests, see [test/conformance/ftw.yml](test/conformance/ftw.yml).

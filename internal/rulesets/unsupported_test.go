@@ -31,9 +31,9 @@ func TestRegistryCompleteness(t *testing.T) {
 	total := len(incompatible) + len(redundant)
 
 	assert.Equal(t, total, len(unsupportedRules), "total registry size should equal sum of tiers")
-	assert.Len(t, incompatible, 16, "incompatible tier count")
-	assert.Len(t, redundant, 21, "redundant tier count")
-	assert.Equal(t, 37, total, "total unsupported rules")
+	assert.Len(t, incompatible, 17, "incompatible tier count")
+	assert.Len(t, redundant, 22, "redundant tier count")
+	assert.Equal(t, 39, total, "total unsupported rules")
 }
 
 func TestAllUnsupportedRuleIDs(t *testing.T) {
@@ -82,6 +82,7 @@ func TestCheckUnsupportedRules_CorazaWASMBugs(t *testing.T) {
 		934120: "enclosed alphanumerics HTTP/2",
 		932300: "multiphase evaluation",
 		933120: "multiphase evaluation",
+		941310: "regex/XML attribute inspection",
 	}
 
 	for id, expectedCategory := range bugIDs {
@@ -146,7 +147,7 @@ func TestCheckUnsupportedRules_HTTP2Normalization(t *testing.T) {
 }
 
 func TestCheckUnsupportedRules_HeaderSanitization(t *testing.T) {
-	for _, id := range []int{932161, 932207, 932237, 932239, 941101, 941110, 941120, 942280} {
+	for _, id := range []int{932161, 932207, 932237, 932239, 932390, 941101, 941110, 941120, 942280} {
 		t.Run(fmt.Sprintf("rule_%d", id), func(t *testing.T) {
 			found := CheckUnsupportedRules(secRuleWithID(id))
 			require.Len(t, found, 1)

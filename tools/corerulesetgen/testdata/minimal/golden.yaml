@@ -69,7 +69,7 @@ spec:
      t:none,\
      nolog,\
      tag:'OWASP_CRS',\
-     ver:'OWASP_CRS/4.24.1',\
+     ver:'OWASP_CRS/4.28.0',\
      setvar:tx.early_blocking=1"
     SecAction \
      "id:900990,\
@@ -78,8 +78,8 @@ spec:
      t:none,\
      nolog,\
      tag:'OWASP_CRS',\
-     ver:'OWASP_CRS/4.24.1',\
-     setvar:tx.crs_setup_version=4241"
+     ver:'OWASP_CRS/4.28.0',\
+     setvar:tx.crs_setup_version=4280"
 ---
 apiVersion: waf.k8s.coraza.io/v1alpha1
 kind: RuleSource

@@ -20,12 +20,12 @@ make manifests generate helm.sync  # Regenerate CRDs, RBAC, and sync to Helm cha
 
 Run a single unit test:
 ```bash
-ISTIO_VERSION=1.28.2 go test -v -run TestMyFunction ./internal/controller/...
+ISTIO_VERSION=1.30.3 go test -v -run TestMyFunction ./internal/controller/...
 ```
 
 Verify test files compile (go build silently ignores `_test.go`):
 ```bash
-ISTIO_VERSION=1.28.2 go test -run ^$ ./...
+ISTIO_VERSION=1.30.3 go test -run ^$ ./...
 ```
 
 ### Test tiers (require build tags and a cluster)
