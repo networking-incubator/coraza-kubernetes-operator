@@ -44,7 +44,7 @@ type ManifestBundle struct {
 func Build(opts Options, scan ScanResult, ver CRSVersion) (*ManifestBundle, error) {
 	opts = mergeUnsupportedIDs(opts)
 
-	baseYAML, baseRulesScalar := baseRulesYAML(ver.Normalized, ver.Setup, opts.IncludeTestRule)
+	baseYAML, baseRulesScalar := baseRulesYAML(ver, opts)
 	baseYAML = injectNamespaceInBaseRuleSourceYAML(baseYAML, opts.Namespace)
 	if err := checkPayloadSize(baseRulesScalar, "base-rules", opts); err != nil {
 		return nil, err

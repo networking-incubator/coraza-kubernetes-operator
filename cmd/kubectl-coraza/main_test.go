@@ -142,6 +142,26 @@ func TestGenCRS_customRulesetName(t *testing.T) {
 	assert.Contains(t, output, "kind: RuleSet")
 }
 
+func TestGenCRS_secRxPreFilterFlag(t *testing.T) {
+	dir := testdataDir(t, "minimal")
+	cmd, stdout, _ := newTestCommand(t)
+	cmd.SetArgs([]string{"generate", "coreruleset", "--rules-dir", dir, "--version", "4.28.0", "--sec-rx-pre-filter"})
+
+	err := cmd.Execute()
+	require.NoError(t, err)
+	assert.Contains(t, stdout.String(), "SecRxPreFilter On")
+}
+
+func TestGenCRS_noSecRxPreFilterFlagOmitsDirective(t *testing.T) {
+	dir := testdataDir(t, "minimal")
+	cmd, stdout, _ := newTestCommand(t)
+	cmd.SetArgs([]string{"generate", "coreruleset", "--rules-dir", dir, "--version", "4.28.0"})
+
+	err := cmd.Execute()
+	require.NoError(t, err)
+	assert.NotContains(t, stdout.String(), "SecRxPreFilter")
+}
+
 func TestGenCRS_invalidRulesDir(t *testing.T) {
 	cmd, _, _ := newTestCommand(t)
 	cmd.SetArgs([]string{"generate", "coreruleset", "--rules-dir", "/nonexistent/path", "--version", "4.28.0"})
@@ -368,6 +388,7 @@ func newTestCommand(t *testing.T) (*cobra.Command, *bytes.Buffer, *bytes.Buffer)
 	flags.String("ignore-rules", "", "")
 	flags.Bool("ignore-pmFromFile", false, "")
 	flags.Bool("include-test-rule", false, "")
+	flags.Bool("sec-rx-pre-filter", false, "")
 	flags.String("ruleset-name", "default-ruleset", "")
 	flags.StringP("namespace", "n", "", "")
 	flags.String("data-source-name", "coreruleset-data", "")

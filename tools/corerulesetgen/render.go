@@ -21,7 +21,12 @@ func injectNamespaceInBaseRuleSourceYAML(doc, ns string) string {
 }
 
 // baseRulesYAML returns the base-rules RuleSource document and the rules scalar (for size checks only).
-func baseRulesYAML(normalizedVersion, crsSetupVersion string, includeTest bool) (yamlDoc string, rulesScalar string) {
+func baseRulesYAML(ver CRSVersion, opts Options) (yamlDoc string, rulesScalar string) {
+	normalizedVersion, crsSetupVersion := ver.Normalized, ver.Setup
+	secRxPreFilterLine := ""
+	if opts.SecRxPreFilter {
+		secRxPreFilterLine = "\n    SecRxPreFilter On"
+	}
 	inner := fmt.Sprintf(`    SecRuleEngine On
     SecRequestBodyAccess On
     SecRequestBodyLimit 13107200
@@ -97,18 +102,18 @@ func baseRulesYAML(normalizedVersion, crsSetupVersion string, includeTest bool) 
      nolog,\
      tag:'OWASP_CRS',\
      ver:'OWASP_CRS/%s',\
-     setvar:tx.crs_setup_version=%s"
-`, normalizedVersion, normalizedVersion, crsSetupVersion)
+     setvar:tx.crs_setup_version=%s"%s
+`, normalizedVersion, normalizedVersion, crsSetupVersion, secRxPreFilterLine)
 	inner = strings.TrimRight(inner, "\n")
 
 	body := "apiVersion: waf.k8s.coraza.io/v1alpha1\nkind: RuleSource\nmetadata:\n  name: base-rules\nspec:\n  rules: |\n" + inner
 	s := strings.TrimRight(body, "\n")
-	if includeTest {
+	if opts.IncludeTestRule {
 		s += "\n" + xCRSTestBlock
 	}
 
 	rulesScalar = inner + "\n"
-	if includeTest {
+	if opts.IncludeTestRule {
 		rulesScalar += xCRSTestBlock + "\n"
 	}
 	return s, rulesScalar

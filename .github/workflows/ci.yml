@@ -216,10 +216,19 @@ jobs:
         run: make observability.dashboard.validate
 
   conformance-tests:
-    name: Coreruleset conformance test
+    name: Coreruleset conformance test (${{ matrix.name }})
     runs-on: ubuntu-latest
     timeout-minutes: 20
     needs: [build]
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        include:
+          - name: default
+            experimental-flags: ""
+          - name: sec-rx-pre-filter
+            experimental-flags: "--sec-rx-pre-filter"
     steps:
       - name: checkout code
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -269,6 +278,7 @@ jobs:
         env:
           KIND_CLUSTER_NAME: coraza-kubernetes-operator-integration
           CONFORMANCE_EXTRA_FLAGS: OUTPUT_FORMAT=github
+          CORAZA_EXPERIMENTAL_FLAGS: ${{ matrix.experimental-flags }}
 
   integration-tests:
     name: integration tests

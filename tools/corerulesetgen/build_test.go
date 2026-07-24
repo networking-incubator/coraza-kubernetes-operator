@@ -106,6 +106,41 @@ func TestBuild_includeTestRuleAddsTestBlock(t *testing.T) {
 	require.Contains(t, bundle.BaseRuleSourceYAML, "X-CRS-Test")
 }
 
+func TestBuild_secRxPreFilterAddsDirective(t *testing.T) {
+	tmp := t.TempDir()
+	ver := mustParseCRSVersion(t, "4.0.0")
+	scan, err := Scan(tmp)
+	require.NoError(t, err)
+
+	bundle, err := Build(Options{
+		RulesDir:       tmp,
+		Version:        "4.0.0",
+		SecRxPreFilter: true,
+		RuleSetName:    "rs",
+		DataSourceName: "coreruleset-data",
+	}, scan, ver)
+	require.NoError(t, err)
+
+	require.Contains(t, bundle.BaseRuleSourceYAML, "SecRxPreFilter On")
+}
+
+func TestBuild_noSecRxPreFilterFlagOmitsDirective(t *testing.T) {
+	tmp := t.TempDir()
+	ver := mustParseCRSVersion(t, "4.0.0")
+	scan, err := Scan(tmp)
+	require.NoError(t, err)
+
+	bundle, err := Build(Options{
+		RulesDir:       tmp,
+		Version:        "4.0.0",
+		RuleSetName:    "rs",
+		DataSourceName: "coreruleset-data",
+	}, scan, ver)
+	require.NoError(t, err)
+
+	require.NotContains(t, bundle.BaseRuleSourceYAML, "SecRxPreFilter")
+}
+
 func TestBuild_withDataFiles_emitsDataRuleSource(t *testing.T) {
 	rulesPath := filepath.Join("testdata", "withdata", "rules")
 	ver := mustParseCRSVersion(t, "4.0.0")

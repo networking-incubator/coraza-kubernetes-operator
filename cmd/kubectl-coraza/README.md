@@ -39,6 +39,7 @@ Reads `*.conf` and optional `*.data` from a single directory (non-recursive). Ou
 | `--skip-validation-rulesource` | Comma-separated RuleSource names (final name after prefix/suffix) to annotate with `rule-validation: "false"` |
 | `--ignore-pmFromFile` | Strip `SecRule` lines using `@pmFromFile` |
 | `--include-test-rule` | Append X-CRS-Test block to `base-rules` |
+| `--sec-rx-pre-filter` | Add `SecRxPreFilter On` to `base-rules` |
 | `--name-prefix` / `--name-suffix` | Prefix/suffix for `RuleSource` names derived from `*.conf` filenames |
 | `--dry-run=client` | Preview output without cluster access |
 | `--skip-size-check` | Allow oversized payloads (etcd may still reject) |

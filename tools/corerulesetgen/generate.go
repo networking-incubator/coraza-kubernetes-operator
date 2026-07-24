@@ -25,6 +25,7 @@ type Options struct {
 	IgnoreRuleIDs    map[string]struct{}
 	IgnorePMFromFile bool
 	IncludeTestRule  bool
+	SecRxPreFilter   bool
 	RuleSetName      string
 	Namespace        string
 	DataSourceName   string

@@ -75,6 +75,7 @@ namespace as the RuleSet; set --namespace when you need metadata.namespace on ev
 	flags.String("ignore-rules", "", "comma-separated rule IDs to drop")
 	flags.Bool("ignore-pmFromFile", false, "strip SecRule lines that use @pmFromFile")
 	flags.Bool("include-test-rule", false, "append X-CRS-Test block to the bundled base-rules RuleSource")
+	flags.Bool("sec-rx-pre-filter", false, "add \"SecRxPreFilter On\" to the bundled base-rules RuleSource")
 	flags.String("ruleset-name", "default-ruleset", "metadata.name of the RuleSet")
 	flags.StringP("namespace", "n", "", "if set, metadata.namespace on all generated objects")
 	flags.String("data-source-name", "coreruleset-data", "RuleData name for *.data files")
@@ -105,6 +106,7 @@ func genCRS(cmd *cobra.Command, _ []string) error {
 	ignoreCSV, _ := flags.GetString("ignore-rules")
 	ignorePM, _ := flags.GetBool("ignore-pmFromFile")
 	includeTest, _ := flags.GetBool("include-test-rule")
+	secRxPreFilter, _ := flags.GetBool("sec-rx-pre-filter")
 	rulesetName, _ := flags.GetString("ruleset-name")
 	namespace, _ := flags.GetString("namespace")
 	dataSourceName, _ := flags.GetString("data-source-name")
@@ -149,6 +151,7 @@ func genCRS(cmd *cobra.Command, _ []string) error {
 		IgnoreRuleIDs:             ignoreSet,
 		IgnorePMFromFile:          ignorePM,
 		IncludeTestRule:           includeTest,
+		SecRxPreFilter:            secRxPreFilter,
 		RuleSetName:               rulesetName,
 		Namespace:                 namespace,
 		DataSourceName:            dataSourceName,
