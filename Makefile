@@ -702,6 +702,8 @@ $(CONTROLLER_GEN): $(LOCALBIN)
 
 .PHONY: golangci-lint
 golangci-lint: $(GOLANGCI_LINT)
+# golangci-lint ships with older Go; force project's Go version until upstream catches up
+$(GOLANGCI_LINT): export GOTOOLCHAIN = go$(shell sed -n 's/^go //p' go.mod)
 $(GOLANGCI_LINT): $(LOCALBIN)
 	$(call go-install-tool,$(GOLANGCI_LINT),github.com/golangci/golangci-lint/v2/cmd/golangci-lint,$(GOLANGCI_LINT_VERSION))
 
