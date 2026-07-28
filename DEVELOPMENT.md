@@ -296,7 +296,9 @@ always use the Go version declared in this repository's `go.mod`.
 > repository may result in build failures or runtime incompatibilities for the plugin.
 
 - **TinyGo**: `0.34.0` (plugin build requirement; see the coraza-proxy-wasm docs for updates)
-- **Go toolchain**: declared in the coraza-proxy-wasm `go.work` file. Go downloads the correct version automatically when you run the build.
+- **Go toolchain**: declared in the coraza-proxy-wasm `go.work` file. TinyGo checks the
+  host Go version independently of `go run`, so the build step below sets `GOTOOLCHAIN`
+  from `go.work` explicitly.
 
 ## Building from Source
 
@@ -323,11 +325,12 @@ To build a custom WASM plugin:
 3. Build the WASM module:
 
    ```bash
-   go run mage.go build
+   GOTOOLCHAIN=go$(sed -n 's/^go //p' go.work) go run mage.go build
    ```
 
-   Go reads the required toolchain version from `go.work` and downloads it
-   automatically. The WASM binary is generated in the build directory.
+   The `sed` expression reads the Go version from `go.work` and `GOTOOLCHAIN`
+   forces that toolchain so TinyGo's version check succeeds when the system Go
+   is newer. The WASM binary is generated in the build directory.
 
 4. Build the Docker image with your custom tag:
 
