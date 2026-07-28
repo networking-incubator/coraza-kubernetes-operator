@@ -118,7 +118,7 @@ spec:
       #     - type: regex_parser
       #       id: json_extract
       #       parse_from: attributes.log_line
-      #       regex: '(?P<json_body>\{.*\})$'
+      #       regex: '(?P<json_body>\{.*\})'
       #     - type: json_parser
       #       id: json_parse
       #       parse_from: attributes.json_body
