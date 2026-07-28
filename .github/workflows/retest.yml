@@ -1,0 +1,35 @@
+name: retest
+
+permissions:
+  contents: read
+  actions: write
+  pull-requests: read
+
+on:
+  issue_comment:
+    types: [created]
+
+jobs:
+  retest:
+    if: >-
+      github.event.issue.pull_request
+      && (contains(github.event.comment.body, '/re-test') || contains(github.event.comment.body, '/retest'))
+    runs-on: ubuntu-latest
+    steps:
+      - name: re-run failed jobs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          HEAD_SHA=$(gh api "repos/${GH_REPO}/pulls/${PR_NUMBER}" --jq '.head.sha')
+
+          RUN_ID=$(gh api "repos/${GH_REPO}/actions/workflows/ci.yml/runs?head_sha=${HEAD_SHA}&per_page=1" \
+            --jq '.workflow_runs[0].id')
+
+          if [ -z "${RUN_ID}" ] || [ "${RUN_ID}" = "null" ]; then
+            echo "No CI run found for SHA ${HEAD_SHA}"
+            exit 1
+          fi
+
+          gh run rerun "${RUN_ID}" --failed --repo "${GH_REPO}"
