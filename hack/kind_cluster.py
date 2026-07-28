@@ -334,7 +334,7 @@ def deploy_opentelemetry_operator(context: str) -> None:
 
     run(
         f"kubectl --context {context} wait --for=condition=Available "
-        f"deployment/opentelemetry-operator-controller-manager "
+        f"deployment/opentelemetry-operator "
         f"-n {ns} --timeout=300s"
     )
 
