@@ -1,0 +1,39 @@
+# Phase A: OTel Collector sidecar — scrapes Envoy stats, re-exports on :9090.
+# Apply in the same namespace as the Gateway (integration-tests).
+---
+apiVersion: opentelemetry.io/v1beta1
+kind: OpenTelemetryCollector
+metadata:
+  name: coraza-gw-sidecar
+  namespace: integration-tests
+spec:
+  mode: sidecar
+  config:
+    receivers:
+      prometheus/envoy:
+        config:
+          scrape_configs:
+            - job_name: coraza-envoy
+              metrics_path: /stats/prometheus
+              scrape_interval: 5s
+              static_configs:
+                - targets:
+                    - 127.0.0.1:15090
+    processors:
+      filter/waf:
+        metrics:
+          include:
+            match_type: regexp
+            metric_names:
+              - "^(coraza_waf_|waf_filter_).*"
+    exporters:
+      prometheus:
+        endpoint: 0.0.0.0:9090
+      debug:
+        verbosity: basic
+    service:
+      pipelines:
+        metrics/envoy:
+          receivers: [prometheus/envoy]
+          processors: [filter/waf]
+          exporters: [prometheus, debug]
