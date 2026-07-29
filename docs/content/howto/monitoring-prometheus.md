@@ -152,7 +152,3 @@ Annotate the Gateway pod template with `sidecar.opentelemetry.io/inject: "coraza
 ### Transitional: scrape Envoy stats
 
 Gateway Envoy exposes legacy `waf_filter_*` series on `/stats/prometheus` (port **15090** `http-envoy-prom`). The OTC sidecar config already scrapes this endpoint and filters for WAF-related metrics. This path does **not** replace the contract log→metrics design and should not depend on EnvoyFilter `stats_tags`.
-
-### Istio Telemetry
-
-Istio `Telemetry` (`telemetry.istio.io`) controls mesh access logging and tracing. It cannot capture WASM `proxy_log()` events — those go to Envoy’s application log (stderr), not the access log subsystem. Use OTC (or another collector) for WAF observability.
