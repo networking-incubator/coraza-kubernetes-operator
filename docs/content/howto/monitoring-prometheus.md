@@ -147,7 +147,46 @@ Start from the chart example:
 
 - [`charts/coraza-kubernetes-operator/examples/otel-collector-sidecar.yaml`](https://github.com/networking-incubator/coraza-kubernetes-operator/blob/main/charts/coraza-kubernetes-operator/examples/otel-collector-sidecar.yaml)
 
-Annotate the Gateway pod template with `sidecar.opentelemetry.io/inject: "coraza-gw-sidecar"`. The sidecar requires the [OpenTelemetry Operator](https://opentelemetry.io/docs/kubernetes/operator/) CRD. On OpenShift, JWT-protect the collector’s `:9090` exporter and scrape with a `PodMonitor` + `bearerTokenSecret`.
+Annotate the Gateway pod template with `sidecar.opentelemetry.io/inject: "coraza-gw-sidecar"`. The sidecar requires the [OpenTelemetry Operator](https://opentelemetry.io/docs/kubernetes/operator/) CRD.
+
+#### OpenShift
+
+The `hostPath /var/log/pods` mount is blocked by the default `restricted` SCC. Create a custom SCC and bind it to the sidecar’s service account before deploying:
+
+```yaml
+apiVersion: security.openshift.io/v1
+kind: SecurityContextConstraints
+metadata:
+  name: coraza-otel-sidecar-scc
+allowPrivilegedContainer: false
+requiredDropCapabilities:
+  - ALL
+allowHostDirVolumePlugin: true
+volumes:
+  - configMap
+  - emptyDir
+  - hostPath
+  - projected
+  - secret
+defaultAllowPrivilegeEscalation: false
+allowPrivilegeEscalation: false
+runAsUser:
+  type: RunAsAny
+seLinuxContext:
+  type: RunAsAny
+readOnlyRootFilesystem: true
+forbiddenSysctls:
+  - "*"
+seccompProfiles:
+  - runtime/default
+```
+
+```bash
+oc adm policy add-scc-to-user coraza-otel-sidecar-scc \
+  -z <otel-sidecar-serviceaccount> -n <gateway-namespace>
+```
+
+Additionally, JWT-protect the collector’s `:9090` exporter and scrape with a `PodMonitor` + `bearerTokenSecret`.
 
 ### Transitional: scrape Envoy stats
 
