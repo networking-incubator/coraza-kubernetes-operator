@@ -1,6 +1,6 @@
 # Issue tracker: GitHub
 
-Issues and PRDs for this repo live as GitHub issues on `origin` (`rafaelvzago/coraza-kubernetes-operator`). Use the `gh` CLI for all operations.
+Issues and PRDs for this repo live as GitHub issues on `upstream` (`networking-incubator/coraza-kubernetes-operator`). Use the `gh` CLI for all operations.
 
 ## Conventions
 
