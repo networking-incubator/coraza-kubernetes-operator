@@ -164,7 +164,7 @@ s.Step("verify behavior")
 
 ### Issue tracker
 
-GitHub Issues on `origin` (rafaelvzago/coraza-kubernetes-operator, `gh` CLI). See `docs/agents/issue-tracker.md`.
+GitHub Issues on `upstream` (networking-incubator/coraza-kubernetes-operator, `gh` CLI). See `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 
