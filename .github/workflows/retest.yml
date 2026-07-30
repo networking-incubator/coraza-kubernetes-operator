@@ -1,0 +1,63 @@
+name: retest
+
+permissions:
+  contents: read
+
+on:
+  issue_comment:
+    types: [created]
+
+jobs:
+  retest:
+    if: >-
+      github.event.issue.pull_request
+      && contains(fromJSON('["MEMBER","OWNER"]'), github.event.comment.author_association)
+      && contains(format('\n{0}\n', github.event.comment.body), '\n/retest\n')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: write
+      pull-requests: read
+    steps:
+      - name: re-run failed jobs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          set -euo pipefail
+
+          HEAD_SHA=$(gh api "repos/${GH_REPO}/pulls/${PR_NUMBER}" --jq '.head.sha')
+          if [ -z "${HEAD_SHA}" ] || [ "${HEAD_SHA}" = "null" ]; then
+            echo "Failed to resolve PR head SHA for #${PR_NUMBER}"
+            exit 1
+          fi
+
+          mapfile -t RUNS < <(
+            gh run list --repo "${GH_REPO}" --commit "${HEAD_SHA}" \
+              --json databaseId,name,conclusion,url \
+              --jq '.[] | select(.conclusion == "failure" or .conclusion == "cancelled") | [.databaseId, .name, .url] | @tsv'
+          )
+
+          if [ "${#RUNS[@]}" -eq 0 ]; then
+            echo "No failed or cancelled workflow runs found for SHA ${HEAD_SHA}"
+            exit 1
+          fi
+
+          {
+            echo "## Retried workflow runs"
+            echo
+            echo "PR #${PR_NUMBER} head \`${HEAD_SHA}\`"
+            echo
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+          for row in "${RUNS[@]}"; do
+            id="${row%%$'\t'*}"
+            rest="${row#*$'\t'}"
+            name="${rest%%$'\t'*}"
+            url="${rest#*$'\t'}"
+
+            echo "Re-running failed jobs for: ${name} (${id})"
+            gh run rerun "${id}" --failed --repo "${GH_REPO}"
+            echo "- [${name}](${url}) (\`${id}\`)" >> "${GITHUB_STEP_SUMMARY}"
+          done
