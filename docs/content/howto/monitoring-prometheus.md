@@ -186,6 +186,8 @@ oc adm policy add-scc-to-user coraza-otel-sidecar-scc \
   -z <otel-sidecar-serviceaccount> -n <gateway-namespace>
 ```
 
+`runAsUser` and `seLinuxContext` are set to `RunAsAny` so the collector can read SELinux-labelled log files without knowing the exact UID in advance. Scope them to `MustRunAsRange` once the sidecar’s actual UID is confirmed.
+
 Additionally, JWT-protect the collector’s `:9090` exporter and scrape with a `PodMonitor` + `bearerTokenSecret`.
 
 ### Transitional: scrape Envoy stats
