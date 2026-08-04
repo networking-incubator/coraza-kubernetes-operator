@@ -29,8 +29,8 @@ jobs:
       - name: verify go module integrity
         run: go mod verify
 
-      - name: build and generate manifests
-        run: make build helm.sync
+      - name: generate manifests and verify code
+        run: make manifests generate fmt vet helm.sync
 
       - name: check for uncommitted changes
         run: git diff --exit-code || (echo "generated files have uncommitted changes. run 'make manifests generate helm.sync' and commit the results." && exit 1)
@@ -69,7 +69,10 @@ jobs:
         run: go mod verify
 
       - name: run linter
-        run: make lint
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          version: v2.12.2
+          args: --build-tags integration ./...
 
       - name: run api linter
         run: make lint.api
