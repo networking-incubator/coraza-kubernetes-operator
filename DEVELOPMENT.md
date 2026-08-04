@@ -79,6 +79,7 @@ These tests validate the operator's behavior on a live cluster, including:
 Environment variables:
 - `KIND_CLUSTER_NAME` - Name of the KIND cluster to use (default: `coraza-kubernetes-operator-integration`)
 - `ISTIO_VERSION` - Istio version for testing (default: from Makefile)
+- `GOMAXPROCS` - Maximum number of OS threads for Go's runtime; also sets the default for `-parallel` (concurrent `t.Parallel()` tests). (default: CPU core count)
 
 ### Conformance Tests
 
@@ -128,6 +129,9 @@ make test.e2e
 ```
 
 These tests validate complete user workflows on a live cluster.
+
+Environment variables:
+- `GOMAXPROCS` - Maximum number of OS threads for Go's runtime; also sets the default for `-parallel` (concurrent `t.Parallel()` tests). (default: CPU core count)
 
 ### Tools Tests
 
