@@ -1,0 +1,132 @@
+# Permanent in-cluster traffic generator for the coraza-demo WAF sample.
+#
+# Replaces the session-local `bash /tmp/ocp-traffic-gen.sh <external-LB-IP>` processes
+# with a Deployment that lives inside the cluster and targets the Gateway Service via
+# in-cluster DNS, so it survives independently of any external client machine or the
+# external LoadBalancer's reachability.
+#
+# Honest note on coverage (see config/samples/ruleset.yaml for the actual rules):
+#   - id:1001 (SQLi) and id:2001 (XSS) use the `block` action with no `SecDefaultAction`
+#     set anywhere in the ruleset. In Coraza/ModSecurity semantics, `block` only *flags*
+#     the deferred disruptive action -- it does nothing unless a SecDefaultAction (or a
+#     rule further down the chain) actually sets a disruptive action. Verified empirically
+#     against the live gateway: SQLi/XSS payloads return 200, not 403. This generator still
+#     sends them (useful traffic shape, exercises the evaluation path, future-proofs against
+#     a ruleset fix), but they will show up as outcome="pass", not "block".
+#   - id:3001 (evilmonkey, @contains) and id:3002 (evildata, @pmFromFile) use `deny` (an
+#     immediate disruptive action) and are the only rules that actually return 403 today.
+#   - Neither deny rule carries a CRS `attack-*` tag (both are tagged `monkey-attack`), so
+#     per the label contract in docs/driver-metrics-contract.md every block from this demo
+#     ruleset lands in category="other", severity="CRITICAL" -- there is no sqli/xss/rce/...
+#     category traffic possible with this ruleset's *actual* blocking rules, regardless of
+#     payload content, because `category` is derived from the matching rule's tags, not the
+#     request body.
+#   - coraza_waf_rule_hits_total / coraza_waf_rule_hits_from_logs_total (the "Top firing
+#     rules" panel) were confirmed empty against live Prometheus even with two traffic
+#     generators running for hours -- this driver build does not yet emit that series
+#     (matches the "not fully covered by per-request logs yet" caveat in the metrics
+#     contract). No traffic mix can populate that panel; it's a driver gap, not a traffic
+#     generation gap.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: coraza-traffic-gen
+  namespace: coraza-demo
+data:
+  traffic-gen.sh: |
+    #!/bin/sh
+    # In-cluster traffic generator for the coraza-demo WAF sample.
+    # Targets the Gateway Service via in-cluster DNS (no dependency on the
+    # external LoadBalancer IP). Loops forever; the Deployment keeps it running.
+    set -u
+
+    BASE="http://coraza-gateway-openshift-default.coraza-demo.svc.cluster.local"
+    INTERVAL="${INTERVAL:-2}"
+
+    PASS=0
+    BLOCK=0
+    ERR=0
+
+    send() {
+      label="$1"; shift
+      code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "$@" 2>/dev/null || echo "000")
+      case "$code" in
+        2*|3*) PASS=$((PASS+1));  printf '  %-42s -> PASS  (%s)\n' "$label" "$code" ;;
+        403)   BLOCK=$((BLOCK+1)); printf '  %-42s -> BLOCK (403)\n' "$label" ;;
+        *)     ERR=$((ERR+1));    printf '  %-42s -> ERR   (%s)\n' "$label" "$code" ;;
+      esac
+    }
+
+    echo "In-cluster traffic generator -> ${BASE}"
+    echo "Interval: ${INTERVAL}s"
+
+    ROUND=0
+    while true; do
+      ROUND=$((ROUND + 1))
+      printf '\n-- Round %-4d --------------------------------\n' "$ROUND"
+
+      # --- clean pass-through traffic ---
+      send "GET /"                        "${BASE}/"
+      send "GET /echo"                    "${BASE}/echo"
+      send "GET /?page=2"                 "${BASE}/?page=2"
+      send "POST / (json body)"           -X POST -H 'Content-Type: application/json' -d '{"key":"value"}' "${BASE}/"
+
+      # --- id:1001 SQLi rule (block action w/o SecDefaultAction -> matches but PASSES) ---
+      send "SQLi: 1' OR 1=1"              "${BASE}/?q=1'+OR+1=1--"
+      send "SQLi: UNION SELECT"           "${BASE}/?id=union+select+1+from+users"
+
+      # --- id:2001 XSS rule (same block-without-default-action caveat -> PASSES) ---
+      send "XSS: script tag"              "${BASE}/?q=%3Cscript%3Ealert(1)%3C/script%3E"
+      send "XSS: onerror attr"            "${BASE}/?q=%3Cimg%20src=x%20onerror=alert(1)%3E"
+
+      # --- id:3001 evilmonkey (deny -> actually BLOCKS, category=other) ---
+      send "deny: evilmonkey in query"    "${BASE}/?q=evilmonkey"
+      send "deny: evilmonkey in header"   -H 'X-Custom-Header: evilmonkey' "${BASE}/"
+
+      # --- id:3002 evildata pmFromFile (deny -> actually BLOCKS, category=other) ---
+      send "deny: evildata (pmFromFile)"  "${BASE}/?q=evildata"
+      send "deny: anotherevildata"        "${BASE}/?q=anotherevildata"
+
+      printf '\nTotals  pass=%-5d block=%-5d err=%-5d\n' "$PASS" "$BLOCK" "$ERR"
+      sleep "$INTERVAL"
+    done
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: coraza-traffic-gen
+  namespace: coraza-demo
+  labels:
+    app: coraza-traffic-gen
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: coraza-traffic-gen
+  template:
+    metadata:
+      labels:
+        app: coraza-traffic-gen
+    spec:
+      containers:
+        - name: traffic-gen
+          image: curlimages/curl:8.11.1
+          command: ["sh", "/scripts/traffic-gen.sh"]
+          env:
+            - name: INTERVAL
+              value: "2"
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 50m
+              memory: 64Mi
+          volumeMounts:
+            - name: script
+              mountPath: /scripts
+      volumes:
+        - name: script
+          configMap:
+            name: coraza-traffic-gen
+            defaultMode: 0755

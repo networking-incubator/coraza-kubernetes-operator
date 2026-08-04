@@ -1,0 +1,30 @@
+# PodMonitor for the OpenTelemetry Collector sidecar on coraza-gateway.
+# Scrapes OTC :9090 (prometheus exporter) and keeps Envoy/WASM/WAF/Istio series
+# under job=coraza-envoy for the Coraza WAF Grafana dashboard.
+#
+# Manual demo deploy (same session pattern as openshift-grafana-only-values.yaml):
+#   oc apply -f config/observability/coraza-gateway-otc-podmonitor.yaml
+# Not part of make manifests / helm.sync.
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: coraza-gateway-otc
+  namespace: coraza-demo
+spec:
+  namespaceSelector:
+    any: true
+  selector:
+    matchLabels:
+      gateway.networking.k8s.io/gateway-name: coraza-gateway
+  podMetricsEndpoints:
+    - port: prometheus
+      path: /metrics
+      interval: 15s
+      scrapeTimeout: 10s
+      relabelings:
+        - targetLabel: job
+          replacement: coraza-envoy
+      metricRelabelings:
+        - sourceLabels: [__name__]
+          regex: '(envoy_wasm_.*|envoy_server_.*|envoy_listener_manager_.*|waf_filter_.*|coraza_waf_.*|istio_.*)'
+          action: keep

@@ -1,0 +1,2827 @@
+# Grafana dashboard ConfigMap for the "Coraza WAF" dashboard, adapted from
+# https://gist.github.com/rafaelvzago/488c22734d7606b6a4fa47bc06ba64e7#file-coraza-waf-json
+# (job label rewritten from "coraza-waf-otc" to "coraza-envoy" to match this
+# cluster's PodMonitor job relabeling).
+#
+# Discovered by the Grafana sidecar via the "grafana_dashboard: \"1\"" label
+# (see grafana.sidecar.dashboards in openshift-grafana-only-values.yaml /
+# kube-prometheus-stack-values.yaml). Deployed the same way as that file -
+# manually for this session, not part of `make manifests`/`helm.sync`.
+#
+# Panel query note: several panels originally used a single PromQL selector
+# like {__name__=~"waf_filter_tx_interruptions_.*_total", job="coraza-envoy"}
+# wrapped in rate()/increase(). Because rule_id/phase are baked into the
+# metric *name* (not a label - see panel 250's description), this regex
+# matches multiple distinct series names at once, which Thanos's query
+# engine cannot merge inside a range function ("vector cannot contain
+# metrics with the same labelset"). Fixed by rewriting those 4 panel queries
+# (251, 255, 258, 601) as explicit `or`-chains over the demo ruleset's 4
+# known rule IDs (1001/2001/3001/3002, see config/samples/ruleset.yaml).
+# This is demo-ruleset-specific: extend the chain if you add more rules.
+#
+# Every panel description explains what the metric means in plain language
+# (not just the PromQL metric name).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: coraza-waf-gist-dashboard
+  namespace: monitoring
+  labels:
+    grafana_dashboard: "1"
+data:
+  coraza-waf-gist.json: |
+    {
+      "uid": "coraza-waf",
+      "title": "Coraza WAF",
+      "tags": [
+        "coraza",
+        "envoy",
+        "otel",
+        "security",
+        "waf",
+        "wasm"
+      ],
+      "timezone": "browser",
+      "schemaVersion": 39,
+      "version": 4,
+      "refresh": "30s",
+      "time": {
+        "from": "now-1h",
+        "to": "now"
+      },
+      "templating": {
+        "list": [
+          {
+            "name": "datasource",
+            "type": "datasource",
+            "query": "prometheus",
+            "current": {
+              "text": "Prometheus",
+              "value": "prometheus",
+              "selected": true
+            },
+            "hide": 0
+          },
+          {
+            "name": "engine",
+            "type": "query",
+            "label": "Engine",
+            "datasource": {
+              "type": "prometheus",
+              "uid": "prometheus"
+            },
+            "query": "label_values({__name__=~\"coraza_waf_.*\"}, engine)",
+            "includeAll": true,
+            "multi": true,
+            "allValue": ".*",
+            "refresh": 2,
+            "sort": 1,
+            "current": {
+              "text": "All",
+              "value": "$__all",
+              "selected": true
+            },
+            "hide": 0,
+            "definition": "label_values({__name__=~\"coraza_waf_.*\"}, engine)"
+          },
+          {
+            "name": "gateway",
+            "type": "query",
+            "label": "Gateway",
+            "datasource": {
+              "type": "prometheus",
+              "uid": "prometheus"
+            },
+            "query": "label_values({__name__=~\"coraza_waf_.*\"}, gateway)",
+            "includeAll": true,
+            "multi": true,
+            "allValue": ".*",
+            "refresh": 2,
+            "sort": 1,
+            "current": {
+              "text": "All",
+              "value": "$__all",
+              "selected": true
+            },
+            "hide": 0,
+            "definition": "label_values({__name__=~\"coraza_waf_.*\"}, gateway)"
+          },
+          {
+            "name": "rule_id",
+            "type": "textbox",
+            "label": "Rule ID",
+            "current": {
+              "text": "1001",
+              "value": "1001"
+            },
+            "query": "1001",
+            "hide": 0
+          }
+        ]
+      },
+      "annotations": {
+        "list": []
+      },
+      "panels": [
+        {
+          "id": 100,
+          "type": "row",
+          "title": "OTC / WASM health (active)",
+          "gridPos": {
+            "h": 1,
+            "w": 24,
+            "x": 0,
+            "y": 0
+          },
+          "collapsed": false,
+          "panels": [],
+          "description": "Envoy and WASM health series scraped from the OpenTelemetry Collector sidecar (Prometheus job=coraza-envoy). The collector re-exports Envoy admin stats from 127.0.0.1:15090/stats/prometheus."
+        },
+        {
+          "id": 101,
+          "type": "timeseries",
+          "title": "WASM plugin reload rate",
+          "description": "How often the Coraza WASM plugin reloads. Success means a new binary or config took effect. Failures and backoffs mean Envoy could not load the plugin and is retrying. Spikes after an Engine or image change are normal; sustained failures are not.",
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 1
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "palette-classic"
+              },
+              "custom": {
+                "drawStyle": "line",
+                "lineInterpolation": "smooth",
+                "fillOpacity": 15,
+                "showPoints": "never",
+                "spanNulls": false
+              },
+              "unit": "ops"
+            },
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "failure"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "fixedColor": "red",
+                      "mode": "fixed"
+                    }
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "backoff"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "fixedColor": "orange",
+                      "mode": "fixed"
+                    }
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "success"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "fixedColor": "green",
+                      "mode": "fixed"
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "targets": [
+            {
+              "expr": "sum(rate({__name__=~\"envoy_wasm_.*_vm_reload_success_total\", job=\"coraza-envoy\"}[5m]))",
+              "legendFormat": "success",
+              "refId": "A"
+            },
+            {
+              "expr": "sum(rate({__name__=~\"envoy_wasm_.*_vm_reload_failure_total\", job=\"coraza-envoy\"}[5m]))",
+              "legendFormat": "failure",
+              "refId": "B"
+            },
+            {
+              "expr": "sum(rate({__name__=~\"envoy_wasm_.*_vm_reload_backoff_total\", job=\"coraza-envoy\"}[5m]))",
+              "legendFormat": "backoff",
+              "refId": "C"
+            }
+          ]
+        },
+        {
+          "id": 102,
+          "type": "timeseries",
+          "title": "WASM remote cache",
+          "description": "OCI fetch cache for the WASM binary. Hits mean Envoy reused a cached image. Misses and fetches mean it pulled from the registry. Fetch failures usually point at registry auth, TLS, or network problems. Cache entries is the number of binaries currently held in memory.",
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 1
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "palette-classic"
+              },
+              "custom": {
+                "drawStyle": "line",
+                "lineInterpolation": "smooth",
+                "fillOpacity": 15,
+                "showPoints": "never",
+                "spanNulls": false
+              },
+              "unit": "ops"
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "targets": [
+            {
+              "expr": "rate(envoy_wasm_remote_load_cache_hits_total{job=\"coraza-envoy\"}[5m])",
+              "legendFormat": "hits",
+              "refId": "A"
+            },
+            {
+              "expr": "rate(envoy_wasm_remote_load_cache_misses_total{job=\"coraza-envoy\"}[5m])",
+              "legendFormat": "misses",
+              "refId": "B"
+            },
+            {
+              "expr": "rate(envoy_wasm_remote_load_fetch_failures_total{job=\"coraza-envoy\"}[5m])",
+              "legendFormat": "fetch failures",
+              "refId": "C"
+            },
+            {
+              "expr": "rate(envoy_wasm_remote_load_fetch_successes_total{job=\"coraza-envoy\"}[5m])",
+              "legendFormat": "fetch successes",
+              "refId": "D"
+            },
+            {
+              "expr": "envoy_wasm_remote_load_cache_entries{job=\"coraza-envoy\"}",
+              "legendFormat": "cache entries",
+              "refId": "E"
+            }
+          ]
+        },
+        {
+          "id": 103,
+          "type": "stat",
+          "title": "Active WASM VMs",
+          "description": "Number of V8 WASM VMs currently running inside Envoy. Expect at least one per gateway worker that has the Coraza filter attached. A drop to zero means the plugin is not loaded.",
+          "gridPos": {
+            "h": 4,
+            "w": 6,
+            "x": 0,
+            "y": 9
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "thresholds"
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "red",
+                    "value": 80
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            },
+            "orientation": "auto",
+            "textMode": "auto",
+            "colorMode": "value",
+            "graphMode": "area",
+            "justifyMode": "auto"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "sum(envoy_wasm_envoy_wasm_runtime_v8_active{job=\"coraza-envoy\"}) or vector(0)",
+              "legendFormat": "",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              }
+            }
+          ]
+        },
+        {
+          "id": 104,
+          "type": "stat",
+          "title": "Envoy server live",
+          "description": "Envoy process state. 1 means the proxy is accepting traffic. 0 means it is draining (for example during a graceful shutdown or rollout).",
+          "gridPos": {
+            "h": 4,
+            "w": 6,
+            "x": 6,
+            "y": 9
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "thresholds"
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "red",
+                    "value": 80
+                  }
+                ]
+              },
+              "mappings": [
+                {
+                  "type": "value",
+                  "options": {
+                    "0": {
+                      "text": "DRAINING",
+                      "color": "red",
+                      "index": 0
+                    },
+                    "1": {
+                      "text": "LIVE",
+                      "color": "green",
+                      "index": 1
+                    }
+                  }
+                }
+              ]
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            },
+            "orientation": "auto",
+            "textMode": "auto",
+            "colorMode": "value",
+            "graphMode": "area",
+            "justifyMode": "auto"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "max(envoy_server_live{job=\"coraza-envoy\"})",
+              "legendFormat": "",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              }
+            }
+          ]
+        },
+        {
+          "id": 105,
+          "type": "stat",
+          "title": "Memory allocated",
+          "description": "Bytes Envoy has allocated for its own use. Rising without bound often means a leak or a surge in concurrent connections or WASM state.",
+          "gridPos": {
+            "h": 4,
+            "w": 6,
+            "x": 12,
+            "y": 9
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "thresholds"
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "red",
+                    "value": 80
+                  }
+                ]
+              },
+              "unit": "bytes"
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            },
+            "orientation": "auto",
+            "textMode": "auto",
+            "colorMode": "value",
+            "graphMode": "area",
+            "justifyMode": "auto"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "sum(envoy_server_memory_allocated{job=\"coraza-envoy\"}) or vector(0)",
+              "legendFormat": "",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              }
+            }
+          ]
+        },
+        {
+          "id": 106,
+          "type": "stat",
+          "title": "Active listeners",
+          "description": "Listeners currently serving traffic. On a Gateway pod this should stay stable after the Gateway and HTTPRoutes have reconciled.",
+          "gridPos": {
+            "h": 4,
+            "w": 6,
+            "x": 18,
+            "y": 9
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "thresholds"
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "red",
+                    "value": 80
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            },
+            "orientation": "auto",
+            "textMode": "auto",
+            "colorMode": "value",
+            "graphMode": "area",
+            "justifyMode": "auto"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "sum(envoy_listener_manager_total_listeners_active{job=\"coraza-envoy\"}) or vector(0)",
+              "legendFormat": "",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              }
+            }
+          ]
+        },
+        {
+          "id": 200,
+          "type": "row",
+          "title": "Envoy server health (active)",
+          "gridPos": {
+            "h": 1,
+            "w": 24,
+            "x": 0,
+            "y": 13
+          },
+          "collapsed": false,
+          "panels": [],
+          "description": "Envoy process health from the same OTC scrape as the WASM section above."
+        },
+        {
+          "id": 201,
+          "type": "timeseries",
+          "title": "Memory allocated vs heap",
+          "description": "Envoy memory breakdown: bytes currently allocated, the heap size, and physical RSS. Allocated tracking close to heap is healthy. A large gap or steady climb in physical size under steady traffic is worth checking.",
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 14
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "palette-classic"
+              },
+              "custom": {
+                "drawStyle": "line",
+                "lineInterpolation": "smooth",
+                "fillOpacity": 15,
+                "showPoints": "never",
+                "spanNulls": false
+              },
+              "unit": "bytes"
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "targets": [
+            {
+              "expr": "envoy_server_memory_allocated{job=\"coraza-envoy\"}",
+              "legendFormat": "allocated",
+              "refId": "A"
+            },
+            {
+              "expr": "envoy_server_memory_heap_size{job=\"coraza-envoy\"}",
+              "legendFormat": "heap size",
+              "refId": "B"
+            },
+            {
+              "expr": "envoy_server_memory_physical_size{job=\"coraza-envoy\"}",
+              "legendFormat": "physical size",
+              "refId": "C"
+            }
+          ]
+        },
+        {
+          "id": 202,
+          "type": "timeseries",
+          "title": "LDS update success / failure rate",
+          "description": "Listener Discovery Service updates. Success means Istio pushed a new listener config and Envoy applied it. Failures and rejections mean the proxy rejected the xDS update. A spike after Gateway or WasmPlugin changes is common; a prolonged failure rate means the mesh config is broken.",
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 14
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "palette-classic"
+              },
+              "custom": {
+                "drawStyle": "line",
+                "lineInterpolation": "smooth",
+                "fillOpacity": 15,
+                "showPoints": "never",
+                "spanNulls": false
+              },
+              "unit": "ops"
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "targets": [
+            {
+              "expr": "rate(envoy_listener_manager_lds_update_success_total{job=\"coraza-envoy\"}[5m])",
+              "legendFormat": "success",
+              "refId": "A"
+            },
+            {
+              "expr": "rate(envoy_listener_manager_lds_update_failure_total{job=\"coraza-envoy\"}[5m])",
+              "legendFormat": "failure",
+              "refId": "B"
+            },
+            {
+              "expr": "rate(envoy_listener_manager_lds_update_rejected_total{job=\"coraza-envoy\"}[5m])",
+              "legendFormat": "rejected",
+              "refId": "C"
+            }
+          ]
+        },
+        {
+          "id": 203,
+          "type": "stat",
+          "title": "Concurrency",
+          "description": "Number of Envoy worker threads. Set at process start and does not change at runtime.",
+          "gridPos": {
+            "h": 4,
+            "w": 6,
+            "x": 0,
+            "y": 22
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "thresholds"
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "red",
+                    "value": 80
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            },
+            "orientation": "auto",
+            "textMode": "auto",
+            "colorMode": "value",
+            "graphMode": "area",
+            "justifyMode": "auto"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "max(envoy_server_concurrency{job=\"coraza-envoy\"})",
+              "legendFormat": "",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              }
+            }
+          ]
+        },
+        {
+          "id": 204,
+          "type": "stat",
+          "title": "Uptime",
+          "description": "Seconds since this Envoy process started. Resets on every pod restart or rolling update.",
+          "gridPos": {
+            "h": 4,
+            "w": 6,
+            "x": 6,
+            "y": 22
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "thresholds"
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "red",
+                    "value": 80
+                  }
+                ]
+              },
+              "unit": "s"
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            },
+            "orientation": "auto",
+            "textMode": "auto",
+            "colorMode": "value",
+            "graphMode": "area",
+            "justifyMode": "auto"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "max(envoy_server_uptime{job=\"coraza-envoy\"})",
+              "legendFormat": "",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              }
+            }
+          ]
+        },
+        {
+          "id": 205,
+          "type": "stat",
+          "title": "Total connections",
+          "description": "Open connections to this Envoy instance right now, across all listeners.",
+          "gridPos": {
+            "h": 4,
+            "w": 6,
+            "x": 12,
+            "y": 22
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "thresholds"
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "red",
+                    "value": 80
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            },
+            "orientation": "auto",
+            "textMode": "auto",
+            "colorMode": "value",
+            "graphMode": "area",
+            "justifyMode": "auto"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "sum(envoy_server_total_connections{job=\"coraza-envoy\"}) or vector(0)",
+              "legendFormat": "",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              }
+            }
+          ]
+        },
+        {
+          "id": 206,
+          "type": "stat",
+          "title": "Warming listeners",
+          "description": "Listeners that have been received from xDS but are not yet serving traffic. A non-zero value that never clears means a listener is stuck warming (often a missing secret or upstream).",
+          "gridPos": {
+            "h": 4,
+            "w": 6,
+            "x": 18,
+            "y": 22
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "thresholds"
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "red",
+                    "value": 80
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            },
+            "orientation": "auto",
+            "textMode": "auto",
+            "colorMode": "value",
+            "graphMode": "area",
+            "justifyMode": "auto"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "sum(envoy_listener_manager_total_listeners_warming{job=\"coraza-envoy\"}) or vector(0)",
+              "legendFormat": "",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              }
+            }
+          ]
+        },
+        {
+          "id": 250,
+          "type": "row",
+          "title": "WAF filter & Istio traffic (active)",
+          "gridPos": {
+            "h": 1,
+            "w": 24,
+            "x": 0,
+            "y": 26
+          },
+          "collapsed": false,
+          "panels": [],
+          "description": "Legacy Envoy stats that sit alongside the log-to-metrics pipeline. waf_filter_tx_* come from the Coraza WASM filter. istio_* come from the Istio sidecar. Interruption series bake rule id and phase into the metric name itself, not into Prometheus labels."
+        },
+        {
+          "id": 251,
+          "type": "timeseries",
+          "title": "WAF transactions & interruptions",
+          "description": "Request rate through the Coraza filter (waf_filter_tx_total) versus interruptions, which are requests the filter stopped. The interruption series are split by rule id and phase in the metric name. This panel sums the demo ruleset ids 1001, 2001, 3001, and 3002.",
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 27
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "palette-classic"
+              },
+              "custom": {
+                "drawStyle": "line",
+                "lineInterpolation": "smooth",
+                "fillOpacity": 15,
+                "showPoints": "never",
+                "spanNulls": false
+              },
+              "unit": "reqps"
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "targets": [
+            {
+              "expr": "rate(waf_filter_tx_total{job=\"coraza-envoy\"}[5m])",
+              "legendFormat": "tx/s",
+              "refId": "A"
+            },
+            {
+              "expr": "sum(rate(waf_filter_tx_interruptions_ruleid_1001_phase_http_request_headers_total{job=\"coraza-envoy\"}[5m]) or rate(waf_filter_tx_interruptions_ruleid_2001_phase_http_request_headers_total{job=\"coraza-envoy\"}[5m]) or rate(waf_filter_tx_interruptions_ruleid_3001_phase_http_request_headers_total{job=\"coraza-envoy\"}[5m]) or rate(waf_filter_tx_interruptions_ruleid_3002_phase_http_request_headers_total{job=\"coraza-envoy\"}[5m]))",
+              "legendFormat": "interruptions/s",
+              "refId": "B"
+            }
+          ]
+        },
+        {
+          "id": 252,
+          "type": "timeseries",
+          "title": "Istio request rate by response_code",
+          "description": "HTTP requests seen by the Istio sidecar, broken down by response code. 403s here often line up with WAF blocks. 5xx spikes usually mean the upstream or the proxy itself is failing.",
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 27
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "palette-classic"
+              },
+              "custom": {
+                "drawStyle": "line",
+                "lineInterpolation": "smooth",
+                "fillOpacity": 15,
+                "showPoints": "never",
+                "spanNulls": false
+              },
+              "unit": "reqps"
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "targets": [
+            {
+              "expr": "sum by (response_code) (rate(istio_requests_total{job=\"coraza-envoy\"}[5m]))",
+              "legendFormat": "{{response_code}}",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "id": 253,
+          "type": "stat",
+          "title": "WAF tx total",
+          "description": "Lifetime count of HTTP transactions the Coraza filter has evaluated on this scrape target. Resets when the Envoy process restarts.",
+          "gridPos": {
+            "h": 4,
+            "w": 6,
+            "x": 0,
+            "y": 35
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "thresholds"
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "red",
+                    "value": 80
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            },
+            "orientation": "auto",
+            "textMode": "auto",
+            "colorMode": "value",
+            "graphMode": "area",
+            "justifyMode": "auto"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "sum(waf_filter_tx_total{job=\"coraza-envoy\"}) or vector(0)",
+              "legendFormat": "",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              }
+            }
+          ]
+        },
+        {
+          "id": 254,
+          "type": "stat",
+          "title": "WAF interruptions total",
+          "description": "Lifetime count of requests the Coraza filter interrupted (blocked or otherwise stopped). Sum of all waf_filter_tx_interruptions_* counters on job=coraza-envoy.",
+          "gridPos": {
+            "h": 4,
+            "w": 6,
+            "x": 6,
+            "y": 35
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "thresholds"
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "red",
+                    "value": 80
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            },
+            "orientation": "auto",
+            "textMode": "auto",
+            "colorMode": "value",
+            "graphMode": "area",
+            "justifyMode": "auto"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "sum({__name__=~\"waf_filter_tx_interruptions_.*_total\", job=\"coraza-envoy\"}) or vector(0)",
+              "legendFormat": "",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              }
+            }
+          ]
+        },
+        {
+          "id": 255,
+          "type": "stat",
+          "title": "Interrupt ratio (1h)",
+          "description": "Share of WAF transactions interrupted in the last hour. Computed as interruptions divided by total transactions for demo rule ids 1001, 2001, 3001, and 3002. A rising ratio under steady traffic means more requests are matching deny rules.",
+          "gridPos": {
+            "h": 4,
+            "w": 6,
+            "x": 12,
+            "y": 35
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "thresholds"
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "red",
+                    "value": 80
+                  }
+                ]
+              },
+              "unit": "percentunit",
+              "decimals": 2
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            },
+            "orientation": "auto",
+            "textMode": "auto",
+            "colorMode": "value",
+            "graphMode": "area",
+            "justifyMode": "auto"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "sum(increase(waf_filter_tx_interruptions_ruleid_1001_phase_http_request_headers_total{job=\"coraza-envoy\"}[1h]) or increase(waf_filter_tx_interruptions_ruleid_2001_phase_http_request_headers_total{job=\"coraza-envoy\"}[1h]) or increase(waf_filter_tx_interruptions_ruleid_3001_phase_http_request_headers_total{job=\"coraza-envoy\"}[1h]) or increase(waf_filter_tx_interruptions_ruleid_3002_phase_http_request_headers_total{job=\"coraza-envoy\"}[1h])) / clamp_min(sum(increase(waf_filter_tx_total{job=\"coraza-envoy\"}[1h])), 1e-9)",
+              "legendFormat": "",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              }
+            }
+          ]
+        },
+        {
+          "id": 256,
+          "type": "stat",
+          "title": "Istio 403s (1h)",
+          "description": "HTTP 403 responses counted by Istio in the last hour. For this demo most 403s come from Coraza deny actions, so this should track the block and interruption panels.",
+          "gridPos": {
+            "h": 4,
+            "w": 6,
+            "x": 18,
+            "y": 35
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "thresholds"
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "red",
+                    "value": 80
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            },
+            "orientation": "auto",
+            "textMode": "auto",
+            "colorMode": "value",
+            "graphMode": "area",
+            "justifyMode": "auto"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "sum(increase(istio_requests_total{job=\"coraza-envoy\", response_code=\"403\"}[1h])) or vector(0)",
+              "legendFormat": "",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              }
+            }
+          ]
+        },
+        {
+          "id": 257,
+          "type": "timeseries",
+          "title": "Istio request duration p95",
+          "description": "End-to-end request latency as seen by Istio. p95 and p50 are shown. A jump that lines up with WAF blocks can mean expensive rules or a slow upstream behind the filter.",
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 39
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "palette-classic"
+              },
+              "custom": {
+                "drawStyle": "line",
+                "lineInterpolation": "smooth",
+                "fillOpacity": 15,
+                "showPoints": "never",
+                "spanNulls": false
+              },
+              "unit": "ms"
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.95, sum by (le) (rate(istio_request_duration_milliseconds_bucket{job=\"coraza-envoy\"}[5m])))",
+              "legendFormat": "p95",
+              "refId": "A"
+            },
+            {
+              "expr": "histogram_quantile(0.50, sum by (le) (rate(istio_request_duration_milliseconds_bucket{job=\"coraza-envoy\"}[5m])))",
+              "legendFormat": "p50",
+              "refId": "B"
+            }
+          ]
+        },
+        {
+          "id": 258,
+          "type": "timeseries",
+          "title": "Interruption rate by rule (name-regex)",
+          "description": "Interruptions per second for each demo rule. Rule id and phase live in the metric name (for example waf_filter_tx_interruptions_ruleid_1001_phase_http_request_headers_total). The query lists demo rules 1001, 2001, 3001, and 3002 explicitly because Thanos cannot run rate() over a multi-name regex selector.",
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 39
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "palette-classic"
+              },
+              "custom": {
+                "drawStyle": "line",
+                "lineInterpolation": "smooth",
+                "fillOpacity": 15,
+                "showPoints": "never",
+                "spanNulls": false
+              },
+              "unit": "ops"
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "targets": [
+            {
+              "expr": "sum by (__name__) (rate(waf_filter_tx_interruptions_ruleid_1001_phase_http_request_headers_total{job=\"coraza-envoy\"}[5m]) or rate(waf_filter_tx_interruptions_ruleid_2001_phase_http_request_headers_total{job=\"coraza-envoy\"}[5m]) or rate(waf_filter_tx_interruptions_ruleid_3001_phase_http_request_headers_total{job=\"coraza-envoy\"}[5m]) or rate(waf_filter_tx_interruptions_ruleid_3002_phase_http_request_headers_total{job=\"coraza-envoy\"}[5m]))",
+              "legendFormat": "{{__name__}}",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "id": 300,
+          "type": "row",
+          "title": "WAF requests (OTC log\u2192metrics)",
+          "gridPos": {
+            "h": 1,
+            "w": 24,
+            "x": 0,
+            "y": 47
+          },
+          "collapsed": false,
+          "panels": [],
+          "description": "Contract metrics built by the OpenTelemetry Collector from Coraza structured JSON logs (job=coraza-envoy). These are the preferred coraza_waf_* series, not the legacy Envoy waf_filter_* counters."
+        },
+        {
+          "id": 301,
+          "type": "timeseries",
+          "title": "Request rate by outcome",
+          "description": "WAF-evaluated requests per second, split by outcome (pass, block, detect, redirect, error). From coraza_waf_requests_total. Pass should dominate on healthy traffic. Sustained error means the filter is failing closed or open in a bad way.",
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 48
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "palette-classic"
+              },
+              "custom": {
+                "drawStyle": "line",
+                "lineInterpolation": "smooth",
+                "fillOpacity": 15,
+                "showPoints": "never",
+                "spanNulls": false
+              },
+              "unit": "reqps"
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "targets": [
+            {
+              "expr": "sum by (outcome) (rate(coraza_waf_requests_total{engine=~\"$engine\",gateway=~\"$gateway\"}[5m]))",
+              "legendFormat": "{{outcome}}",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "id": 302,
+          "type": "stat",
+          "title": "Block ratio (1h)",
+          "description": "Fraction of WAF-evaluated requests that were blocked in the last hour. Near-term pulse only. For weekend-style attack review use the \"Block ratio over time\" panel below and widen the Grafana range (24h or 7d); that series uses a short rate window so history is not collapsed into one number.",
+          "gridPos": {
+            "h": 8,
+            "w": 6,
+            "x": 12,
+            "y": 48
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "thresholds"
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "orange",
+                    "value": 0.05
+                  },
+                  {
+                    "color": "red",
+                    "value": 0.2
+                  }
+                ]
+              },
+              "unit": "percentunit",
+              "decimals": 2
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            },
+            "orientation": "auto",
+            "textMode": "auto",
+            "colorMode": "value",
+            "graphMode": "area",
+            "justifyMode": "auto"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "sum(increase(coraza_waf_requests_total{outcome=\"block\",engine=~\"$engine\",gateway=~\"$gateway\"}[1h])) / clamp_min(sum(increase(coraza_waf_requests_total{engine=~\"$engine\",gateway=~\"$gateway\"}[1h])), 1e-9)",
+              "legendFormat": "",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              }
+            }
+          ]
+        },
+        {
+          "id": 303,
+          "type": "stat",
+          "title": "Total throughput",
+          "description": "All WAF-evaluated requests per second across every outcome. This is the main traffic volume signal for the Coraza filter.",
+          "gridPos": {
+            "h": 8,
+            "w": 6,
+            "x": 18,
+            "y": 48
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "thresholds"
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "red",
+                    "value": 80
+                  }
+                ]
+              },
+              "unit": "reqps"
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            },
+            "orientation": "auto",
+            "textMode": "auto",
+            "colorMode": "value",
+            "graphMode": "area",
+            "justifyMode": "auto"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "sum(rate(coraza_waf_requests_total{engine=~\"$engine\",gateway=~\"$gateway\"}[5m])) or vector(0)",
+              "legendFormat": "",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              }
+            }
+          ]
+        },
+        {
+          "id": 304,
+          "type": "timeseries",
+          "title": "Block ratio over time",
+          "description": "Blocked requests as a fraction of all WAF-evaluated requests, from coraza_waf_requests_total. The PromQL uses a 5m rate window; stretch the Grafana time picker to 24h or 7d to review longer periods (for example a weekend probe). Needs working counter accumulation and sufficient Thanos retention to be meaningful over multi-day ranges.",
+          "gridPos": {
+            "h": 8,
+            "w": 24,
+            "x": 0,
+            "y": 56
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "palette-classic"
+              },
+              "custom": {
+                "drawStyle": "line",
+                "lineInterpolation": "smooth",
+                "fillOpacity": 15,
+                "showPoints": "never",
+                "spanNulls": false
+              },
+              "unit": "percentunit",
+              "decimals": 3,
+              "min": 0,
+              "max": 1
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "sum(rate(coraza_waf_requests_total{outcome=\"block\",engine=~\"$engine\",gateway=~\"$gateway\"}[5m])) / clamp_min(sum(rate(coraza_waf_requests_total{engine=~\"$engine\",gateway=~\"$gateway\"}[5m])), 1e-9)",
+              "legendFormat": "block ratio",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              }
+            }
+          ]
+        },
+        {
+          "id": 400,
+          "type": "row",
+          "title": "Attack breakdown",
+          "gridPos": {
+            "h": 1,
+            "w": 24,
+            "x": 0,
+            "y": 64
+          },
+          "collapsed": false,
+          "panels": [],
+          "description": "Blocked requests from coraza_waf_blocked_requests_total, labeled by attack category and severity (CRS-style tags mapped by the driver)."
+        },
+        {
+          "id": 401,
+          "type": "timeseries",
+          "title": "Blocked by category",
+          "description": "Block rate by attack category (sqli, xss, rce, lfi, and so on, or other when no CRS attack-* tag matched). Spikes in one category usually mean a campaign or a noisy rule.",
+          "gridPos": {
+            "h": 8,
+            "w": 8,
+            "x": 0,
+            "y": 65
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "palette-classic"
+              },
+              "custom": {
+                "drawStyle": "line",
+                "lineInterpolation": "smooth",
+                "fillOpacity": 15,
+                "showPoints": "never",
+                "spanNulls": false
+              },
+              "unit": "reqps"
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "targets": [
+            {
+              "expr": "sum by (category) (rate(coraza_waf_blocked_requests_total{engine=~\"$engine\",gateway=~\"$gateway\"}[5m]))",
+              "legendFormat": "{{category}}",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "id": 402,
+          "type": "timeseries",
+          "title": "Blocked by severity",
+          "description": "Block rate by rule severity (CRITICAL, ERROR, WARNING, NOTICE, INFO). A sudden shift toward CRITICAL is a stronger signal than volume alone.",
+          "gridPos": {
+            "h": 8,
+            "w": 8,
+            "x": 8,
+            "y": 65
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "palette-classic"
+              },
+              "custom": {
+                "drawStyle": "line",
+                "lineInterpolation": "smooth",
+                "fillOpacity": 15,
+                "showPoints": "never",
+                "spanNulls": false
+              },
+              "unit": "reqps"
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "targets": [
+            {
+              "expr": "sum by (severity) (rate(coraza_waf_blocked_requests_total{engine=~\"$engine\",gateway=~\"$gateway\"}[5m]))",
+              "legendFormat": "{{severity}}",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "id": 403,
+          "type": "table",
+          "title": "Category \u00d7 severity heatmap",
+          "description": "Blocked request counts over the last hour, broken down by both category and severity. Read this as a table of where the ruleset is actually stopping traffic.",
+          "gridPos": {
+            "h": 8,
+            "w": 8,
+            "x": 16,
+            "y": 65
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "fieldConfig": {
+            "defaults": {},
+            "overrides": []
+          },
+          "options": {
+            "showHeader": true,
+            "cellHeight": "sm",
+            "footer": {
+              "show": false
+            }
+          },
+          "transformations": [
+            {
+              "id": "labelsToFields",
+              "options": {}
+            },
+            {
+              "id": "organize",
+              "options": {
+                "excludeByName": {
+                  "Time": true,
+                  "job": true,
+                  "instance": true,
+                  "exported_job": true,
+                  "exported_instance": true,
+                  "otel_scope_name": true,
+                  "otel_scope_version": true,
+                  "otel_scope_schema_url": true
+                },
+                "indexByName": {},
+                "renameByName": {
+                  "Value": "count"
+                }
+              }
+            }
+          ],
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "sum by (category, severity) (increase(coraza_waf_blocked_requests_total{engine=~\"$engine\",gateway=~\"$gateway\"}[1h]))",
+              "format": "table",
+              "instant": true,
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              }
+            }
+          ]
+        },
+        {
+          "id": 500,
+          "type": "row",
+          "title": "Rule analysis",
+          "gridPos": {
+            "h": 1,
+            "w": 24,
+            "x": 0,
+            "y": 73
+          },
+          "collapsed": false,
+          "panels": [],
+          "description": "Per-rule hit counts from coraza_waf_rule_hits_from_logs_total. This series is still a follow-up in the driver metrics contract and may stay empty until the WASM plugin emits rule-hit log events."
+        },
+        {
+          "id": 501,
+          "type": "bargauge",
+          "title": "Top 10 firing rules (1h)",
+          "description": "The ten rules with the most hits in the last hour, with category and severity. Empty until coraza_waf_rule_hits_from_logs_total is populated by the driver.",
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 74
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "palette-classic"
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "red",
+                    "value": 80
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            },
+            "orientation": "horizontal",
+            "displayMode": "gradient",
+            "showUnfilled": true
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "topk(10, sum by (rule_id, category, severity) (increase(coraza_waf_rule_hits_from_logs_total{engine=~\"$engine\",gateway=~\"$gateway\"}[1h])))",
+              "legendFormat": "{{rule_id}} {{category}}/{{severity}}",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              }
+            }
+          ]
+        },
+        {
+          "id": 502,
+          "type": "stat",
+          "title": "Unique rules firing",
+          "description": "How many distinct rule ids produced at least one hit in the last hour. Empty until the rule-hits log metric is implemented.",
+          "gridPos": {
+            "h": 8,
+            "w": 4,
+            "x": 12,
+            "y": 74
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "thresholds"
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "red",
+                    "value": 80
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            },
+            "orientation": "auto",
+            "textMode": "auto",
+            "colorMode": "value",
+            "graphMode": "area",
+            "justifyMode": "auto"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "count(count by (rule_id) (last_over_time(coraza_waf_rule_hits_from_logs_total{engine=~\"$engine\",gateway=~\"$gateway\"}[1h]))) or vector(0)",
+              "legendFormat": "",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              }
+            }
+          ]
+        },
+        {
+          "id": 503,
+          "type": "timeseries",
+          "title": "Rule hits (rule_id=$rule_id)",
+          "description": "Hit rate for the rule id selected in the dashboard variable. Use the Rule ID text box at the top of the dashboard to change the target. Empty until coraza_waf_rule_hits_from_logs_total is populated.",
+          "gridPos": {
+            "h": 8,
+            "w": 8,
+            "x": 16,
+            "y": 74
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "palette-classic"
+              },
+              "custom": {
+                "drawStyle": "line",
+                "lineInterpolation": "smooth",
+                "fillOpacity": 15,
+                "showPoints": "never",
+                "spanNulls": false
+              },
+              "unit": "ops"
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "targets": [
+            {
+              "expr": "sum(rate(coraza_waf_rule_hits_from_logs_total{rule_id=\"$rule_id\",engine=~\"$engine\",gateway=~\"$gateway\"}[5m])) or vector(0)",
+              "legendFormat": "rule $rule_id",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "id": 600,
+          "type": "row",
+          "title": "Per-engine / tenancy",
+          "gridPos": {
+            "h": 1,
+            "w": 24,
+            "x": 0,
+            "y": 82
+          },
+          "collapsed": false,
+          "panels": [],
+          "description": "Request and block rates labeled by Engine CR name and namespace. The OpenTelemetry Collector adds these tenancy labels from Gateway pod metadata. They are not injected by the WasmPlugin config."
+        },
+        {
+          "id": 601,
+          "type": "timeseries",
+          "title": "Request rate by (engine, namespace)",
+          "description": "WAF request rate per Engine and namespace. Use this when more than one Engine is scraped under the same job.",
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 83
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "palette-classic"
+              },
+              "custom": {
+                "drawStyle": "line",
+                "lineInterpolation": "smooth",
+                "fillOpacity": 15,
+                "showPoints": "never",
+                "spanNulls": false
+              },
+              "unit": "reqps"
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "targets": [
+            {
+              "expr": "sum by (engine, namespace) (rate(coraza_waf_requests_total{engine=~\"$engine\",gateway=~\"$gateway\"}[5m]))",
+              "legendFormat": "{{namespace}}/{{engine}}",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "id": 602,
+          "type": "timeseries",
+          "title": "Block rate by (engine, namespace)",
+          "description": "WAF block rate per Engine and namespace. Compare with the request-rate panel above to see which tenant is blocking the most traffic.",
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 83
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "palette-classic"
+              },
+              "custom": {
+                "drawStyle": "line",
+                "lineInterpolation": "smooth",
+                "fillOpacity": 15,
+                "showPoints": "never",
+                "spanNulls": false
+              },
+              "unit": "reqps"
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "targets": [
+            {
+              "expr": "sum by (engine, namespace) (rate(coraza_waf_blocked_requests_total{engine=~\"$engine\",gateway=~\"$gateway\"}[5m]))",
+              "legendFormat": "{{namespace}}/{{engine}}",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "id": 500,
+          "type": "row",
+          "title": "Threat posture",
+          "description": "SOC-style rollups over the live OTC WAF metrics: attack mix, critical share, block velocity, and which rules are doing the work.",
+          "gridPos": {
+            "h": 1,
+            "w": 24,
+            "x": 0,
+            "y": 92
+          },
+          "collapsed": false,
+          "panels": []
+        },
+        {
+          "id": 501,
+          "type": "piechart",
+          "title": "Attack mix (1h blocks by category)",
+          "description": "Share of blocked requests in the last hour by attack category. A single category dominating the pie often means a focused probe or a mis-tuned rule.",
+          "gridPos": {
+            "h": 8,
+            "w": 8,
+            "x": 0,
+            "y": 93
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "palette-classic"
+              },
+              "unit": "short"
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "table",
+              "placement": "right",
+              "showLegend": true,
+              "values": [
+                "value",
+                "percent"
+              ]
+            },
+            "pieType": "donut",
+            "tooltip": {
+              "mode": "single",
+              "sort": "desc"
+            },
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            }
+          },
+          "targets": [
+            {
+              "expr": "sum by (category) (increase(coraza_waf_blocked_requests_total{engine=~\"$engine\",gateway=~\"$gateway\"}[1h]))",
+              "legendFormat": "{{category}}",
+              "refId": "A",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              },
+              "instant": true
+            }
+          ]
+        },
+        {
+          "id": 502,
+          "type": "stat",
+          "title": "CRITICAL share of blocks",
+          "description": "Fraction of blocks in the last hour that carried severity=CRITICAL. High values mean the ruleset is stopping the most severe matches, not just noisy low-severity hits.",
+          "gridPos": {
+            "h": 8,
+            "w": 4,
+            "x": 8,
+            "y": 93
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "thresholds"
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "orange",
+                    "value": 0.5
+                  },
+                  {
+                    "color": "red",
+                    "value": 0.9
+                  }
+                ]
+              },
+              "unit": "percentunit",
+              "decimals": 2
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            },
+            "orientation": "auto",
+            "textMode": "auto",
+            "colorMode": "value",
+            "graphMode": "area",
+            "justifyMode": "auto"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "sum(increase(coraza_waf_blocked_requests_total{severity=\"CRITICAL\",engine=~\"$engine\",gateway=~\"$gateway\"}[1h])) / clamp_min(sum(increase(coraza_waf_blocked_requests_total{engine=~\"$engine\",gateway=~\"$gateway\"}[1h])), 1e-9)",
+              "legendFormat": "",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              }
+            }
+          ]
+        },
+        {
+          "id": 503,
+          "type": "stat",
+          "title": "Block velocity",
+          "description": "Current blocked-request rate in requests per second. This is the near-real-time signal for how hard the WAF is working right now.",
+          "gridPos": {
+            "h": 8,
+            "w": 4,
+            "x": 12,
+            "y": 93
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "thresholds"
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "orange",
+                    "value": 1
+                  },
+                  {
+                    "color": "red",
+                    "value": 5
+                  }
+                ]
+              },
+              "unit": "reqps",
+              "decimals": 2
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            },
+            "orientation": "auto",
+            "textMode": "auto",
+            "colorMode": "value",
+            "graphMode": "area",
+            "justifyMode": "auto"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "sum(rate(coraza_waf_blocked_requests_total{engine=~\"$engine\",gateway=~\"$gateway\"}[5m])) or vector(0)",
+              "legendFormat": "",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              }
+            }
+          ]
+        },
+        {
+          "id": 504,
+          "type": "stat",
+          "title": "Rule efficiency (blocks / rules)",
+          "description": "Blocks in the last hour divided by the number of distinct firing rules. A high value means a few rules are doing most of the blocking. Depends on rule-hit metrics and may stay empty until those exist.",
+          "gridPos": {
+            "h": 8,
+            "w": 8,
+            "x": 16,
+            "y": 93
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "thresholds"
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "blue",
+                    "value": null
+                  }
+                ]
+              },
+              "unit": "short",
+              "decimals": 2
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            },
+            "orientation": "auto",
+            "textMode": "auto",
+            "colorMode": "value",
+            "graphMode": "area",
+            "justifyMode": "auto"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "sum(increase(coraza_waf_blocked_requests_total{engine=~\"$engine\",gateway=~\"$gateway\"}[1h])) / clamp_min(count(count by (rule_id) (last_over_time(coraza_waf_rule_hits_from_logs_total{engine=~\"$engine\",gateway=~\"$gateway\"}[1h]))), 1)",
+              "legendFormat": "",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              }
+            }
+          ]
+        },
+        {
+          "id": 505,
+          "type": "timeseries",
+          "title": "Top rule campaigns (hit rate)",
+          "description": "Hit rate for the top five firing rules. Sharp spikes often mean an attack campaign or a false-positive storm against one rule. Empty until coraza_waf_rule_hits_from_logs_total is populated.",
+          "gridPos": {
+            "h": 8,
+            "w": 24,
+            "x": 0,
+            "y": 101
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "palette-classic"
+              },
+              "custom": {
+                "drawStyle": "line",
+                "lineInterpolation": "smooth",
+                "fillOpacity": 15,
+                "showPoints": "never",
+                "spanNulls": false
+              },
+              "unit": "reqps"
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "targets": [
+            {
+              "expr": "topk(5, sum by (rule_id, category) (rate(coraza_waf_rule_hits_from_logs_total{engine=~\"$engine\",gateway=~\"$gateway\"}[5m])))",
+              "legendFormat": "{{rule_id}} {{category}}",
+              "refId": "A",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              }
+            }
+          ]
+        },
+        {
+          "id": 600,
+          "type": "row",
+          "title": "Pipeline trust",
+          "description": "Side-by-side checks between Envoy waf_filter_* stats and the OTC log-to-metrics coraza_waf_* series. Large, lasting drift between the two paths usually means a collector or scrape bug.",
+          "gridPos": {
+            "h": 1,
+            "w": 24,
+            "x": 0,
+            "y": 109
+          },
+          "collapsed": false,
+          "panels": []
+        },
+        {
+          "id": 601,
+          "type": "timeseries",
+          "title": "Blocks: log-metrics vs filter interruptions",
+          "description": "Block rate from coraza_waf_blocked_requests_total next to interruption rate from the Envoy waf_filter counters. They should move together. A large gap means the log-to-metrics pipeline and the filter stats disagree.",
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 110
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "palette-classic"
+              },
+              "custom": {
+                "drawStyle": "line",
+                "lineInterpolation": "smooth",
+                "fillOpacity": 10,
+                "showPoints": "never",
+                "spanNulls": false
+              },
+              "unit": "reqps"
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "targets": [
+            {
+              "expr": "sum(rate(coraza_waf_blocked_requests_total{job=\"coraza-envoy\",engine=~\"$engine\",gateway=~\"$gateway\"}[5m]))",
+              "legendFormat": "OTC log\u2192metrics blocks",
+              "refId": "A",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              }
+            },
+            {
+              "expr": "sum(rate(waf_filter_tx_interruptions_ruleid_1001_phase_http_request_headers_total{job=\"coraza-envoy\"}[5m]) or rate(waf_filter_tx_interruptions_ruleid_2001_phase_http_request_headers_total{job=\"coraza-envoy\"}[5m]) or rate(waf_filter_tx_interruptions_ruleid_3001_phase_http_request_headers_total{job=\"coraza-envoy\"}[5m]) or rate(waf_filter_tx_interruptions_ruleid_3002_phase_http_request_headers_total{job=\"coraza-envoy\"}[5m]))",
+              "legendFormat": "Envoy waf_filter interruptions",
+              "refId": "B",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              }
+            }
+          ]
+        },
+        {
+          "id": 602,
+          "type": "timeseries",
+          "title": "Coverage: WAF evals vs filter tx",
+          "description": "coraza_waf_requests_total versus waf_filter_tx_total on job=coraza-envoy. These should track closely: every filter transaction should also show up as a WAF-evaluated request in the log pipeline.",
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 110
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "palette-classic"
+              },
+              "custom": {
+                "drawStyle": "line",
+                "lineInterpolation": "smooth",
+                "fillOpacity": 10,
+                "showPoints": "never",
+                "spanNulls": false
+              },
+              "unit": "reqps"
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "targets": [
+            {
+              "expr": "sum(rate(coraza_waf_requests_total{job=\"coraza-envoy\",engine=~\"$engine\",gateway=~\"$gateway\"}[5m]))",
+              "legendFormat": "OTC WAF requests",
+              "refId": "A",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              }
+            },
+            {
+              "expr": "sum(rate(waf_filter_tx_total{job=\"coraza-envoy\"}[5m]))",
+              "legendFormat": "Envoy waf_filter tx",
+              "refId": "B",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              }
+            }
+          ]
+        },
+        {
+          "id": 700,
+          "type": "row",
+          "title": "Plugin lifecycle",
+          "description": "Plugin load events from coraza_waf_plugin_loads_total. This counter only moves when the WASM plugin loads or reloads, so the panels stay quiet between Engine or image changes.",
+          "gridPos": {
+            "h": 1,
+            "w": 24,
+            "x": 0,
+            "y": 118
+          },
+          "collapsed": false,
+          "panels": []
+        },
+        {
+          "id": 701,
+          "type": "timeseries",
+          "title": "Plugin loads by status",
+          "description": "Current plugin load counter by status (success or failure), using the last value seen in the past hour. This counter only moves on load or reload; Prometheus increase() ignores the initial sample after a pod start, so the panel reads the live counter instead. Failures after an Engine apply mean the new WASM binary or config did not take effect.",
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 119
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "palette-classic"
+              },
+              "custom": {
+                "drawStyle": "line",
+                "lineInterpolation": "smooth",
+                "fillOpacity": 15,
+                "showPoints": "never",
+                "spanNulls": false
+              },
+              "unit": "ops"
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "targets": [
+            {
+              "expr": "sum by (status) (last_over_time(coraza_waf_plugin_loads_total{job=\"coraza-envoy\",engine=~\"$engine\",gateway=~\"$gateway\"}[1h]))",
+              "legendFormat": "{{status}}",
+              "refId": "A",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              }
+            }
+          ]
+        },
+        {
+          "id": 702,
+          "type": "stat",
+          "title": "Plugin load events (1h)",
+          "description": "How many plugin load attempts happened in the last hour, success and failure combined. Expect a small number after rollouts; a high count under steady state means the plugin is flapping.",
+          "gridPos": {
+            "h": 8,
+            "w": 6,
+            "x": 12,
+            "y": 119
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "thresholds"
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "blue",
+                    "value": null
+                  }
+                ]
+              },
+              "unit": "short",
+              "decimals": 2
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            },
+            "orientation": "auto",
+            "textMode": "auto",
+            "colorMode": "value",
+            "graphMode": "area",
+            "justifyMode": "auto"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "sum(increase(coraza_waf_plugin_loads_total{job=\"coraza-envoy\",engine=~\"$engine\",gateway=~\"$gateway\"}[1h])) or vector(0)",
+              "legendFormat": "",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              }
+            }
+          ]
+        },
+        {
+          "id": 703,
+          "type": "stat",
+          "title": "Plugin load failures (1h)",
+          "description": "Plugin load attempts in the last hour that did not succeed. Any non-zero value after a config or image change deserves a look at the Envoy and OTC logs.",
+          "gridPos": {
+            "h": 8,
+            "w": 6,
+            "x": 18,
+            "y": 119
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "thresholds"
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "red",
+                    "value": 1
+                  }
+                ]
+              },
+              "unit": "short",
+              "decimals": 2
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            },
+            "orientation": "auto",
+            "textMode": "auto",
+            "colorMode": "value",
+            "graphMode": "area",
+            "justifyMode": "auto"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "sum(increase(coraza_waf_plugin_loads_total{job=\"coraza-envoy\", status!=\"success\",engine=~\"$engine\",gateway=~\"$gateway\"}[1h])) or vector(0)",
+              "legendFormat": "",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              }
+            }
+          ]
+        }
+      ],
+      "description": "Coraza WAF observability via OTC sidecar (job=coraza-envoy). Includes Envoy/WASM health, waf_filter/Istio traffic, and live log\u2192metrics (requests, blocks, rule hits, plugin loads)."
+    }
