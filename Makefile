@@ -125,10 +125,13 @@ all: build
 # Build
 # ------------------------------------------------------------------------------
 
-.PHONY: build
-build: manifests generate fmt vet lint
+.PHONY: build.binaries
+build.binaries:
 	go build -o bin/manager -tags no_fs_access ./cmd/manager
 	go build -o bin/kubectl-coraza ./cmd/kubectl-coraza
+
+.PHONY: build
+build: manifests generate fmt vet lint build.binaries
 
 .PHONY: build.image
 build.image:
@@ -691,7 +694,7 @@ OPERATOR_SDK ?= $(LOCALBIN)/operator-sdk
 KUBE_API_LINTER = $(LOCALBIN)/golangci-lint-kube-api-linter
 
 CONTROLLER_TOOLS_VERSION ?= v0.21.0
-GOLANGCI_LINT_VERSION ?= v2.5.0
+GOLANGCI_LINT_VERSION ?= v2.12.2
 OPERATOR_SDK_VERSION ?= v1.42.0
 KUBE_API_LINTER_VERSION ?= v0.0.0-20260206102632-39e3d06a2850
 
