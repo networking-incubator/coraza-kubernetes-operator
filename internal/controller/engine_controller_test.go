@@ -36,6 +36,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	wafv1alpha1 "github.com/networking-incubator/coraza-kubernetes-operator/api/v1alpha1"
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/defaults"
@@ -47,23 +48,18 @@ import (
 // validation tests. The resource is cleaned up via t.Cleanup. The returned
 // object can be used for manual deletion in tests that need to remove the
 // Gateway mid-test (the cleanup will log but not fail on NotFound).
-func createTestGateway(t *testing.T, ctx context.Context, c client.Client, name, namespace string) *unstructured.Unstructured {
+func createTestGateway(t *testing.T, ctx context.Context, c client.Client, name, namespace string) *gatewayv1.Gateway {
 	t.Helper()
-	gw := &unstructured.Unstructured{}
-	gw.SetGroupVersionKind(schema.GroupVersionKind{
-		Group:   "gateway.networking.k8s.io",
-		Version: "v1",
-		Kind:    "Gateway",
-	})
+	gw := &gatewayv1.Gateway{}
 	gw.SetName(name)
 	gw.SetNamespace(namespace)
-	gw.Object["spec"] = map[string]any{
-		"gatewayClassName": "istio",
-		"listeners": []any{
-			map[string]any{
-				"name":     "http",
-				"port":     int64(80),
-				"protocol": "HTTP",
+	gw.Spec = gatewayv1.GatewaySpec{
+		GatewayClassName: "istio",
+		Listeners: []gatewayv1.Listener{
+			{
+				Name:     "http",
+				Port:     gatewayv1.PortNumber(80),
+				Protocol: gatewayv1.HTTPProtocolType,
 			},
 		},
 	}

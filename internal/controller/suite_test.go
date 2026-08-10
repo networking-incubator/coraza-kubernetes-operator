@@ -37,6 +37,7 @@ import (
 	ctrlcache "sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
+	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	wafv1alpha1 "github.com/networking-incubator/coraza-kubernetes-operator/api/v1alpha1"
 )
@@ -95,6 +96,10 @@ func TestMain(m *testing.M) {
 	}
 	if err := networkingv1.AddToScheme(scheme); err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to add networking scheme: %v\n", err)
+		os.Exit(1)
+	}
+	if err := gatewayv1.Install(scheme); err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to add gateway scheme: %v\n", err)
 		os.Exit(1)
 	}
 

@@ -45,6 +45,8 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
+
+	gwapiclient "sigs.k8s.io/gateway-api/pkg/client/clientset/versioned"
 )
 
 // -----------------------------------------------------------------------------
@@ -68,6 +70,9 @@ type Framework struct {
 
 	// KubeClient is the typed Kubernetes client.
 	KubeClient kubernetes.Interface
+
+	// GatewayAPI client is the typed client for GatewayAPI
+	GatewayAPIClient gwapiclient.Interface
 
 	// DynamicClient is the dynamic Kubernetes client for unstructured resources.
 	DynamicClient dynamic.Interface
@@ -123,10 +128,16 @@ func New() (*Framework, error) {
 		return nil, fmt.Errorf("failed to create dynamic client: %w", err)
 	}
 
+	gatewayAPIClient, err := gwapiclient.NewForConfig(config)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create GatewayAPI client: %w", err)
+	}
+
 	fw := &Framework{
 		RestConfig:           config,
 		KubeClient:           kubeClient,
 		DynamicClient:        dynamicClient,
+		GatewayAPIClient:     gatewayAPIClient,
 		ClusterName:          clusterName,
 		IstioGatewayRevision: strings.TrimSpace(os.Getenv("ISTIO_GATEWAY_REVISION")),
 	}
