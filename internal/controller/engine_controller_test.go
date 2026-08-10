@@ -2195,6 +2195,143 @@ func TestEngineReconciler_MetricsRecordOnSuccess(t *testing.T) {
 // TestEngineReconciler_MetricsForgetOnNotFound verifies that a not-found
 // reconcile (simulating deletion) calls ForgetEngine and removes the info and
 // condition series from the registry.
+func TestEngineReconciler_DeleteRecreateGetsNewToken(t *testing.T) {
+	ctx, cleanup := setupTest(t)
+	defer cleanup()
+
+	const (
+		engineName  = "stale-token-engine"
+		rulesetName = "stale-token-ruleset"
+	)
+
+	createTestGateway(t, ctx, k8sClient, "test-gw", testNamespace)
+
+	ruleset := utils.NewTestRuleSet(utils.RuleSetOptions{
+		Name:      rulesetName,
+		Namespace: testNamespace,
+	})
+	require.NoError(t, k8sClient.Create(ctx, ruleset))
+	t.Cleanup(func() {
+		if err := k8sClient.Delete(ctx, ruleset); err != nil {
+			t.Logf("Failed to delete ruleset: %v", err)
+		}
+	})
+
+	engine := utils.NewTestEngine(utils.EngineOptions{
+		Name:        engineName,
+		Namespace:   testNamespace,
+		RuleSetName: rulesetName,
+	})
+	require.NoError(t, k8sClient.Create(ctx, engine))
+	// No t.Cleanup — this engine is deleted explicitly in Phase 2.
+
+	reg := prometheus.NewRegistry()
+	m, err := NewCorazaMetrics(reg)
+	require.NoError(t, err)
+
+	reconciler := &EngineReconciler{
+		Client:                    k8sClient,
+		Scheme:                    scheme,
+		Recorder:                  utils.NewTestRecorder(),
+		Metrics:                   m,
+		kubeClient:                testKubeClient,
+		ruleSetCacheServerCluster: "test-cluster",
+		defaultWasmImage:          defaults.DefaultCorazaWasmOCIReference,
+		operatorNamespace:         testNamespace,
+	}
+	req := ctrl.Request{
+		NamespacedName: types.NamespacedName{
+			Name:      engine.Name,
+			Namespace: engine.Namespace,
+		},
+	}
+	tokenKey := fmt.Sprintf("%s/%s/%s", testNamespace, engineName, rulesetName)
+
+	// --- Phase 1: initial provision (finalizer + provisioning reconciles) ---
+	result, err := reconciler.Reconcile(ctx, req)
+	require.NoError(t, err)
+	assert.NotZero(t, result.RequeueAfter, "finalizer add must request requeue")
+
+	result, err = reconciler.Reconcile(ctx, req)
+	require.NoError(t, err)
+	assert.NotZero(t, result.RequeueAfter, "provisioning must schedule token renewal requeue")
+
+	val, found := reconciler.tokenStore.Load(tokenKey)
+	require.True(t, found, "token must be stored after initial provisioning")
+	originalToken := val.(*TokenEntry).Token
+	require.NotEmpty(t, originalToken)
+
+	var saList corev1.ServiceAccountList
+	err = k8sClient.List(ctx, &saList,
+		client.InNamespace(testNamespace),
+		client.MatchingLabels(cacheClientSALabels(engineName)),
+	)
+	require.NoError(t, err)
+	require.Len(t, saList.Items, 1)
+	originalSAName := saList.Items[0].Name
+
+	// --- Phase 2: delete Engine and its SA (simulating GC) ---
+	require.NoError(t, k8sClient.Delete(ctx, engine))
+	require.NoError(t, k8sClient.Delete(ctx, &saList.Items[0]))
+
+	// Reconcile finalizer removal: Engine still exists (DeletionTimestamp
+	// set) — handleNetworkPolicyDeletion removes the finalizer.
+	_, err = reconciler.Reconcile(ctx, req)
+	require.NoError(t, err)
+
+	// Verify the Engine is now fully deleted (finalizer removed → GC'd).
+	var gone wafv1alpha1.Engine
+	require.True(t, apierrors.IsNotFound(k8sClient.Get(ctx, req.NamespacedName, &gone)),
+		"Engine must be gone after finalizer removal")
+
+	// Reconcile the IsNotFound path — cleans up the tokenStore.
+	_, err = reconciler.Reconcile(ctx, req)
+	require.NoError(t, err)
+
+	_, found = reconciler.tokenStore.Load(tokenKey)
+	assert.False(t, found, "tokenStore entry must be cleaned up when Engine is deleted")
+
+	// --- Phase 3: recreate Engine with the same name ---
+	engine2 := utils.NewTestEngine(utils.EngineOptions{
+		Name:        engineName,
+		Namespace:   testNamespace,
+		RuleSetName: rulesetName,
+	})
+	require.NoError(t, k8sClient.Create(ctx, engine2))
+	t.Cleanup(func() {
+		if err := k8sClient.Delete(ctx, engine2); err != nil {
+			t.Logf("Failed to delete engine: %v", err)
+		}
+	})
+
+	// Reconcile the recreated Engine (finalizer + provisioning).
+	result, err = reconciler.Reconcile(ctx, req)
+	require.NoError(t, err)
+	assert.NotZero(t, result.RequeueAfter, "finalizer add must request requeue")
+
+	result, err = reconciler.Reconcile(ctx, req)
+	require.NoError(t, err)
+	assert.NotZero(t, result.RequeueAfter, "provisioning must schedule token renewal requeue")
+
+	// A new SA should have been created (the original was deleted).
+	var newSAList corev1.ServiceAccountList
+	err = k8sClient.List(ctx, &newSAList,
+		client.InNamespace(testNamespace),
+		client.MatchingLabels(cacheClientSALabels(engineName)),
+	)
+	require.NoError(t, err)
+	require.Len(t, newSAList.Items, 1)
+	assert.NotEqual(t, originalSAName, newSAList.Items[0].Name,
+		"recreated Engine must get a new SA, not reuse the deleted one")
+
+	// The recreated Engine must get a fresh token bound to the new SA.
+	val, found = reconciler.tokenStore.Load(tokenKey)
+	require.True(t, found, "recreated Engine must have a token")
+	newToken := val.(*TokenEntry).Token
+	assert.NotEqual(t, originalToken, newToken,
+		"recreated Engine must get a fresh token, not reuse the stale one")
+}
+
 func TestEngineReconciler_MetricsForgetOnNotFound(t *testing.T) {
 	ctx, cleanup := setupTest(t)
 	defer cleanup()

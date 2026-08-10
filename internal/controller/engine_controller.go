@@ -173,6 +173,12 @@ func (r *EngineReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 			if listErr := r.List(ctx, &list, client.InNamespace(req.Namespace)); listErr == nil {
 				r.Metrics.SetEnginesTotal(req.Namespace, len(list.Items))
 			}
+
+			// Remove cached tokens for this Engine so a recreated Engine
+			// with the same name does not reuse a token bound to the
+			// now-deleted ServiceAccount.
+			r.deleteTokensByPrefix(req.Namespace + "/" + req.Name + "/")
+
 			// Best-effort cleanup: remove any orphaned NetworkPolicy that may
 			// remain if the Engine was deleted before the finalizer was added
 			// (e.g., race during upgrade or legacy Engine without finalizer).
