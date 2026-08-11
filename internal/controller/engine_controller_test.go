@@ -2445,15 +2445,17 @@ func TestEngineReconciler_StaleOwnerSANotReused(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, allSAs.Items, 2, "stale SA + new SA must both exist")
 
-	var newSAName string
 	for _, sa := range allSAs.Items {
-		if sa.Name != staleSAName {
-			newSAName = sa.Name
+		ref := metav1.GetControllerOf(&sa)
+		require.NotNil(t, ref, "SA %s must have a controller owner reference", sa.Name)
+		if sa.Name == staleSAName {
+			assert.Equal(t, staleUID, ref.UID,
+				"stale SA must still reference the old Engine UID")
+		} else {
+			assert.Equal(t, engine2.UID, ref.UID,
+				"new SA must be owned by the recreated Engine")
 		}
 	}
-	require.NotEmpty(t, newSAName, "a new SA must have been created")
-	assert.NotEqual(t, staleSAName, newSAName,
-		"recreated Engine must not reuse SA owned by previous Engine instance")
 }
 
 func TestEngineReconciler_MetricsForgetOnNotFound(t *testing.T) {
