@@ -48,6 +48,7 @@ dist/
 
 # documentation site (Hugo)
 !docs/*.md
+!docs/agents/*.md
 !docs/content/**/*.md
 !docs/content/**/*.html
 docs/content/reference/api.md
