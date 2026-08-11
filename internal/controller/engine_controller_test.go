@@ -2332,6 +2332,130 @@ func TestEngineReconciler_DeleteRecreateGetsNewToken(t *testing.T) {
 		"recreated Engine must get a fresh token, not reuse the stale one")
 }
 
+// TestEngineReconciler_StaleOwnerSANotReused verifies that when an Engine is
+// deleted and recreated with the same name, a ServiceAccount left behind by the
+// previous Engine (stale owner reference, different UID) is not reused.
+func TestEngineReconciler_StaleOwnerSANotReused(t *testing.T) {
+	ctx, cleanup := setupTest(t)
+	defer cleanup()
+
+	const (
+		engineName  = "stale-owner-engine"
+		rulesetName = "stale-owner-ruleset"
+	)
+
+	createTestGateway(t, ctx, k8sClient, "test-gw", testNamespace)
+
+	ruleset := utils.NewTestRuleSet(utils.RuleSetOptions{
+		Name:      rulesetName,
+		Namespace: testNamespace,
+	})
+	require.NoError(t, k8sClient.Create(ctx, ruleset))
+	t.Cleanup(func() {
+		if err := k8sClient.Delete(ctx, ruleset); err != nil {
+			t.Logf("Failed to delete ruleset: %v", err)
+		}
+	})
+
+	engine1 := utils.NewTestEngine(utils.EngineOptions{
+		Name:        engineName,
+		Namespace:   testNamespace,
+		RuleSetName: rulesetName,
+	})
+	require.NoError(t, k8sClient.Create(ctx, engine1))
+
+	reg := prometheus.NewRegistry()
+	m, err := NewCorazaMetrics(reg)
+	require.NoError(t, err)
+
+	reconciler := &EngineReconciler{
+		Client:                    k8sClient,
+		Scheme:                    scheme,
+		Recorder:                  utils.NewTestRecorder(),
+		Metrics:                   m,
+		kubeClient:                testKubeClient,
+		ruleSetCacheServerCluster: "test-cluster",
+		defaultWasmImage:          defaults.DefaultCorazaWasmOCIReference,
+		operatorNamespace:         testNamespace,
+	}
+	req := ctrl.Request{
+		NamespacedName: types.NamespacedName{
+			Name:      engineName,
+			Namespace: testNamespace,
+		},
+	}
+
+	// --- Phase 1: provision Engine1 to create its SA ---
+	_, err = reconciler.Reconcile(ctx, req) // finalizer
+	require.NoError(t, err)
+	_, err = reconciler.Reconcile(ctx, req) // provisioning
+	require.NoError(t, err)
+
+	var saList corev1.ServiceAccountList
+	err = k8sClient.List(ctx, &saList,
+		client.InNamespace(testNamespace),
+		client.MatchingLabels(cacheClientSALabels(engineName)),
+	)
+	require.NoError(t, err)
+	require.Len(t, saList.Items, 1)
+	staleSAName := saList.Items[0].Name
+	staleUID := engine1.UID
+
+	// --- Phase 2: delete Engine1 but leave the SA behind ---
+	require.NoError(t, k8sClient.Delete(ctx, engine1))
+	_, err = reconciler.Reconcile(ctx, req) // finalizer removal
+	require.NoError(t, err)
+	_, err = reconciler.Reconcile(ctx, req) // IsNotFound cleanup
+	require.NoError(t, err)
+
+	// SA still exists (envtest has no GC controller).
+	var remainingSAs corev1.ServiceAccountList
+	err = k8sClient.List(ctx, &remainingSAs,
+		client.InNamespace(testNamespace),
+		client.MatchingLabels(cacheClientSALabels(engineName)),
+	)
+	require.NoError(t, err)
+	require.Len(t, remainingSAs.Items, 1, "stale SA must still exist (no GC in envtest)")
+
+	// --- Phase 3: recreate Engine with the same name (different UID) ---
+	engine2 := utils.NewTestEngine(utils.EngineOptions{
+		Name:        engineName,
+		Namespace:   testNamespace,
+		RuleSetName: rulesetName,
+	})
+	require.NoError(t, k8sClient.Create(ctx, engine2))
+	t.Cleanup(func() {
+		if err := k8sClient.Delete(ctx, engine2); err != nil {
+			t.Logf("Failed to delete engine: %v", err)
+		}
+	})
+	require.NotEqual(t, staleUID, engine2.UID, "recreated Engine must have a different UID")
+
+	_, err = reconciler.Reconcile(ctx, req) // finalizer
+	require.NoError(t, err)
+	_, err = reconciler.Reconcile(ctx, req) // provisioning
+	require.NoError(t, err)
+
+	// Must have created a new SA, not reused the stale one.
+	var allSAs corev1.ServiceAccountList
+	err = k8sClient.List(ctx, &allSAs,
+		client.InNamespace(testNamespace),
+		client.MatchingLabels(cacheClientSALabels(engineName)),
+	)
+	require.NoError(t, err)
+	require.Len(t, allSAs.Items, 2, "stale SA + new SA must both exist")
+
+	var newSAName string
+	for _, sa := range allSAs.Items {
+		if sa.Name != staleSAName {
+			newSAName = sa.Name
+		}
+	}
+	require.NotEmpty(t, newSAName, "a new SA must have been created")
+	assert.NotEqual(t, staleSAName, newSAName,
+		"recreated Engine must not reuse SA owned by previous Engine instance")
+}
+
 func TestEngineReconciler_MetricsForgetOnNotFound(t *testing.T) {
 	ctx, cleanup := setupTest(t)
 	defer cleanup()

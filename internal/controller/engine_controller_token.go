@@ -112,11 +112,12 @@ func (r *EngineReconciler) ensureCacheClientServiceAccount(ctx context.Context, 
 		return "", fmt.Errorf("failed to list ServiceAccounts for engine %s: %w", engine.Name, err)
 	}
 
-	// Filter out terminating SAs — their tokens will become invalid
-	// once garbage collection completes.
+	// Filter to SAs that are non-terminating and owned by this Engine
+	// instance. The UID check prevents reusing an SA from a previous
+	// Engine with the same name whose GC hasn't completed yet.
 	var activeSAs []corev1.ServiceAccount
 	for i := range saList.Items {
-		if saList.Items[i].DeletionTimestamp.IsZero() {
+		if saList.Items[i].DeletionTimestamp.IsZero() && metav1.IsControlledBy(&saList.Items[i], engine) {
 			activeSAs = append(activeSAs, saList.Items[i])
 		}
 	}
