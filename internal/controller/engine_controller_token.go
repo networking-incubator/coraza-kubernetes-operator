@@ -225,27 +225,25 @@ func (r *EngineReconciler) pruneExpiredTokens() {
 
 // deleteTokensByPrefix removes all token entries whose key starts with prefix.
 func (r *EngineReconciler) deleteTokensByPrefix(prefix string) {
-	r.tokenStore.Range(func(key, _ any) bool {
-		if k, ok := key.(string); ok && strings.HasPrefix(k, prefix) {
-			r.tokenStore.Delete(key)
-		}
-		return true
-	})
+	r.tokenStore.Range(r.tokenDeleteFunc(prefix, ""))
 }
 
 // cleanupStaleTokens removes token entries for RuleSets that an Engine no
 // longer references. When spec.ruleSet.name changes, the old token (keyed by
 // "namespace/engineName/oldRuleSet") would otherwise leak in the sync.Map
 // until it expires.
-// This intentionally duplicates the Range loop from deleteTokensByPrefix
-// because it must exclude the current RuleSet's key during iteration.
 func (r *EngineReconciler) cleanupStaleTokens(namespace, engineName, currentRuleSet string) {
 	prefix := fmt.Sprintf("%s/%s/", namespace, engineName)
-	keep := prefix + currentRuleSet
-	r.tokenStore.Range(func(key, _ any) bool {
+	r.tokenStore.Range(r.tokenDeleteFunc(prefix, prefix+currentRuleSet))
+}
+
+// tokenDeleteFunc returns a Range callback that deletes entries matching
+// prefix, optionally skipping the keep key.
+func (r *EngineReconciler) tokenDeleteFunc(prefix, keep string) func(key, _ any) bool {
+	return func(key, _ any) bool {
 		if k, ok := key.(string); ok && strings.HasPrefix(k, prefix) && k != keep {
 			r.tokenStore.Delete(key)
 		}
 		return true
-	})
+	}
 }
