@@ -2192,9 +2192,9 @@ func TestEngineReconciler_MetricsRecordOnSuccess(t *testing.T) {
 		"coraza_engine_condition must emit one series per engineConditionType")
 }
 
-// TestEngineReconciler_MetricsForgetOnNotFound verifies that a not-found
-// reconcile (simulating deletion) calls ForgetEngine and removes the info and
-// condition series from the registry.
+// TestEngineReconciler_DeleteRecreateGetsNewToken verifies that deleting an
+// Engine and recreating it with the same name produces a fresh token bound to
+// a new ServiceAccount, not the stale token from the previous instance.
 func TestEngineReconciler_DeleteRecreateGetsNewToken(t *testing.T) {
 	ctx, cleanup := setupTest(t)
 	defer cleanup()
@@ -2464,6 +2464,9 @@ func TestEngineReconciler_StaleOwnerSANotReused(t *testing.T) {
 	}
 }
 
+// TestEngineReconciler_MetricsForgetOnNotFound verifies that a not-found
+// reconcile (simulating deletion) calls ForgetEngine and removes the info and
+// condition series from the registry.
 func TestEngineReconciler_MetricsForgetOnNotFound(t *testing.T) {
 	ctx, cleanup := setupTest(t)
 	defer cleanup()

@@ -242,7 +242,7 @@ func (r *EngineReconciler) cleanupStaleTokens(namespace, engineName, currentRule
 func (r *EngineReconciler) tokenDeleteFunc(prefix, keep string) func(key, _ any) bool {
 	return func(key, _ any) bool {
 		if k, ok := key.(string); ok && strings.HasPrefix(k, prefix) && k != keep {
-			r.tokenStore.Delete(key)
+			r.tokenStore.Delete(k)
 		}
 		return true
 	}
