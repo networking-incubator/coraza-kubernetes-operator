@@ -2202,9 +2202,10 @@ func TestEngineReconciler_DeleteRecreateGetsNewToken(t *testing.T) {
 	const (
 		engineName  = "stale-token-engine"
 		rulesetName = "stale-token-ruleset"
+		gatewayName = "delete-recreate-stale-token-gw"
 	)
 
-	createTestGateway(t, ctx, k8sClient, "test-gw", testNamespace)
+	createTestGateway(t, ctx, k8sClient, gatewayName, testNamespace)
 
 	ruleset := utils.NewTestRuleSet(utils.RuleSetOptions{
 		Name:      rulesetName,
@@ -2221,6 +2222,7 @@ func TestEngineReconciler_DeleteRecreateGetsNewToken(t *testing.T) {
 		Name:        engineName,
 		Namespace:   testNamespace,
 		RuleSetName: rulesetName,
+		GatewayName: gatewayName,
 	})
 	require.NoError(t, k8sClient.Create(ctx, engine))
 	// No t.Cleanup — this engine is deleted explicitly in Phase 2.
@@ -2284,7 +2286,7 @@ func TestEngineReconciler_DeleteRecreateGetsNewToken(t *testing.T) {
 	require.True(t, apierrors.IsNotFound(k8sClient.Get(ctx, req.NamespacedName, &gone)),
 		"Engine must be gone after finalizer removal")
 
-	// Reconcile the IsNotFound path — cleans up the tokenStore.
+	// Reconcile the IsNotFound path - cleans up the tokenStore.
 	_, err = reconciler.Reconcile(ctx, req)
 	require.NoError(t, err)
 
@@ -2296,6 +2298,7 @@ func TestEngineReconciler_DeleteRecreateGetsNewToken(t *testing.T) {
 		Name:        engineName,
 		Namespace:   testNamespace,
 		RuleSetName: rulesetName,
+		GatewayName: gatewayName,
 	})
 	require.NoError(t, k8sClient.Create(ctx, engine2))
 	t.Cleanup(func() {
@@ -2342,9 +2345,10 @@ func TestEngineReconciler_StaleOwnerSANotReused(t *testing.T) {
 	const (
 		engineName  = "stale-owner-engine"
 		rulesetName = "stale-owner-ruleset"
+		gatewayName = "stale-owner-gw"
 	)
 
-	createTestGateway(t, ctx, k8sClient, "test-gw", testNamespace)
+	createTestGateway(t, ctx, k8sClient, gatewayName, testNamespace)
 
 	ruleset := utils.NewTestRuleSet(utils.RuleSetOptions{
 		Name:      rulesetName,
@@ -2361,6 +2365,7 @@ func TestEngineReconciler_StaleOwnerSANotReused(t *testing.T) {
 		Name:        engineName,
 		Namespace:   testNamespace,
 		RuleSetName: rulesetName,
+		GatewayName: gatewayName,
 	})
 	require.NoError(t, k8sClient.Create(ctx, engine1))
 
@@ -2422,6 +2427,7 @@ func TestEngineReconciler_StaleOwnerSANotReused(t *testing.T) {
 		Name:        engineName,
 		Namespace:   testNamespace,
 		RuleSetName: rulesetName,
+		GatewayName: gatewayName,
 	})
 	require.NoError(t, k8sClient.Create(ctx, engine2))
 	t.Cleanup(func() {
