@@ -282,6 +282,80 @@ func TestCleanupStaleTokens_EmptyStore(t *testing.T) {
 	assert.Equal(t, 0, count)
 }
 
+func TestDeleteTokensByPrefix(t *testing.T) {
+	r := &EngineReconciler{}
+	now := time.Now()
+
+	r.tokenStore.Store("ns/engine1/ruleset-a", &TokenEntry{
+		Token:     "ta",
+		IssuedAt:  now,
+		ExpiresAt: now.Add(1 * time.Hour),
+	})
+	r.tokenStore.Store("ns/engine1/ruleset-b", &TokenEntry{
+		Token:     "tb",
+		IssuedAt:  now,
+		ExpiresAt: now.Add(1 * time.Hour),
+	})
+	r.tokenStore.Store("ns/engine2/other", &TokenEntry{
+		Token:     "unrelated",
+		IssuedAt:  now,
+		ExpiresAt: now.Add(1 * time.Hour),
+	})
+
+	r.deleteTokensByPrefix("ns/engine1/")
+
+	_, hasA := r.tokenStore.Load("ns/engine1/ruleset-a")
+	assert.False(t, hasA, "entry matching prefix should be deleted")
+
+	_, hasB := r.tokenStore.Load("ns/engine1/ruleset-b")
+	assert.False(t, hasB, "entry matching prefix should be deleted")
+
+	_, hasOther := r.tokenStore.Load("ns/engine2/other")
+	assert.True(t, hasOther, "entry with different prefix should remain")
+
+	count := 0
+	r.tokenStore.Range(func(_, _ any) bool {
+		count++
+		return true
+	})
+	assert.Equal(t, 1, count)
+}
+
+func TestDeleteTokensByPrefix_NoMatch(t *testing.T) {
+	r := &EngineReconciler{}
+	now := time.Now()
+
+	r.tokenStore.Store("ns/engine1/rs1", &TokenEntry{
+		Token:     "t1",
+		IssuedAt:  now,
+		ExpiresAt: now.Add(1 * time.Hour),
+	})
+
+	r.deleteTokensByPrefix("ns/engine99/")
+
+	_, has := r.tokenStore.Load("ns/engine1/rs1")
+	assert.True(t, has, "entry should remain when no keys match prefix")
+
+	count := 0
+	r.tokenStore.Range(func(_, _ any) bool {
+		count++
+		return true
+	})
+	assert.Equal(t, 1, count)
+}
+
+func TestDeleteTokensByPrefix_EmptyStore(t *testing.T) {
+	r := &EngineReconciler{}
+	r.deleteTokensByPrefix("any/prefix/")
+
+	count := 0
+	r.tokenStore.Range(func(_, _ any) bool {
+		count++
+		return true
+	})
+	assert.Equal(t, 0, count)
+}
+
 func TestCacheClientSALabels(t *testing.T) {
 	labels := cacheClientSALabels("my-engine")
 	assert.Equal(t, "coraza-kubernetes-operator", labels["app.kubernetes.io/managed-by"])
