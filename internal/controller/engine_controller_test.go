@@ -519,6 +519,7 @@ func assertWasmPluginCacheToken(t *testing.T, ctx context.Context, name, namespa
 		"WasmPlugin cache_token must match expected token")
 }
 
+//nolint:unparam // expectedStatus is intentionally parameterized for reuse with ConditionFalse
 func assertEngineCondition(t *testing.T, ctx context.Context, name, namespace, conditionType string, expectedStatus metav1.ConditionStatus) {
 	t.Helper()
 	var engine wafv1alpha1.Engine
