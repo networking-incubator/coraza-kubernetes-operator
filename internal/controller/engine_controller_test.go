@@ -492,6 +492,48 @@ func getNestedString(obj map[string]any, key string) (string, bool, error) {
 	return strVal, true, nil
 }
 
+func assertWasmPluginCacheToken(t *testing.T, ctx context.Context, name, namespace, expectedToken string) {
+	t.Helper()
+	wasmPlugin := &unstructured.Unstructured{}
+	wasmPlugin.SetGroupVersionKind(schema.GroupVersionKind{
+		Group:   "extensions.istio.io",
+		Version: "v1alpha1",
+		Kind:    "WasmPlugin",
+	})
+	err := k8sClient.Get(ctx, types.NamespacedName{
+		Name:      wasmPluginName(name),
+		Namespace: namespace,
+	}, wasmPlugin)
+	require.NoError(t, err)
+
+	spec, found, err := getNestedMap(wasmPlugin.Object, "spec")
+	require.NoError(t, err)
+	require.True(t, found)
+	pluginConfig, found, err := getNestedMap(spec, "pluginConfig")
+	require.NoError(t, err)
+	require.True(t, found)
+	cacheToken, found, err := getNestedString(pluginConfig, "cache_token")
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, expectedToken, cacheToken,
+		"WasmPlugin cache_token must match expected token")
+}
+
+func assertEngineCondition(t *testing.T, ctx context.Context, name, namespace, conditionType string, expectedStatus metav1.ConditionStatus) {
+	t.Helper()
+	var engine wafv1alpha1.Engine
+	err := k8sClient.Get(ctx, types.NamespacedName{
+		Name:      name,
+		Namespace: namespace,
+	}, &engine)
+	require.NoError(t, err)
+
+	cond := apimeta.FindStatusCondition(engine.Status.Conditions, conditionType)
+	require.NotNil(t, cond, "Engine must have %s condition", conditionType)
+	assert.Equal(t, expectedStatus, cond.Status,
+		"Engine condition %s expected %s", conditionType, expectedStatus)
+}
+
 func TestEngineReconciler_ImagePullSecretInWasmPlugin(t *testing.T) {
 	reconciler := &EngineReconciler{
 		Client:                    k8sClient,
@@ -1229,29 +1271,7 @@ func TestEngineReconciler_TokenStoreIntegration(t *testing.T) {
 	t.Run("token in WasmPlugin matches tokenStore", func(t *testing.T) {
 		val, _ := reconciler.tokenStore.Load(tokenKey)
 		storedToken := val.(*TokenEntry).Token
-
-		wasmPlugin := &unstructured.Unstructured{}
-		wasmPlugin.SetGroupVersionKind(schema.GroupVersionKind{
-			Group:   "extensions.istio.io",
-			Version: "v1alpha1",
-			Kind:    "WasmPlugin",
-		})
-		err := k8sClient.Get(ctx, types.NamespacedName{
-			Name:      wasmPluginName(engine.Name),
-			Namespace: engine.Namespace,
-		}, wasmPlugin)
-		require.NoError(t, err)
-
-		spec, found, err := getNestedMap(wasmPlugin.Object, "spec")
-		require.NoError(t, err)
-		require.True(t, found)
-		pluginConfig, found, err := getNestedMap(spec, "pluginConfig")
-		require.NoError(t, err)
-		require.True(t, found)
-		cacheToken, found, err := getNestedString(pluginConfig, "cache_token")
-		require.NoError(t, err)
-		require.True(t, found)
-		assert.Equal(t, storedToken, cacheToken, "WasmPlugin cache_token should match tokenStore entry")
+		assertWasmPluginCacheToken(t, ctx, engine.Name, engine.Namespace, storedToken)
 	})
 
 	t.Run("second reconcile reuses cached token", func(t *testing.T) {
@@ -2333,46 +2353,9 @@ func TestEngineReconciler_DeleteRecreateGetsNewToken(t *testing.T) {
 	assert.NotEqual(t, originalToken, newToken,
 		"recreated Engine must get a fresh token, not reuse the stale one")
 
-	// Verify WasmPlugin cache_token matches the new token.
-	wasmPlugin := &unstructured.Unstructured{}
-	wasmPlugin.SetGroupVersionKind(schema.GroupVersionKind{
-		Group:   "extensions.istio.io",
-		Version: "v1alpha1",
-		Kind:    "WasmPlugin",
-	})
-	err = k8sClient.Get(ctx, types.NamespacedName{
-		Name:      wasmPluginName(engine2.Name),
-		Namespace: engine2.Namespace,
-	}, wasmPlugin)
-	require.NoError(t, err)
-
-	spec, wpFound, err := getNestedMap(wasmPlugin.Object, "spec")
-	require.NoError(t, err)
-	require.True(t, wpFound)
-	pluginConfig, wpFound, err := getNestedMap(spec, "pluginConfig")
-	require.NoError(t, err)
-	require.True(t, wpFound)
-	cacheToken, wpFound, err := getNestedString(pluginConfig, "cache_token")
-	require.NoError(t, err)
-	require.True(t, wpFound)
-	assert.Equal(t, newToken, cacheToken,
-		"WasmPlugin cache_token must match the fresh token after delete-recreate")
-
-	// Verify the recreated Engine has Ready and Accepted conditions.
-	var updated wafv1alpha1.Engine
-	err = k8sClient.Get(ctx, types.NamespacedName{
-		Name:      engine2.Name,
-		Namespace: engine2.Namespace,
-	}, &updated)
-	require.NoError(t, err)
-
-	readyCond := apimeta.FindStatusCondition(updated.Status.Conditions, "Ready")
-	require.NotNil(t, readyCond, "recreated Engine must have Ready condition")
-	assert.Equal(t, metav1.ConditionTrue, readyCond.Status)
-
-	acceptedCond := apimeta.FindStatusCondition(updated.Status.Conditions, "Accepted")
-	require.NotNil(t, acceptedCond, "recreated Engine must have Accepted condition")
-	assert.Equal(t, metav1.ConditionTrue, acceptedCond.Status)
+	assertWasmPluginCacheToken(t, ctx, engine2.Name, engine2.Namespace, newToken)
+	assertEngineCondition(t, ctx, engine2.Name, engine2.Namespace, "Ready", metav1.ConditionTrue)
+	assertEngineCondition(t, ctx, engine2.Name, engine2.Namespace, "Accepted", metav1.ConditionTrue)
 }
 
 // TestEngineReconciler_StaleOwnerSANotReused verifies that when an Engine is
@@ -2440,6 +2423,7 @@ func TestEngineReconciler_StaleOwnerSANotReused(t *testing.T) {
 	val, found := reconciler.tokenStore.Load(tokenKey)
 	require.True(t, found, "token must be stored after initial provisioning")
 	originalToken := val.(*TokenEntry).Token
+	require.NotEmpty(t, originalToken)
 
 	var saList corev1.ServiceAccountList
 	err = k8sClient.List(ctx, &saList,
@@ -2515,46 +2499,9 @@ func TestEngineReconciler_StaleOwnerSANotReused(t *testing.T) {
 	assert.NotEqual(t, originalToken, newToken,
 		"recreated Engine must get a fresh token, not reuse the stale one")
 
-	// Verify WasmPlugin cache_token matches the new token.
-	wasmPlugin := &unstructured.Unstructured{}
-	wasmPlugin.SetGroupVersionKind(schema.GroupVersionKind{
-		Group:   "extensions.istio.io",
-		Version: "v1alpha1",
-		Kind:    "WasmPlugin",
-	})
-	err = k8sClient.Get(ctx, types.NamespacedName{
-		Name:      wasmPluginName(engine2.Name),
-		Namespace: engine2.Namespace,
-	}, wasmPlugin)
-	require.NoError(t, err)
-
-	spec, wpFound, err := getNestedMap(wasmPlugin.Object, "spec")
-	require.NoError(t, err)
-	require.True(t, wpFound)
-	pluginConfig, wpFound, err := getNestedMap(spec, "pluginConfig")
-	require.NoError(t, err)
-	require.True(t, wpFound)
-	cacheToken, wpFound, err := getNestedString(pluginConfig, "cache_token")
-	require.NoError(t, err)
-	require.True(t, wpFound)
-	assert.Equal(t, newToken, cacheToken,
-		"WasmPlugin cache_token must match the fresh token when stale SA is present")
-
-	// Verify the recreated Engine has Ready and Accepted conditions.
-	var updated wafv1alpha1.Engine
-	err = k8sClient.Get(ctx, types.NamespacedName{
-		Name:      engine2.Name,
-		Namespace: engine2.Namespace,
-	}, &updated)
-	require.NoError(t, err)
-
-	readyCond := apimeta.FindStatusCondition(updated.Status.Conditions, "Ready")
-	require.NotNil(t, readyCond, "recreated Engine must have Ready condition")
-	assert.Equal(t, metav1.ConditionTrue, readyCond.Status)
-
-	acceptedCond := apimeta.FindStatusCondition(updated.Status.Conditions, "Accepted")
-	require.NotNil(t, acceptedCond, "recreated Engine must have Accepted condition")
-	assert.Equal(t, metav1.ConditionTrue, acceptedCond.Status)
+	assertWasmPluginCacheToken(t, ctx, engine2.Name, engine2.Namespace, newToken)
+	assertEngineCondition(t, ctx, engine2.Name, engine2.Namespace, "Ready", metav1.ConditionTrue)
+	assertEngineCondition(t, ctx, engine2.Name, engine2.Namespace, "Accepted", metav1.ConditionTrue)
 }
 
 // TestEngineReconciler_MetricsForgetOnNotFound verifies that a not-found
