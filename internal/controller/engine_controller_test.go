@@ -2481,10 +2481,12 @@ func TestEngineReconciler_StaleOwnerSANotReused(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, allSAs.Items, 2, "stale SA + new SA must both exist")
 
+	foundStale := false
 	for _, sa := range allSAs.Items {
 		ref := metav1.GetControllerOf(&sa)
 		require.NotNil(t, ref, "SA %s must have a controller owner reference", sa.Name)
 		if sa.Name == staleSAName {
+			foundStale = true
 			assert.Equal(t, staleUID, ref.UID,
 				"stale SA must still reference the old Engine UID")
 		} else {
@@ -2492,6 +2494,7 @@ func TestEngineReconciler_StaleOwnerSANotReused(t *testing.T) {
 				"new SA must be owned by the recreated Engine")
 		}
 	}
+	require.True(t, foundStale, "stale SA %s must be present in the list", staleSAName)
 
 	// Verify fresh token was provisioned (not the stale one).
 	val, found = reconciler.tokenStore.Load(tokenKey)
