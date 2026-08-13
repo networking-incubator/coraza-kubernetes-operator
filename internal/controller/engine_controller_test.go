@@ -69,7 +69,7 @@ func createTestGateway(t *testing.T, ctx context.Context, c client.Client, name,
 	}
 	require.NoError(t, c.Create(ctx, gw))
 	t.Cleanup(func() {
-		if err := c.Delete(ctx, gw); err != nil && !apierrors.IsNotFound(err) {
+		if err := c.Delete(context.Background(), gw); err != nil && !apierrors.IsNotFound(err) {
 			t.Logf("Failed to delete gateway: %v", err)
 		}
 	})
@@ -2217,7 +2217,7 @@ func TestEngineReconciler_MetricsRecordOnSuccess(t *testing.T) {
 // Engine and recreating it with the same name produces a fresh token bound to
 // a new ServiceAccount, not the stale token from the previous instance.
 func TestEngineReconciler_DeleteRecreateGetsNewToken(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	const (
 		engineName  = "stale-token-engine"
@@ -2233,7 +2233,7 @@ func TestEngineReconciler_DeleteRecreateGetsNewToken(t *testing.T) {
 	})
 	require.NoError(t, k8sClient.Create(ctx, ruleset))
 	t.Cleanup(func() {
-		if err := k8sClient.Delete(ctx, ruleset); err != nil {
+		if err := k8sClient.Delete(context.Background(), ruleset); err != nil {
 			t.Logf("Failed to delete ruleset: %v", err)
 		}
 	})
@@ -2322,7 +2322,7 @@ func TestEngineReconciler_DeleteRecreateGetsNewToken(t *testing.T) {
 	})
 	require.NoError(t, k8sClient.Create(ctx, engine2))
 	t.Cleanup(func() {
-		if err := k8sClient.Delete(ctx, engine2); err != nil {
+		if err := k8sClient.Delete(context.Background(), engine2); err != nil {
 			t.Logf("Failed to delete engine: %v", err)
 		}
 	})
@@ -2363,7 +2363,7 @@ func TestEngineReconciler_DeleteRecreateGetsNewToken(t *testing.T) {
 // deleted and recreated with the same name, a ServiceAccount left behind by the
 // previous Engine (stale owner reference, different UID) is not reused.
 func TestEngineReconciler_StaleOwnerSANotReused(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	const (
 		engineName  = "stale-owner-engine"
@@ -2379,7 +2379,7 @@ func TestEngineReconciler_StaleOwnerSANotReused(t *testing.T) {
 	})
 	require.NoError(t, k8sClient.Create(ctx, ruleset))
 	t.Cleanup(func() {
-		if err := k8sClient.Delete(ctx, ruleset); err != nil {
+		if err := k8sClient.Delete(context.Background(), ruleset); err != nil {
 			t.Logf("Failed to delete ruleset: %v", err)
 		}
 	})
@@ -2461,7 +2461,7 @@ func TestEngineReconciler_StaleOwnerSANotReused(t *testing.T) {
 	})
 	require.NoError(t, k8sClient.Create(ctx, engine2))
 	t.Cleanup(func() {
-		if err := k8sClient.Delete(ctx, engine2); err != nil {
+		if err := k8sClient.Delete(context.Background(), engine2); err != nil {
 			t.Logf("Failed to delete engine: %v", err)
 		}
 	})
