@@ -111,17 +111,28 @@ func (r *EngineReconciler) ensureCacheClientServiceAccount(ctx context.Context, 
 	); err != nil {
 		return "", fmt.Errorf("failed to list ServiceAccounts for engine %s: %w", engine.Name, err)
 	}
-	if len(saList.Items) > 0 {
-		if len(saList.Items) > 1 {
+
+	// Filter to SAs that are non-terminating and owned by this Engine
+	// instance. The UID check prevents reusing an SA from a previous
+	// Engine with the same name whose GC hasn't completed yet.
+	var activeSAs []corev1.ServiceAccount
+	for i := range saList.Items {
+		if saList.Items[i].DeletionTimestamp.IsZero() && metav1.IsControlledBy(&saList.Items[i], engine) {
+			activeSAs = append(activeSAs, saList.Items[i])
+		}
+	}
+
+	if len(activeSAs) > 0 {
+		if len(activeSAs) > 1 {
 			log.Info("Multiple ServiceAccounts match cache-client labels, using first",
 				"engine", req.Name,
 				"namespace", req.Namespace,
-				"matchCount", len(saList.Items),
-				"selectedSA", saList.Items[0].Name,
+				"matchCount", len(activeSAs),
+				"selectedSA", activeSAs[0].Name,
 			)
 		}
 		logDebug(log, req, "Engine", "ServiceAccount already exists")
-		return saList.Items[0].Name, nil
+		return activeSAs[0].Name, nil
 	}
 
 	sa := &corev1.ServiceAccount{
@@ -212,17 +223,27 @@ func (r *EngineReconciler) pruneExpiredTokens() {
 	})
 }
 
+// deleteTokensByPrefix removes all token entries whose key starts with prefix.
+func (r *EngineReconciler) deleteTokensByPrefix(prefix string) {
+	r.tokenStore.Range(r.tokenDeleteFunc(prefix, ""))
+}
+
 // cleanupStaleTokens removes token entries for RuleSets that an Engine no
 // longer references. When spec.ruleSet.name changes, the old token (keyed by
 // "namespace/engineName/oldRuleSet") would otherwise leak in the sync.Map
 // until it expires.
 func (r *EngineReconciler) cleanupStaleTokens(namespace, engineName, currentRuleSet string) {
 	prefix := fmt.Sprintf("%s/%s/", namespace, engineName)
-	r.tokenStore.Range(func(key, _ any) bool {
-		k := key.(string)
-		if strings.HasPrefix(k, prefix) && !strings.HasSuffix(k, "/"+currentRuleSet) {
+	r.tokenStore.Range(r.tokenDeleteFunc(prefix, prefix+currentRuleSet))
+}
+
+// tokenDeleteFunc returns a Range callback that deletes entries matching
+// prefix, optionally skipping the keep key.
+func (r *EngineReconciler) tokenDeleteFunc(prefix, keep string) func(key, _ any) bool {
+	return func(key, _ any) bool {
+		if k, ok := key.(string); ok && strings.HasPrefix(k, prefix) && k != keep {
 			r.tokenStore.Delete(k)
 		}
 		return true
-	})
+	}
 }
