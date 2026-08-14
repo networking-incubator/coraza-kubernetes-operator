@@ -523,10 +523,8 @@ func assertEngineCondition(t *testing.T, ctx context.Context, name, namespace, c
 	}, &engine)
 	require.NoError(t, err)
 
-	cond := apimeta.FindStatusCondition(engine.Status.Conditions, conditionType)
-	require.NotNil(t, cond, "Engine must have %s condition", conditionType)
-	assert.Equal(t, expectedStatus, cond.Status,
-		"Engine condition %s expected %s", conditionType, expectedStatus)
+	assert.True(t, apimeta.IsStatusConditionPresentAndEqual(engine.Status.Conditions, conditionType, expectedStatus),
+		"Engine Condition %s expected %s", conditionType, expectedStatus)
 }
 
 func TestEngineReconciler_ImagePullSecretInWasmPlugin(t *testing.T) {
