@@ -506,13 +506,7 @@ func assertWasmPluginCacheToken(t *testing.T, ctx context.Context, name, namespa
 	}, wasmPlugin)
 	require.NoError(t, err)
 
-	spec, found, err := getNestedMap(wasmPlugin.Object, "spec")
-	require.NoError(t, err)
-	require.True(t, found)
-	pluginConfig, found, err := getNestedMap(spec, "pluginConfig")
-	require.NoError(t, err)
-	require.True(t, found)
-	cacheToken, found, err := getNestedString(pluginConfig, "cache_token")
+	cacheToken, found, err := unstructured.NestedString(wasmPlugin.Object, "spec", "pluginConfig", "cache_token")
 	require.NoError(t, err)
 	require.True(t, found)
 	assert.Equal(t, expectedToken, cacheToken,
