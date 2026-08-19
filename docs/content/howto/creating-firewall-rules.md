@@ -26,7 +26,19 @@ spec:
     SecAuditLog /dev/stdout
     SecAuditLogFormat JSON
     SecAuditEngine RelevantOnly
+    # Enable JSON body parsing so that ARGS-based rules inspect application/json request bodies.
+    # Without this, JSON request bodies are read as raw bytes and are invisible to ARGS rules.
+    SecRule REQUEST_HEADERS:Content-Type "@rx application/json" \
+      "id:900,phase:1,pass,nolog,ctl:requestBodyProcessor=JSON"
 ```
+
+{{% alert title="JSON body inspection" color="info" %}}
+`SecRequestBodyAccess On` enables body reading but does **not** automatically parse JSON.
+Coraza requires an explicit `requestBodyProcessor` directive per content type before `ARGS`
+rules can inspect the body (see [corazawaf/coraza#438](https://github.com/corazawaf/coraza/issues/438)).
+The example above adds a JSON processor — add equivalent rules for other content types
+(e.g. `application/xml`) as needed.
+{{% /alert %}}
 
 A RuleSource with a SQL injection detection rule:
 
