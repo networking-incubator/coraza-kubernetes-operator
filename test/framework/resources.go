@@ -32,6 +32,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	wafv1alpha1 "github.com/networking-incubator/coraza-kubernetes-operator/api/v1alpha1"
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/defaults"
@@ -39,8 +40,7 @@ import (
 
 // Resource builders, GVRs, and CRUD helpers for integration tests.
 // CRD builders (Engine, RuleSet) use typed API objects from api/v1alpha1
-// and convert to unstructured for the dynamic client. External resources
-// (Gateway, HTTPRoute) are built as unstructured directly.
+// and from Gateway API.
 
 // gatewayMu serializes Gateway creation to reduce Istio CA certificate
 // signing contention when many parallel tests create Gateways simultaneously.
@@ -166,44 +166,41 @@ func toUnstructured(obj runtime.Object) *unstructured.Unstructured {
 // Resource Builders
 // -----------------------------------------------------------------------------
 
-// BuildGateway builds an unstructured Gateway object with Istio annotations.
+// BuildGateway builds a Gateway object with Istio annotations.
 // If f.IstioGatewayRevision is non-empty, sets metadata.labels["istio.io/rev"] to
 // that value (from ISTIO_GATEWAY_REVISION when using framework.New).
-func (f *Framework) BuildGateway(namespace, name, gatewayClassName string) *unstructured.Unstructured {
-	meta := map[string]any{
-		"name":      name,
-		"namespace": namespace,
-		"annotations": map[string]any{
-			"networking.istio.io/service-type": "ClusterIP",
+func (f *Framework) BuildGateway(namespace, name, gatewayClassName string) *gatewayv1.Gateway {
+	gw := &gatewayv1.Gateway{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: namespace,
+			Annotations: map[string]string{
+				"networking.istio.io/service-type": "ClusterIP",
+			},
 		},
-	}
-	if f.IstioGatewayRevision != "" {
-		meta["labels"] = map[string]any{
-			"istio.io/rev": f.IstioGatewayRevision,
-		}
-	}
-	return &unstructured.Unstructured{
-		Object: map[string]any{
-			"apiVersion": "gateway.networking.k8s.io/v1",
-			"kind":       "Gateway",
-			"metadata":   meta,
-			"spec": map[string]any{
-				"gatewayClassName": gatewayClassName,
-				"listeners": []any{
-					map[string]any{
-						"name":     "http",
-						"port":     int64(80),
-						"protocol": "HTTP",
-						"allowedRoutes": map[string]any{
-							"namespaces": map[string]any{
-								"from": "All",
-							},
+		Spec: gatewayv1.GatewaySpec{
+			GatewayClassName: gatewayv1.ObjectName(gatewayClassName),
+			Listeners: []gatewayv1.Listener{
+				{
+					Name:     gatewayv1.SectionName("http"),
+					Port:     gatewayv1.PortNumber(80),
+					Protocol: gatewayv1.HTTPProtocolType,
+					AllowedRoutes: &gatewayv1.AllowedRoutes{
+						Namespaces: &gatewayv1.RouteNamespaces{
+							From: new(gatewayv1.NamespacesFromAll),
 						},
 					},
 				},
 			},
 		},
 	}
+	if f.IstioGatewayRevision != "" {
+		gw.SetLabels(map[string]string{
+			"istio.io/rev": f.IstioGatewayRevision,
+		})
+	}
+
+	return gw
 }
 
 // BuildRuleSet builds an unstructured RuleSet object.
@@ -285,29 +282,31 @@ func BuildEngine(namespace, name string, opts EngineOpts) *unstructured.Unstruct
 	return toUnstructured(engine)
 }
 
-// BuildHTTPRoute builds an unstructured HTTPRoute that routes all traffic
+// BuildHTTPRoute builds a HTTPRoute that routes all traffic
 // from the named Gateway to the named backend Service on port 80.
-func BuildHTTPRoute(namespace, name, gatewayName, backendName string) *unstructured.Unstructured {
-	return &unstructured.Unstructured{
-		Object: map[string]any{
-			"apiVersion": "gateway.networking.k8s.io/v1",
-			"kind":       "HTTPRoute",
-			"metadata": map[string]any{
-				"name":      name,
-				"namespace": namespace,
-			},
-			"spec": map[string]any{
-				"parentRefs": []any{
-					map[string]any{
-						"name": gatewayName,
+func BuildHTTPRoute(namespace, name, gatewayName, backendName string) *gatewayv1.HTTPRoute {
+	return &gatewayv1.HTTPRoute{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: namespace,
+		},
+		Spec: gatewayv1.HTTPRouteSpec{
+			CommonRouteSpec: gatewayv1.CommonRouteSpec{
+				ParentRefs: []gatewayv1.ParentReference{
+					{
+						Name: gatewayv1.ObjectName(gatewayName),
 					},
 				},
-				"rules": []any{
-					map[string]any{
-						"backendRefs": []any{
-							map[string]any{
-								"name": backendName,
-								"port": int64(80),
+			},
+			Rules: []gatewayv1.HTTPRouteRule{
+				{
+					BackendRefs: []gatewayv1.HTTPBackendRef{
+						{
+							BackendRef: gatewayv1.BackendRef{
+								BackendObjectReference: gatewayv1.BackendObjectReference{
+									Name: gatewayv1.ObjectName(backendName),
+									Port: new(gatewayv1.PortNumber(80)),
+								},
 							},
 						},
 					},
@@ -462,7 +461,8 @@ func (s *Scenario) CreateGatewayWithClass(namespace, name, gatewayClassName stri
 	}
 
 	obj := s.F.BuildGateway(namespace, name, gatewayClassName)
-	_, err = s.F.DynamicClient.Resource(GatewayGVR).Namespace(namespace).Create(
+
+	_, err = s.F.GatewayAPIClient.GatewayV1().Gateways(namespace).Create(
 		ctx, obj, metav1.CreateOptions{},
 	)
 	require.NoError(s.T, err, "create Gateway %s/%s", namespace, name)
@@ -470,7 +470,7 @@ func (s *Scenario) CreateGatewayWithClass(namespace, name, gatewayClassName stri
 	s.T.Logf("Created Gateway: %s/%s", namespace, name)
 	s.OnCleanup(func() {
 		// Background: test context may already be cancelled; cleanup must still run.
-		if err := s.F.DynamicClient.Resource(GatewayGVR).Namespace(namespace).Delete(
+		if err := s.F.GatewayAPIClient.GatewayV1().Gateways(namespace).Delete(
 			context.Background(), name, metav1.DeleteOptions{},
 		); err != nil {
 			s.T.Logf("cleanup: failed to delete Gateway %s/%s: %v", namespace, name, err)
@@ -540,14 +540,14 @@ func (s *Scenario) CreateHTTPRoute(namespace, name, gatewayName, backendName str
 	ctx := s.T.Context()
 
 	obj := BuildHTTPRoute(namespace, name, gatewayName, backendName)
-	_, err := s.F.DynamicClient.Resource(HTTPRouteGVR).Namespace(namespace).Create(
+	_, err := s.F.GatewayAPIClient.GatewayV1().HTTPRoutes(namespace).Create(
 		ctx, obj, metav1.CreateOptions{},
 	)
 	require.NoError(s.T, err, "create HTTPRoute %s/%s", namespace, name)
 
 	s.T.Logf("Created HTTPRoute: %s/%s (gateway=%s, backend=%s)", namespace, name, gatewayName, backendName)
 	s.OnCleanup(func() {
-		if err := s.F.DynamicClient.Resource(HTTPRouteGVR).Namespace(namespace).Delete(
+		if err := s.F.GatewayAPIClient.GatewayV1().HTTPRoutes(namespace).Delete(
 			context.Background(), name, metav1.DeleteOptions{},
 		); err != nil {
 			s.T.Logf("cleanup: failed to delete HTTPRoute %s/%s: %v", namespace, name, err)

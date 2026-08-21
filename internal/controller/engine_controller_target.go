@@ -15,6 +15,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/validation"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	wafv1alpha1 "github.com/networking-incubator/coraza-kubernetes-operator/api/v1alpha1"
 )
@@ -128,17 +129,10 @@ func (r *EngineReconciler) isTargetNotFound(ctx context.Context, log logr.Logger
 		return false, nil
 	}
 
-	gw := &unstructured.Unstructured{}
-	gw.SetGroupVersionKind(schema.GroupVersionKind{
-		Group:   "gateway.networking.k8s.io",
-		Version: "v1",
-		Kind:    "Gateway",
-	})
-
 	err := r.Get(ctx, types.NamespacedName{
 		Name:      engine.Spec.Target.Name,
 		Namespace: engine.Namespace,
-	}, gw)
+	}, &gatewayv1.Gateway{})
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			logInfo(log, req, "Engine", "Target Gateway not found", "gateway", engine.Spec.Target.Name)
