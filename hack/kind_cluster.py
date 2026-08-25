@@ -25,6 +25,7 @@ GATEWAY_API_URL = (
     "/releases/download/v1.6.1/standard-install.yaml"
 )
 SAIL_REPO = "https://istio-ecosystem.github.io/sail-operator"
+OTEL_OPERATOR_REPO = "https://open-telemetry.github.io/opentelemetry-helm-charts"
 
 
 # ---------------------------------------------------------------------------
@@ -299,6 +300,46 @@ def create_gateway(context: str, loadbalancer: bool) -> None:
 
 
 # ---------------------------------------------------------------------------
+# OpenTelemetry Operator
+# ---------------------------------------------------------------------------
+
+
+def deploy_opentelemetry_operator(context: str) -> None:
+    """Install the OpenTelemetry Operator via Helm and wait for readiness."""
+    print("Deploying OpenTelemetry Operator")
+    run(f"helm repo add open-telemetry {OTEL_OPERATOR_REPO}")
+    run("helm repo update")
+
+    ns = "opentelemetry-operator-system"
+    run(f"kubectl --context {context} create namespace {ns}", check=False)
+
+    result = run(
+        f"helm list --namespace {ns} --kube-context {context} "
+        f"-o json | grep -q opentelemetry-operator",
+        check=False,
+    )
+    if result.returncode != 0:
+        run(
+            f"helm install opentelemetry-operator "
+            f"open-telemetry/opentelemetry-operator "
+            f"--namespace {ns} --kube-context {context} "
+            f"--set admissionWebhooks.certManager.enabled=false "
+            f"--set admissionWebhooks.autoGenerateCert.enabled=true "
+            f'--set "manager.collectorImage.repository='
+            f'ghcr.io/open-telemetry/opentelemetry-collector-releases/'
+            f'opentelemetry-collector-contrib"'
+        )
+    else:
+        print("OpenTelemetry Operator already installed, skipping")
+
+    run(
+        f"kubectl --context {context} wait --for=condition=Available "
+        f"deployment/opentelemetry-operator "
+        f"-n {ns} --timeout=300s"
+    )
+
+
+# ---------------------------------------------------------------------------
 # Operator Deployment
 # ---------------------------------------------------------------------------
 
@@ -357,6 +398,7 @@ def setup_cluster(name: str) -> None:
     deploy_istio_sail(context)
     create_istio_control_plane(context)
     create_gateway_class(context)
+    deploy_opentelemetry_operator(context)
     create_gateway(context, metallb_enabled)
     deploy_coraza_operator(context)
 

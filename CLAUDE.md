@@ -159,3 +159,17 @@ s.Step("verify behavior")
 ### Skip validation annotations
 - RuleSources: `waf.k8s.coraza.io/rule-validation: "false"` — skips per-source Coraza rule validation (also emitted by `kubectl coraza generate coreruleset --skip-validation-rulesource`); patch-only fragments (`SecRuleUpdate*` / `SecRuleRemove*` only) are accepted without this annotation via `IsPatchOnlyFragment` in validation
 - RuleSets: `waf.k8s.coraza.io/skip-unsupported-rules-check: "true"` — prevents degrading on unsupported rules
+
+## Agent skills
+
+### Issue tracker
+
+GitHub Issues on `upstream` (networking-incubator/coraza-kubernetes-operator, `gh` CLI). See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Default vocabulary: needs-triage, needs-info, ready-for-agent, ready-for-human, wontfix. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context layout (one `CONTEXT.md` + `docs/adr/` at root). See `docs/agents/domain.md`.
