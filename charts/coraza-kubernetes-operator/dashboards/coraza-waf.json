@@ -62,8 +62,8 @@
      "type": "prometheus",
      "uid": "prometheus"
     },
-    "definition": "label_values(istio_requests_total{job=\"coraza-waf-otc\"}, source_workload)",
-    "query": "label_values(istio_requests_total{job=\"coraza-waf-otc\"}, source_workload)",
+    "definition": "label_values(istio_requests_total{}, source_workload)",
+    "query": "label_values(istio_requests_total{}, source_workload)",
     "refresh": 2,
     "includeAll": true,
     "multi": true,
@@ -96,7 +96,7 @@
   {
    "id": 100,
    "type": "row",
-   "title": "OTC / WASM health (active)",
+   "title": "Gateway / WASM health (active)",
    "gridPos": {
     "h": 1,
     "w": 24,
@@ -105,7 +105,7 @@
    },
    "collapsed": false,
    "panels": [],
-   "description": "Envoy WASM runtime health scraped from the gateway admin port (15090), labeled job=coraza-waf-otc. Use this row to see whether the Coraza plugin is loaded and whether Envoy is still serving."
+   "description": "Envoy WASM runtime health scraped from the gateway admin port (15090). Use this row to see whether the Coraza plugin is loaded and whether Envoy is still serving."
   },
   {
    "id": 101,
@@ -197,17 +197,17 @@
    },
    "targets": [
     {
-     "expr": "sum(rate({__name__=~\"envoy_wasm_.*_vm_reload_success\", job=\"coraza-waf-otc\"}[5m]))",
+     "expr": "sum(rate({__name__=~\"envoy_wasm_.*_vm_reload_success\"}[5m]))",
      "legendFormat": "success",
      "refId": "A"
     },
     {
-     "expr": "sum(rate({__name__=~\"envoy_wasm_.*_vm_reload_failure\", job=\"coraza-waf-otc\"}[5m]))",
+     "expr": "sum(rate({__name__=~\"envoy_wasm_.*_vm_reload_failure\"}[5m]))",
      "legendFormat": "failure",
      "refId": "B"
     },
     {
-     "expr": "sum(rate({__name__=~\"envoy_wasm_.*_vm_reload_backoff\", job=\"coraza-waf-otc\"}[5m]))",
+     "expr": "sum(rate({__name__=~\"envoy_wasm_.*_vm_reload_backoff\"}[5m]))",
      "legendFormat": "backoff",
      "refId": "C"
     }
@@ -257,27 +257,27 @@
    },
    "targets": [
     {
-     "expr": "rate(envoy_wasm_remote_load_cache_hits{job=\"coraza-waf-otc\"}[5m])",
+     "expr": "rate(envoy_wasm_remote_load_cache_hits{}[5m])",
      "legendFormat": "hits",
      "refId": "A"
     },
     {
-     "expr": "rate(envoy_wasm_remote_load_cache_misses{job=\"coraza-waf-otc\"}[5m])",
+     "expr": "rate(envoy_wasm_remote_load_cache_misses{}[5m])",
      "legendFormat": "misses",
      "refId": "B"
     },
     {
-     "expr": "rate(envoy_wasm_remote_load_fetch_failures{job=\"coraza-waf-otc\"}[5m])",
+     "expr": "rate(envoy_wasm_remote_load_fetch_failures{}[5m])",
      "legendFormat": "fetch failures",
      "refId": "C"
     },
     {
-     "expr": "rate(envoy_wasm_remote_load_fetch_successes{job=\"coraza-waf-otc\"}[5m])",
+     "expr": "rate(envoy_wasm_remote_load_fetch_successes{}[5m])",
      "legendFormat": "fetch successes",
      "refId": "D"
     },
     {
-     "expr": "envoy_wasm_remote_load_cache_entries{job=\"coraza-waf-otc\"}",
+     "expr": "envoy_wasm_remote_load_cache_entries{}",
      "legendFormat": "cache entries",
      "refId": "E"
     }
@@ -336,7 +336,7 @@
    "targets": [
     {
      "refId": "A",
-     "expr": "sum(envoy_wasm_envoy_wasm_runtime_v8_active{job=\"coraza-waf-otc\"}) or vector(0)",
+     "expr": "sum(envoy_wasm_envoy_wasm_runtime_v8_active{}) or vector(0)",
      "legendFormat": "",
      "datasource": {
       "type": "prometheus",
@@ -415,7 +415,7 @@
    "targets": [
     {
      "refId": "A",
-     "expr": "max(envoy_server_live{job=\"coraza-waf-otc\"})",
+     "expr": "max(envoy_server_live{})",
      "legendFormat": "",
      "datasource": {
       "type": "prometheus",
@@ -478,7 +478,7 @@
    "targets": [
     {
      "refId": "A",
-     "expr": "sum(envoy_server_memory_allocated{job=\"coraza-waf-otc\"}) or vector(0)",
+     "expr": "sum(envoy_server_memory_allocated{}) or vector(0)",
      "legendFormat": "",
      "datasource": {
       "type": "prometheus",
@@ -540,7 +540,7 @@
    "targets": [
     {
      "refId": "A",
-     "expr": "sum(envoy_listener_manager_total_listeners_active{job=\"coraza-waf-otc\"}) or vector(0)",
+     "expr": "sum(envoy_listener_manager_total_listeners_active{}) or vector(0)",
      "legendFormat": "",
      "datasource": {
       "type": "prometheus",
@@ -607,17 +607,17 @@
    },
    "targets": [
     {
-     "expr": "envoy_server_memory_allocated{job=\"coraza-waf-otc\"}",
+     "expr": "envoy_server_memory_allocated{}",
      "legendFormat": "allocated",
      "refId": "A"
     },
     {
-     "expr": "envoy_server_memory_heap_size{job=\"coraza-waf-otc\"}",
+     "expr": "envoy_server_memory_heap_size{}",
      "legendFormat": "heap size",
      "refId": "B"
     },
     {
-     "expr": "envoy_server_memory_physical_size{job=\"coraza-waf-otc\"}",
+     "expr": "envoy_server_memory_physical_size{}",
      "legendFormat": "physical size",
      "refId": "C"
     }
@@ -667,17 +667,17 @@
    },
    "targets": [
     {
-     "expr": "rate(envoy_listener_manager_lds_update_success{job=\"coraza-waf-otc\"}[5m])",
+     "expr": "rate(envoy_listener_manager_lds_update_success{}[5m])",
      "legendFormat": "success",
      "refId": "A"
     },
     {
-     "expr": "rate(envoy_listener_manager_lds_update_failure{job=\"coraza-waf-otc\"}[5m])",
+     "expr": "rate(envoy_listener_manager_lds_update_failure{}[5m])",
      "legendFormat": "failure",
      "refId": "B"
     },
     {
-     "expr": "rate(envoy_listener_manager_lds_update_rejected{job=\"coraza-waf-otc\"}[5m])",
+     "expr": "rate(envoy_listener_manager_lds_update_rejected{}[5m])",
      "legendFormat": "rejected",
      "refId": "C"
     }
@@ -736,7 +736,7 @@
    "targets": [
     {
      "refId": "A",
-     "expr": "max(envoy_server_concurrency{job=\"coraza-waf-otc\"})",
+     "expr": "max(envoy_server_concurrency{})",
      "legendFormat": "",
      "datasource": {
       "type": "prometheus",
@@ -799,7 +799,7 @@
    "targets": [
     {
      "refId": "A",
-     "expr": "max(envoy_server_uptime{job=\"coraza-waf-otc\"})",
+     "expr": "max(envoy_server_uptime{})",
      "legendFormat": "",
      "datasource": {
       "type": "prometheus",
@@ -861,7 +861,7 @@
    "targets": [
     {
      "refId": "A",
-     "expr": "sum(envoy_server_total_connections{job=\"coraza-waf-otc\"}) or vector(0)",
+     "expr": "sum(envoy_server_total_connections{}) or vector(0)",
      "legendFormat": "",
      "datasource": {
       "type": "prometheus",
@@ -923,7 +923,7 @@
    "targets": [
     {
      "refId": "A",
-     "expr": "sum(envoy_listener_manager_total_listeners_warming{job=\"coraza-waf-otc\"}) or vector(0)",
+     "expr": "sum(envoy_listener_manager_total_listeners_warming{}) or vector(0)",
      "legendFormat": "",
      "datasource": {
       "type": "prometheus",
@@ -990,12 +990,12 @@
    },
    "targets": [
     {
-     "expr": "rate(waf_filter_tx_total{job=\"coraza-waf-otc\"}[5m])",
+     "expr": "rate(waf_filter_tx_total{}[5m])",
      "legendFormat": "tx/s",
      "refId": "A"
     },
     {
-     "expr": "sum(rate({__name__=~\"waf_filter_tx_interruptions_.*\", job=\"coraza-waf-otc\"}[5m]))",
+     "expr": "sum(rate({__name__=~\"waf_filter_tx_interruptions_.*\"}[5m]))",
      "legendFormat": "interruptions/s",
      "refId": "B"
     }
@@ -1045,7 +1045,7 @@
    },
    "targets": [
     {
-     "expr": "sum by (response_code) (rate(istio_requests_total{source_workload=~\"$gateway\",job=\"coraza-waf-otc\"}[5m]))",
+     "expr": "sum by (response_code) (rate(istio_requests_total{source_workload=~\"$gateway\"}[5m]))",
      "legendFormat": "{{response_code}}",
      "refId": "A"
     }
@@ -1104,7 +1104,7 @@
    "targets": [
     {
      "refId": "A",
-     "expr": "sum(waf_filter_tx_total{job=\"coraza-waf-otc\"}) or vector(0)",
+     "expr": "sum(waf_filter_tx_total{}) or vector(0)",
      "legendFormat": "",
      "datasource": {
       "type": "prometheus",
@@ -1166,7 +1166,7 @@
    "targets": [
     {
      "refId": "A",
-     "expr": "sum({__name__=~\"waf_filter_tx_interruptions_.*\", job=\"coraza-waf-otc\"}) or vector(0)",
+     "expr": "sum({__name__=~\"waf_filter_tx_interruptions_.*\"}) or vector(0)",
      "legendFormat": "",
      "datasource": {
       "type": "prometheus",
@@ -1230,7 +1230,7 @@
    "targets": [
     {
      "refId": "A",
-     "expr": "sum(increase({__name__=~\"waf_filter_tx_interruptions_.*\", job=\"coraza-waf-otc\"}[1h])) / clamp_min(sum(increase(waf_filter_tx_total{job=\"coraza-waf-otc\"}[1h])), 1e-9)",
+     "expr": "sum(increase({__name__=~\"waf_filter_tx_interruptions_.*\"}[1h])) / clamp_min(sum(increase(waf_filter_tx_total{}[1h])), 1e-9)",
      "legendFormat": "",
      "datasource": {
       "type": "prometheus",
@@ -1292,7 +1292,7 @@
    "targets": [
     {
      "refId": "A",
-     "expr": "sum(increase(istio_requests_total{source_workload=~\"$gateway\",job=\"coraza-waf-otc\", response_code=\"403\"}[1h])) or vector(0)",
+     "expr": "sum(increase(istio_requests_total{source_workload=~\"$gateway\", response_code=\"403\"}[1h])) or vector(0)",
      "legendFormat": "",
      "datasource": {
       "type": "prometheus",
@@ -1345,12 +1345,12 @@
    },
    "targets": [
     {
-     "expr": "histogram_quantile(0.95, sum by (le) (rate(istio_request_duration_milliseconds_bucket{source_workload=~\"$gateway\",job=\"coraza-waf-otc\"}[15m])))",
+     "expr": "histogram_quantile(0.95, sum by (le) (rate(istio_request_duration_milliseconds_bucket{source_workload=~\"$gateway\"}[15m])))",
      "legendFormat": "p95",
      "refId": "A"
     },
     {
-     "expr": "histogram_quantile(0.50, sum by (le) (rate(istio_request_duration_milliseconds_bucket{source_workload=~\"$gateway\",job=\"coraza-waf-otc\"}[15m])))",
+     "expr": "histogram_quantile(0.50, sum by (le) (rate(istio_request_duration_milliseconds_bucket{source_workload=~\"$gateway\"}[15m])))",
      "legendFormat": "p50",
      "refId": "B"
     }
@@ -1400,7 +1400,7 @@
    },
    "targets": [
     {
-     "expr": "sum by (__name__) (rate({__name__=~\"waf_filter_tx_interruptions_.*\", job=\"coraza-waf-otc\"}[5m]))",
+     "expr": "sum by (__name__) (rate({__name__=~\"waf_filter_tx_interruptions_.*\"}[5m]))",
      "legendFormat": "{{__name__}}",
      "refId": "A"
     }
@@ -1409,7 +1409,7 @@
   {
    "id": 300,
    "type": "row",
-   "title": "WAF requests (OTC log\u2192metrics)",
+   "title": "WAF requests (ALS log\u2192metrics)",
    "gridPos": {
     "h": 1,
     "w": 24,
@@ -1464,7 +1464,7 @@
    },
    "targets": [
     {
-     "expr": "(sum by (outcome) (rate(coraza_waf_requests_total{engine=~\"$engine\"}[5m])) > 0) or sum by (response_code) (rate(istio_requests_total{source_workload=~\"$gateway\",job=\"coraza-waf-otc\"}[5m]))",
+     "expr": "(sum by (outcome) (rate(coraza_waf_requests_total{engine=~\"$engine\"}[5m])) > 0) or sum by (response_code) (rate(istio_requests_total{source_workload=~\"$gateway\"}[5m]))",
      "legendFormat": "{{outcome}}",
      "refId": "A"
     }
@@ -1529,7 +1529,7 @@
    "targets": [
     {
      "refId": "A",
-     "expr": "((sum(increase(coraza_waf_requests_total{engine=~\"$engine\",outcome=\"block\"}[1h])) > 0) or sum(increase(istio_requests_total{source_workload=~\"$gateway\",job=\"coraza-waf-otc\",response_code=\"403\"}[1h]))) / clamp_min(((sum(increase(coraza_waf_requests_total{engine=~\"$engine\"}[1h])) > 0) or sum(increase(istio_requests_total{source_workload=~\"$gateway\",job=\"coraza-waf-otc\"}[1h]))), 1e-9)",
+     "expr": "((sum(increase(coraza_waf_requests_total{engine=~\"$engine\",outcome=\"block\"}[1h])) > 0) or sum(increase(istio_requests_total{source_workload=~\"$gateway\",response_code=\"403\"}[1h]))) / clamp_min(((sum(increase(coraza_waf_requests_total{engine=~\"$engine\"}[1h])) > 0) or sum(increase(istio_requests_total{source_workload=~\"$gateway\"}[1h]))), 1e-9)",
      "legendFormat": "",
      "datasource": {
       "type": "prometheus",
@@ -1592,7 +1592,7 @@
    "targets": [
     {
      "refId": "A",
-     "expr": "(sum(rate(coraza_waf_requests_total{engine=~\"$engine\"}[5m])) > 0) or sum(rate(waf_filter_tx_total{job=\"coraza-waf-otc\"}[5m])) or vector(0)",
+     "expr": "(sum(rate(coraza_waf_requests_total{engine=~\"$engine\"}[5m])) > 0) or sum(rate(waf_filter_tx_total{}[5m])) or vector(0)",
      "legendFormat": "",
      "datasource": {
       "type": "prometheus",
@@ -1667,7 +1667,7 @@
    "targets": [
     {
      "refId": "A",
-     "expr": "((sum(increase(coraza_waf_requests_total{engine=~\"$engine\",outcome=\"block\"}[1h])) > 0) or sum(increase(istio_requests_total{source_workload=~\"$gateway\",job=\"coraza-waf-otc\",response_code=\"403\"}[1h]))) / clamp_min(((sum(increase(coraza_waf_requests_total{engine=~\"$engine\"}[1h])) > 0) or sum(increase(istio_requests_total{source_workload=~\"$gateway\",job=\"coraza-waf-otc\"}[1h]))), 1e-9)",
+     "expr": "((sum(increase(coraza_waf_requests_total{engine=~\"$engine\",outcome=\"block\"}[1h])) > 0) or sum(increase(istio_requests_total{source_workload=~\"$gateway\",response_code=\"403\"}[1h]))) / clamp_min(((sum(increase(coraza_waf_requests_total{engine=~\"$engine\"}[1h])) > 0) or sum(increase(istio_requests_total{source_workload=~\"$gateway\"}[1h]))), 1e-9)",
      "legendFormat": "1h window",
      "datasource": {
       "type": "prometheus",
@@ -1676,7 +1676,7 @@
     },
     {
      "refId": "B",
-     "expr": "((sum(increase(coraza_waf_requests_total{engine=~\"$engine\",outcome=\"block\"}[6h])) > 0) or sum(increase(istio_requests_total{source_workload=~\"$gateway\",job=\"coraza-waf-otc\",response_code=\"403\"}[6h]))) / clamp_min(((sum(increase(coraza_waf_requests_total{engine=~\"$engine\"}[6h])) > 0) or sum(increase(istio_requests_total{source_workload=~\"$gateway\",job=\"coraza-waf-otc\"}[6h]))), 1e-9)",
+     "expr": "((sum(increase(coraza_waf_requests_total{engine=~\"$engine\",outcome=\"block\"}[6h])) > 0) or sum(increase(istio_requests_total{source_workload=~\"$gateway\",response_code=\"403\"}[6h]))) / clamp_min(((sum(increase(coraza_waf_requests_total{engine=~\"$engine\"}[6h])) > 0) or sum(increase(istio_requests_total{source_workload=~\"$gateway\"}[6h]))), 1e-9)",
      "legendFormat": "6h window",
      "datasource": {
       "type": "prometheus",
@@ -2197,7 +2197,7 @@
    },
    "targets": [
     {
-     "expr": "(sum by (engine, namespace) (rate(coraza_waf_requests_total{engine=~\"$engine\"}[5m])) > 0) or sum by (source_workload, destination_service_name) (rate(istio_requests_total{source_workload=~\"$gateway\",job=\"coraza-waf-otc\"}[5m]))",
+     "expr": "(sum by (engine, namespace) (rate(coraza_waf_requests_total{engine=~\"$engine\"}[5m])) > 0) or sum by (source_workload, destination_service_name) (rate(istio_requests_total{source_workload=~\"$gateway\"}[5m]))",
      "legendFormat": "{{engine}}/{{namespace}} {{source_workload}} {{destination_service_name}}",
      "refId": "A"
     }
@@ -2247,7 +2247,7 @@
    },
    "targets": [
     {
-     "expr": "(sum by (engine, namespace) (rate(coraza_waf_blocked_requests_total{engine=~\"$engine\"}[5m])) > 0) or sum by (source_workload, destination_service_name) (rate(istio_requests_total{source_workload=~\"$gateway\",job=\"coraza-waf-otc\",response_code=\"403\"}[5m]))",
+     "expr": "(sum by (engine, namespace) (rate(coraza_waf_blocked_requests_total{engine=~\"$engine\"}[5m])) > 0) or sum by (source_workload, destination_service_name) (rate(istio_requests_total{source_workload=~\"$gateway\",response_code=\"403\"}[5m]))",
      "legendFormat": "{{engine}}/{{namespace}} {{source_workload}} {{destination_service_name}}",
      "refId": "A"
     }
@@ -2635,8 +2635,8 @@
    },
    "targets": [
     {
-     "expr": "sum(rate(coraza_waf_blocked_requests_total{engine=~\"$engine\",job=\"coraza-waf-otc\"}[5m])) or sum(rate({__name__=~\"waf_filter_tx_interruptions_.*\",job=\"coraza-waf-otc\"}[5m]))",
-     "legendFormat": "OTC log\u2192metrics blocks",
+     "expr": "sum(rate(coraza_waf_blocked_requests_total{engine=~\"$engine\"}[5m])) or sum(rate({__name__=~\"waf_filter_tx_interruptions_.*\"}[5m]))",
+     "legendFormat": "ALS log\u2192metrics blocks",
      "refId": "A",
      "datasource": {
       "type": "prometheus",
@@ -2644,7 +2644,7 @@
      }
     },
     {
-     "expr": "sum(rate({__name__=~\"waf_filter_tx_interruptions_.*\", job=\"coraza-waf-otc\"}[5m]))",
+     "expr": "sum(rate({__name__=~\"waf_filter_tx_interruptions_.*\"}[5m]))",
      "legendFormat": "Envoy waf_filter interruptions",
      "refId": "B",
      "datasource": {
@@ -2698,8 +2698,8 @@
    },
    "targets": [
     {
-     "expr": "sum(rate(coraza_waf_requests_total{engine=~\"$engine\",job=\"coraza-waf-otc\"}[5m])) or sum(rate(waf_filter_tx_total{job=\"coraza-waf-otc\"}[5m]))",
-     "legendFormat": "OTC WAF requests",
+     "expr": "sum(rate(coraza_waf_requests_total{engine=~\"$engine\"}[5m])) or sum(rate(waf_filter_tx_total{}[5m]))",
+     "legendFormat": "ALS WAF requests",
      "refId": "A",
      "datasource": {
       "type": "prometheus",
@@ -2707,7 +2707,7 @@
      }
     },
     {
-     "expr": "sum(rate(waf_filter_tx_total{job=\"coraza-waf-otc\"}[5m]))",
+     "expr": "sum(rate(waf_filter_tx_total{}[5m]))",
      "legendFormat": "Envoy waf_filter tx",
      "refId": "B",
      "datasource": {
@@ -2928,5 +2928,5 @@
    ]
   }
  ],
- "description": "Coraza WAF observability via OTC sidecar (job=coraza-waf-otc). Includes Envoy/WASM health, waf_filter/Istio traffic, and live log\u2192metrics (requests, blocks, rule hits, plugin loads)."
+ "description": "Coraza WAF observability via Istio ALS and a platform-owned collector. Includes Envoy/WASM health, waf_filter/Istio traffic, and log\u2192metrics (requests, blocks, rule hits, plugin loads)."
 }
