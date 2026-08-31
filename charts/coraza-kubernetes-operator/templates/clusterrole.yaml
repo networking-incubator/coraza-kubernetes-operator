@@ -82,6 +82,7 @@ rules:
 - apiGroups:
   - gateway.networking.k8s.io
   resources:
+  - gatewayclasses
   - gateways
   verbs:
   - get
@@ -97,6 +98,18 @@ rules:
   - get
   - patch
   - update
+- apiGroups:
+  - telemetry.istio.io
+  resources:
+  - telemetries
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
 - apiGroups:
   - waf.k8s.coraza.io
   resources:
