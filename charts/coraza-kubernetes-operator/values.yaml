@@ -54,6 +54,8 @@ metrics:
     # When true, deploys a PrometheusRule CR with WAF alerting and recording rules.
     # Requires the monitoring.coreos.com/v1 CRD (Prometheus Operator).
     # Disabled by default — not all clusters have Prometheus Operator installed.
+    # Dataplane alerts CorazaWAFBlockRatioHigh / CorazaWAFBlockRatioSpike need a
+    # scrape of coraza_waf_* (ALS collector) or waf_filter_* (Envoy :15090).
     enabled: false
     # Labels merged into PrometheusRule metadata.labels.
     # Use this to match your Prometheus instance's ruleSelector.
