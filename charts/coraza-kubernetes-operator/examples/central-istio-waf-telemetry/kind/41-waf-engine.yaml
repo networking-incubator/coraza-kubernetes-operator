@@ -1,0 +1,22 @@
+Unable to open session log file "/home/rzago/.cache/starship/session_1598428980314222.log": Os { code: 30, kind: ReadOnlyFilesystem, message: "Read-only file system" }!
+apiVersion: waf.k8s.coraza.io/v1alpha1
+kind: Engine
+metadata:
+  name: waf-engine
+  namespace: integration-tests
+  labels:
+    app.kubernetes.io/part-of: coraza-central-istio-waf-telemetry
+spec:
+  ruleSet:
+    name: waf-ruleset
+  target:
+    type: Gateway
+    name: coraza-gateway
+    provider: Istio
+  failurePolicy: fail
+  observability:
+    mode: Enabled
+  driver:
+    type: wasm
+    wasm:
+      image: oci://ghcr.io/networking-incubator/coraza-proxy-wasm:e20b40ca25e3c50f212999e3decfde5503e630c3

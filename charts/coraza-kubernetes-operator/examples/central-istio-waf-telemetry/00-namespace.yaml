@@ -1,0 +1,52 @@
+Unable to open session log file "/home/rzago/.cache/starship/session_2906885471020711.log": Os { code: 30, kind: ReadOnlyFilesystem, message: "Read-only file system" }!
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: coraza-central-waf-telemetry
+  labels:
+    app.kubernetes.io/part-of: coraza-central-istio-waf-telemetry
+    app.kubernetes.io/component: examples
+---
+# Default-deny, then explicitly allow only what the central collector needs:
+# OTLP ingress from Gateway proxies (any namespace, since Gateways may live
+# anywhere), Prometheus scrape ingress on 9090, and DNS egress. The collector
+# needs no other egress (no Kubernetes API access; see 10-otel-collector.yaml).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: central-waf-als-collector
+  namespace: coraza-central-waf-telemetry
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        # Gateway proxies only, identified by the standard Gateway API pod
+        # label; Gateways may live in any namespace.
+        - namespaceSelector: {}
+          podSelector:
+            matchExpressions:
+              - key: gateway.networking.k8s.io/gateway-name
+                operator: Exists
+      ports:
+        - protocol: TCP
+          port: 4317
+        - protocol: TCP
+          port: 4318
+    - from:
+        - namespaceSelector: {}
+      ports:
+        - protocol: TCP
+          port: 9090
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53

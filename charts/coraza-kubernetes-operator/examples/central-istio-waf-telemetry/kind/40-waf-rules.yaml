@@ -1,0 +1,41 @@
+Unable to open session log file "/home/rzago/.cache/starship/session_2169731530137651.log": Os { code: 30, kind: ReadOnlyFilesystem, message: "Read-only file system" }!
+apiVersion: waf.k8s.coraza.io/v1alpha1
+kind: RuleSource
+metadata:
+  name: base-rules
+  namespace: integration-tests
+  labels:
+    app.kubernetes.io/part-of: coraza-central-istio-waf-telemetry
+spec:
+  rules: |
+    SecRuleEngine On
+    SecRequestBodyAccess On
+    SecResponseBodyAccess Off
+---
+apiVersion: waf.k8s.coraza.io/v1alpha1
+kind: RuleSource
+metadata:
+  name: block-attack
+  namespace: integration-tests
+  labels:
+    app.kubernetes.io/part-of: coraza-central-istio-waf-telemetry
+spec:
+  rules: |
+    SecRule ARGS "@contains attack" \
+      "id:1001,\
+      phase:2,\
+      deny,\
+      status:403,\
+      msg:'Blocked: attack keyword detected'"
+---
+apiVersion: waf.k8s.coraza.io/v1alpha1
+kind: RuleSet
+metadata:
+  name: waf-ruleset
+  namespace: integration-tests
+  labels:
+    app.kubernetes.io/part-of: coraza-central-istio-waf-telemetry
+spec:
+  sources:
+    - name: base-rules
+    - name: block-attack

@@ -1,0 +1,130 @@
+Unable to open session log file "/home/rzago/.cache/starship/session_1596612649309553.log": Os { code: 30, kind: ReadOnlyFilesystem, message: "Read-only file system" }!
+# Optional: same as 10-otel-collector-openshift.yaml plus a debug exporter on logs/als.
+# Prints OTLP log records (ALS payloads with WAF filter-state attributes) to collector stdout.
+#
+# Enable (debug):
+#   oc apply -f 12-otel-collector-debug-logging.yaml
+#   oc rollout status -n coraza-central-waf-telemetry deploy/central-waf-als-collector
+#
+# Revert (production-shaped):
+#   oc apply -f 10-otel-collector-openshift.yaml
+#
+# Watch payloads:
+#   oc logs -n coraza-central-waf-telemetry deploy/central-waf-als-collector -f \
+#     | grep -iE 'waf_event|action|rule_id|outcome|LogRecord|Body'
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: central-waf-als-collector
+  namespace: coraza-central-waf-telemetry
+  labels:
+    app.kubernetes.io/part-of: coraza-central-istio-waf-telemetry
+automountServiceAccountToken: false
+---
+apiVersion: opentelemetry.io/v1beta1
+kind: OpenTelemetryCollector
+metadata:
+  name: central-waf-als
+  namespace: coraza-central-waf-telemetry
+  labels:
+    app.kubernetes.io/part-of: coraza-central-istio-waf-telemetry
+spec:
+  mode: deployment
+  replicas: 1
+  serviceAccount: central-waf-als-collector
+  podSecurityContext:
+    runAsNonRoot: true
+    seccompProfile:
+      type: RuntimeDefault
+  securityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop:
+        - ALL
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+  ports:
+    - name: otlp-grpc
+      port: 4317
+      targetPort: 4317
+    - name: prometheus
+      port: 9090
+      targetPort: 9090
+  config:
+    extensions:
+      health_check:
+        endpoint: 0.0.0.0:13133
+    receivers:
+      otlp:
+        protocols:
+          grpc:
+            endpoint: 0.0.0.0:4317
+          http:
+            endpoint: 0.0.0.0:4318
+    processors:
+      batch: {}
+      transform/waf_als:
+        log_statements:
+          - context: log
+            statements:
+              - set(attributes["outcome"], "block") where attributes["waf_event"] == "coraza_waf_blocked_request"
+              - set(attributes["outcome"], "block") where attributes["outcome"] == nil and attributes["action"] == "deny"
+              - set(attributes["severity"], attributes["severity"]) where attributes["severity"] != nil and attributes["severity"] != "-"
+              - set(attributes["category"], attributes["category"]) where attributes["category"] != nil and attributes["category"] != "-"
+              - set(attributes["driver_type"], "wasm") where attributes["driver_type"] == nil
+              - set(attributes["engine"], "unknown") where attributes["engine"] == nil
+              - set(attributes["namespace"], "unknown") where attributes["namespace"] == nil
+              - set(attributes["outcome"], "unknown") where attributes["outcome"] == nil
+    connectors:
+      count/coraza:
+        logs:
+          coraza_waf_requests_total:
+            description: WAF requests from ALS (block path until allow-path filter state exists)
+            conditions:
+              - attributes["outcome"] != nil and attributes["outcome"] != "unknown" and attributes["outcome"] != "-"
+            attributes:
+              - key: engine
+                default_value: unknown
+              - key: namespace
+                default_value: unknown
+              - key: driver_type
+                default_value: wasm
+              - key: outcome
+                default_value: unknown
+          coraza_waf_blocked_requests_total:
+            description: Blocked requests by category and severity (from ALS filter state)
+            conditions:
+              - attributes["outcome"] == "block"
+            attributes:
+              - key: engine
+                default_value: unknown
+              - key: namespace
+                default_value: unknown
+              - key: driver_type
+                default_value: wasm
+              - key: category
+                default_value: other
+              - key: severity
+                default_value: unknown
+    exporters:
+      debug:
+        verbosity: detailed
+      prometheus:
+        endpoint: 0.0.0.0:9090
+    service:
+      extensions: [health_check]
+      pipelines:
+        logs/als:
+          receivers: [otlp]
+          processors: [transform/waf_als]
+          exporters: [count/coraza, debug]
+        metrics/coraza:
+          receivers: [count/coraza]
+          processors: [batch]
+          exporters: [prometheus]

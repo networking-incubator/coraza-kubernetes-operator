@@ -1,0 +1,16 @@
+Unable to open session log file "/home/rzago/.cache/starship/session_1312525995110642.log": Os { code: 30, kind: ReadOnlyFilesystem, message: "Read-only file system" }!
+# Helm values for Coraza operator on OpenShift (OSSM openshift-gateway revision).
+# Used by install-operator-openshift.sh.
+#
+# image.repository / image.tag: set after building and pushing to a registry the
+# cluster can pull (ghcr.io tags may be unavailable; use internal registry on CI).
+openshift:
+  enabled: true
+
+istio:
+  revision: openshift-gateway
+
+image:
+  repository: image-registry.openshift-image-registry.svc:5000/coraza-system/coraza-kubernetes-operator
+  tag: feat-otc
+  pullPolicy: IfNotPresent

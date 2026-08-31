@@ -1,0 +1,53 @@
+Unable to open session log file "/home/rzago/.cache/starship/session_1635021458324093.log": Os { code: 30, kind: ReadOnlyFilesystem, message: "Read-only file system" }!
+# Echo backend + HTTPRoute for existing coraza-gateway (make cluster.kind).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: echo
+  namespace: integration-tests
+  labels:
+    app.kubernetes.io/part-of: coraza-central-istio-waf-telemetry
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: echo
+  template:
+    metadata:
+      labels:
+        app: echo
+    spec:
+      containers:
+        - name: echo
+          image: registry.k8s.io/gateway-api/conformance/echo-basic:v0.1.0
+          ports:
+            - containerPort: 3000
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: echo
+  namespace: integration-tests
+  labels:
+    app.kubernetes.io/part-of: coraza-central-istio-waf-telemetry
+spec:
+  selector:
+    app: echo
+  ports:
+    - port: 80
+      targetPort: 3000
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: echo-route
+  namespace: integration-tests
+  labels:
+    app.kubernetes.io/part-of: coraza-central-istio-waf-telemetry
+spec:
+  parentRefs:
+    - name: coraza-gateway
+  rules:
+    - backendRefs:
+        - name: echo
+          port: 80

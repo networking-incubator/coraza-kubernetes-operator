@@ -1,0 +1,8 @@
+Unable to open session log file "/home/rzago/.cache/starship/session_1018047338218163.log": Os { code: 30, kind: ReadOnlyFilesystem, message: "Read-only file system" }!
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: waf-telemetry
+  labels:
+    app.kubernetes.io/part-of: coraza-central-istio-waf-telemetry
+    app.kubernetes.io/component: examples

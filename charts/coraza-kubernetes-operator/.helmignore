@@ -1,0 +1,4 @@
+Unable to open session log file "/home/rzago/.cache/starship/session_3162829228145191.log": Os { code: 30, kind: ReadOnlyFilesystem, message: "Read-only file system" }!
+# Developer telemetry fixtures (KIND/OpenShift apply scripts, MeshConfig, Telemetry).
+# Not Helm-managed. Keep examples/openshift-values.yaml in the package.
+examples/central-istio-waf-telemetry/
