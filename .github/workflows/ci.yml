@@ -13,6 +13,8 @@ on:
 
 env:
   GOMAXPROCS: "1"
+  GOPROXY: https://proxy.golang.org,direct
+  GODEBUG: http2client=0
 
 jobs:
   build:
