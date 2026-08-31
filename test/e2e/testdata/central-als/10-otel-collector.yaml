@@ -1,0 +1,117 @@
+# Test fixture: deployment-mode central collector. It receives Istio ALS and
+# exposes baseline Coraza metrics; Coraza does not reconcile this resource.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: central-waf-als-collector
+  namespace: coraza-central-waf-telemetry
+  labels:
+    app.kubernetes.io/part-of: coraza-central-istio-waf-telemetry
+automountServiceAccountToken: false
+---
+apiVersion: opentelemetry.io/v1beta1
+kind: OpenTelemetryCollector
+metadata:
+  name: central-waf-als
+  namespace: coraza-central-waf-telemetry
+  labels:
+    app.kubernetes.io/part-of: coraza-central-istio-waf-telemetry
+spec:
+  mode: deployment
+  replicas: 1
+  image: ghcr.io/open-telemetry/opentelemetry-collector-releases/opentelemetry-collector-contrib:0.120.0
+  serviceAccount: central-waf-als-collector
+  podSecurityContext:
+    runAsNonRoot: true
+    seccompProfile:
+      type: RuntimeDefault
+  securityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop:
+        - ALL
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+  livenessProbe:
+    initialDelaySeconds: 5
+    periodSeconds: 10
+  readinessProbe:
+    initialDelaySeconds: 5
+    periodSeconds: 10
+  config:
+    extensions:
+      health_check:
+        endpoint: 0.0.0.0:13133
+    receivers:
+      otlp:
+        protocols:
+          grpc:
+            endpoint: 0.0.0.0:4317
+          http:
+            endpoint: 0.0.0.0:4318
+    processors:
+      batch: {}
+      transform/waf_als:
+        log_statements:
+          - context: log
+            statements:
+              - set(attributes["outcome"], "block") where attributes["waf_event"] == "coraza_waf_blocked_request"
+              - set(attributes["outcome"], "block") where attributes["outcome"] == nil and attributes["action"] == "deny"
+              - set(attributes["severity"], attributes["severity"]) where attributes["severity"] != nil and attributes["severity"] != "-"
+              - set(attributes["category"], attributes["category"]) where attributes["category"] != nil and attributes["category"] != "-"
+              - set(attributes["driver_type"], "wasm") where attributes["driver_type"] == nil
+              - set(attributes["engine"], "unknown") where attributes["engine"] == nil
+              - set(attributes["namespace"], "unknown") where attributes["namespace"] == nil
+              - set(attributes["outcome"], "unknown") where attributes["outcome"] == nil
+      deltatocumulative: {}
+    connectors:
+      count/coraza:
+        logs:
+          coraza_waf_requests_total:
+            description: Requests evaluated by Coraza (from ALS attributes)
+            conditions:
+              - attributes["outcome"] != nil and attributes["outcome"] != "unknown" and attributes["outcome"] != "-"
+            attributes:
+              - key: engine
+                default_value: unknown
+              - key: namespace
+                default_value: unknown
+              - key: driver_type
+                default_value: wasm
+              - key: outcome
+                default_value: unknown
+          coraza_waf_blocked_requests_total:
+            description: Blocked requests by category and severity (from ALS)
+            conditions:
+              - attributes["outcome"] == "block"
+            attributes:
+              - key: engine
+                default_value: unknown
+              - key: namespace
+                default_value: unknown
+              - key: driver_type
+                default_value: wasm
+              - key: category
+                default_value: other
+              - key: severity
+                default_value: unknown
+    exporters:
+      prometheus:
+        endpoint: 0.0.0.0:9090
+    service:
+      extensions: [health_check]
+      pipelines:
+        logs/als:
+          receivers: [otlp]
+          processors: [transform/waf_als]
+          exporters: [count/coraza]
+        metrics/coraza:
+          receivers: [count/coraza]
+          processors: [deltatocumulative, batch]
+          exporters: [prometheus]
