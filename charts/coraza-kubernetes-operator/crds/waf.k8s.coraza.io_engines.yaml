@@ -125,6 +125,23 @@ spec:
                 - fail
                 - allow
                 type: string
+              observability:
+                description: |-
+                  observability configures WAF dataplane observability independently of the
+                  driver used to deploy the Engine. The operator translates this intent into
+                  driver-specific settings.
+                properties:
+                  mode:
+                    description: |-
+                      mode controls whether WAF dataplane telemetry is available to the target
+                      platform's observability pipeline.
+                    enum:
+                    - Enabled
+                    - Disabled
+                    type: string
+                required:
+                - mode
+                type: object
               ruleSet:
                 description: |-
                   ruleSet specifies the RuleSet resource that will be used to load rules

@@ -10,6 +10,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	wafv1alpha1 "github.com/networking-incubator/coraza-kubernetes-operator/api/v1alpha1"
 )
@@ -30,6 +31,29 @@ func (r *EngineReconciler) findEnginesForRuleSet(ctx context.Context, ruleSet cl
 
 	return collectRequests(engineList.Items, func(e *wafv1alpha1.Engine) bool {
 		return e.Spec.RuleSet.Name == ruleSet.GetName()
+	})
+}
+
+// findEnginesForGatewayClass maps a GatewayClass change to enabled Engines
+// whose target Gateway references that class. GatewayClasses are cluster scoped,
+// so Engines must be considered across namespaces.
+func (r *EngineReconciler) findEnginesForGatewayClass(ctx context.Context, gatewayClass client.Object) []reconcile.Request {
+	log := logf.FromContext(ctx)
+	var engineList wafv1alpha1.EngineList
+	if err := r.List(ctx, &engineList); err != nil {
+		log.Error(err, "Engine: Failed to list Engines for GatewayClass", "gatewayClass", gatewayClass.GetName())
+		return nil
+	}
+
+	return collectRequests(engineList.Items, func(engine *wafv1alpha1.Engine) bool {
+		if !observabilityEnabled(engine) || !hasGatewayTarget(engine) {
+			return false
+		}
+		var gateway gatewayv1.Gateway
+		if err := r.Get(ctx, client.ObjectKey{Namespace: engine.Namespace, Name: engine.Spec.Target.Name}, &gateway); err != nil {
+			return false
+		}
+		return string(gateway.Spec.GatewayClassName) == gatewayClass.GetName()
 	})
 }
 

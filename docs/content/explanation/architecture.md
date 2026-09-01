@@ -55,6 +55,8 @@ The Engine controller watches Engine resources, their referenced RuleSets, Gatew
 5. Manages a ServiceAccount token for authenticated cache access.
 6. Updates the Engine status with matched Gateways and conditions.
 
+Dataplane `coraza_waf_*` metrics use Istio OpenTelemetry access logs and a platform-owned central collector. For an observability-enabled Engine, the reconciler creates the Gateway-scoped Telemetry; it does not create OTC sidecars or patch Gateways for telemetry inject.
+
 ## RuleSet Cache Server
 
 The cache is an in-memory, versioned HTTP server that runs within the operator process on port 18080 (configurable). It serves two endpoints:

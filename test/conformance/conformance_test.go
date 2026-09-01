@@ -150,6 +150,9 @@ func TestCoreRuleSetConformance(t *testing.T) {
 	s.ExpectEngineReady(ns, "conformance-engine")
 	s.ExpectWasmPluginExists(ns, "coraza-engine-conformance-engine")
 
+	s.Step("wait for gateway pod rollout to complete")
+	s.WaitForGatewayPodStable(ns, gwName)
+
 	s.Step("verify operator emitted expected events")
 	s.ExpectEvent(ns, framework.EventMatch{Type: "Normal", Reason: "RulesCached"})
 	s.ExpectEvent(ns, framework.EventMatch{Type: "Normal", Reason: "WasmPluginCreated"})

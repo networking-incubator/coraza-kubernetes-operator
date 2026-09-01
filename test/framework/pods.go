@@ -62,6 +62,27 @@ func (s *Scenario) waitForGatewayPodReady(namespace, gatewayName string) {
 	s.T.Logf("Gateway pod %s/%s is ready", namespace, gatewayName)
 }
 
+// WaitForGatewayPodStable waits until every gateway pod is Ready and not
+// terminating (rollout complete). Multi-replica Gateways are supported.
+func (s *Scenario) WaitForGatewayPodStable(namespace, gatewayName string) {
+	s.T.Helper()
+	labelSelector := fmt.Sprintf("gateway.networking.k8s.io/gateway-name=%s", gatewayName)
+
+	require.Eventually(s.T, func() bool {
+		pods, err := s.F.KubeClient.CoreV1().Pods(namespace).List(
+			s.T.Context(),
+			metav1.ListOptions{LabelSelector: labelSelector},
+		)
+		if err != nil {
+			return false
+		}
+		return allPodsStableReady(pods.Items)
+	}, GatewayReadyTimeout, DefaultInterval,
+		"gateway pod %s/%s rollout not stable", namespace, gatewayName,
+	)
+	s.T.Logf("Gateway pod %s/%s rollout stable", namespace, gatewayName)
+}
+
 // isPodReady returns true if the pod is in Running phase and has Ready condition.
 func isPodReady(pod *corev1.Pod) bool {
 	if pod.Status.Phase != corev1.PodRunning {
@@ -73,4 +94,22 @@ func isPodReady(pod *corev1.Pod) bool {
 		}
 	}
 	return false
+}
+
+// allPodsStableReady reports whether every pod in the set is Ready and not
+// terminating, requiring at least one pod. A Gateway may run any number of
+// replicas, so "stable" means all selected pods are ready, not exactly one.
+func allPodsStableReady(pods []corev1.Pod) bool {
+	if len(pods) == 0 {
+		return false
+	}
+	for _, pod := range pods {
+		if pod.DeletionTimestamp != nil {
+			return false
+		}
+		if !isPodReady(&pod) {
+			return false
+		}
+	}
+	return true
 }
