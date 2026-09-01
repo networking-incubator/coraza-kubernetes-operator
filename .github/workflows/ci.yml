@@ -14,7 +14,6 @@ on:
 env:
   GOMAXPROCS: "1"
   GOPROXY: https://proxy.golang.org,direct
-  GODEBUG: http2client=0
 
 jobs:
   build:
@@ -264,6 +263,10 @@ jobs:
 
       - name: install kind
         run: go install sigs.k8s.io/kind@a323333ff9efd8099f95a8a6b5c86c75a210d00f # v0.31.0
+        env:
+          # Avoid flaky HTTP/2 module downloads without changing the Go HTTP
+          # transport used by the conformance test's Kubernetes log stream.
+          GODEBUG: http2client=0
 
       - name: setup environment
         run: make cluster.kind
@@ -327,6 +330,10 @@ jobs:
 
       - name: install kind
         run: go install sigs.k8s.io/kind@a323333ff9efd8099f95a8a6b5c86c75a210d00f # v0.31.0
+        env:
+          # Avoid flaky HTTP/2 module downloads without changing the Go HTTP
+          # transport used by integration-test clients.
+          GODEBUG: http2client=0
 
       - name: set up kind cluster
         run: make cluster.kind
