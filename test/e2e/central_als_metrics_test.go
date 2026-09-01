@@ -47,7 +47,8 @@ const defaultFilterStateWasmImage = "oci://ghcr.io/networking-incubator/coraza-p
 const (
 	centralALSCollectorNamespace = "coraza-central-waf-telemetry"
 	centralALSCollectorService   = "central-waf-als-collector.coraza-central-waf-telemetry.svc.cluster.local"
-	centralALSProviderName       = "central-als-provider"
+	centralALSCollectorEndpoint  = centralALSCollectorService + ":4317"
+	centralALSProviderName       = "waf-log-collector"
 )
 
 func centralALSTestdata(t *testing.T) string {
@@ -243,7 +244,7 @@ func TestCentralALSMetricsPipeline(t *testing.T) {
 	if annotations == nil {
 		annotations = map[string]string{}
 	}
-	annotations["internal.do-not-use.openshift.io/waf-otel-collector"] = centralALSProviderName
+	annotations["internal.do-not-use.openshift.io/waf-otel-collector"] = centralALSCollectorEndpoint
 	gatewayClass.SetAnnotations(annotations)
 	_, err = fw.DynamicClient.Resource(framework.GatewayClassGVR).Update(t.Context(), gatewayClass, metav1.UpdateOptions{})
 	require.NoError(t, err)

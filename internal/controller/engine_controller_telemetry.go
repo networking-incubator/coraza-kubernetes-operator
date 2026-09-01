@@ -31,9 +31,11 @@ import (
 )
 
 const (
-	// wafCollectorAnnotation is set by the GatewayClass controller to name the
-	// Istio extension provider used by the shared WAF access-log collector.
+	// wafCollectorAnnotation is set by the GatewayClass controller to the shared
+	// WAF access-log collector endpoint.
 	wafCollectorAnnotation = "internal.do-not-use.openshift.io/waf-otel-collector"
+	// wafLogCollectorProvider is the Istio extension provider name created by CIO.
+	wafLogCollectorProvider = "waf-log-collector"
 
 	telemetryNameSuffix = "-telemetry"
 	engineNameLabel     = "waf.k8s.coraza.io/engine"
@@ -123,6 +125,6 @@ func gatewayClassWAFCollectorProvider(gatewayClass *gatewayv1.GatewayClass) (str
 	if gatewayClass == nil {
 		return "", false
 	}
-	providerName := gatewayClass.GetAnnotations()[wafCollectorAnnotation]
-	return providerName, providerName != ""
+	collectorEndpoint := gatewayClass.GetAnnotations()[wafCollectorAnnotation]
+	return wafLogCollectorProvider, collectorEndpoint != ""
 }

@@ -66,10 +66,10 @@ func TestEngineReconciler_BuildTelemetry(t *testing.T) {
 
 func TestGatewayClassWAFCollectorProvider(t *testing.T) {
 	class := &gatewayv1.GatewayClass{}
-	class.SetAnnotations(map[string]string{wafCollectorAnnotation: "custom-waf-log-collector"})
+	class.SetAnnotations(map[string]string{wafCollectorAnnotation: "collector.example.svc.cluster.local:4317"})
 	provider, found := gatewayClassWAFCollectorProvider(class)
 	assert.True(t, found)
-	assert.Equal(t, "custom-waf-log-collector", provider)
+	assert.Equal(t, "waf-log-collector", provider)
 
 	class.SetAnnotations(map[string]string{wafCollectorAnnotation: ""})
 	_, found = gatewayClassWAFCollectorProvider(class)
@@ -84,7 +84,7 @@ func TestEngineReconciler_ReconcileTelemetryCreatesAndRemovesTelemetry(t *testin
 	class := &gatewayv1.GatewayClass{}
 	class.Name = "telemetry-test-class"
 	class.Spec.ControllerName = "example.com/gateway-controller"
-	class.Annotations = map[string]string{wafCollectorAnnotation: "waf-log-collector"}
+	class.Annotations = map[string]string{wafCollectorAnnotation: "collector.example.svc.cluster.local:4317"}
 	require.NoError(t, k8sClient.Create(ctx, class))
 	t.Cleanup(func() { _ = k8sClient.Delete(ctx, class) })
 
@@ -108,10 +108,17 @@ func TestEngineReconciler_ReconcileTelemetryCreatesAndRemovesTelemetry(t *testin
 	telemetry.SetGroupVersionKind(telemetryGVK)
 	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Namespace: namespace, Name: telemetryName(engine.Name)}, telemetry))
 	assert.Equal(t, engine.Name, telemetry.GetLabels()[engineNameLabel])
+	accessLogging, found, err := unstructured.NestedSlice(telemetry.Object, "spec", "accessLogging")
+	require.NoError(t, err)
+	assert.True(t, found)
+	require.Len(t, accessLogging, 1)
+	providerRefs := accessLogging[0].(map[string]any)["providers"].([]any)
+	require.Len(t, providerRefs, 1)
+	assert.Equal(t, "waf-log-collector", providerRefs[0].(map[string]any)["name"])
 
 	engine.Spec.Observability.Mode = wafv1alpha1.ObservabilityModeDisabled
 	require.NoError(t, reconciler.reconcileTelemetry(ctx, engine))
-	err := k8sClient.Get(ctx, types.NamespacedName{Namespace: namespace, Name: telemetry.GetName()}, telemetry)
+	err = k8sClient.Get(ctx, types.NamespacedName{Namespace: namespace, Name: telemetry.GetName()}, telemetry)
 	assert.True(t, apierrors.IsNotFound(err), "expected Telemetry to be removed, got: %v", err)
 
 	engine.Spec.Observability.Mode = wafv1alpha1.ObservabilityModeEnabled
