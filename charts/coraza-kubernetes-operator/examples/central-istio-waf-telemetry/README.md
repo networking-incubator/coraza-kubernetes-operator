@@ -1,4 +1,3 @@
-Unable to open session log file "/home/rzago/.cache/starship/session_6882999428942238.log": Os { code: 30, kind: ReadOnlyFilesystem, message: "Read-only file system" }!
 # Central Istio WAF telemetry (examples)
 
 MeshConfig, Telemetry, and OpenTelemetry Collector fixtures that turn Coraza ALS attributes into baseline `coraza_waf_*` Prometheus metrics.

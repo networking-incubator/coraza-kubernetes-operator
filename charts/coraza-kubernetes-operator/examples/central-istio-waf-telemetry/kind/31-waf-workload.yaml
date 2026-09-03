@@ -1,4 +1,3 @@
-Unable to open session log file "/home/rzago/.cache/starship/session_1635021458324093.log": Os { code: 30, kind: ReadOnlyFilesystem, message: "Read-only file system" }!
 # Echo backend + HTTPRoute for existing coraza-gateway (make cluster.kind).
 apiVersion: apps/v1
 kind: Deployment

@@ -1,0 +1,38 @@
+# Scrape only the central ALS collector and this example's WAF Gateway.
+# Requires OpenShift User Workload Monitoring to be enabled by a cluster admin.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: central-waf-als-collector
+  namespace: coraza-central-waf-telemetry
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: central-waf-als-collector
+      operator.opentelemetry.io/collector-service-type: base
+  endpoints:
+    - port: prometheus
+      path: /metrics
+      interval: 30s
+      scrapeTimeout: 10s
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: waf-gateway-dataplane
+  namespace: openshift-ingress
+spec:
+  selector:
+    matchLabels:
+      gateway.networking.k8s.io/gateway-name: waf-gateway
+  podMetricsEndpoints:
+    - port: http-envoy-prom
+      path: /stats/prometheus
+      interval: 30s
+      scrapeTimeout: 10s
+      metricRelabelings:
+        # Envoy publishes thousands of internal metrics. Keep only the bounded
+        # metric families consumed by the Coraza WAF dashboard.
+        - sourceLabels: [__name__]
+          regex: 'coraza_waf_.*|waf_filter_.*|envoy_wasm_.*|envoy_server_(live|memory_(allocated|heap_size|physical_size)|concurrency|uptime|total_connections)|envoy_listener_manager_(total_listeners_(active|warming)|lds_update_(success|failure|rejected))|istio_(requests_total|request_duration_milliseconds_bucket)'
+          action: keep

@@ -1,4 +1,3 @@
-Unable to open session log file "/home/rzago/.cache/starship/session_1083812209303452.log": Os { code: 30, kind: ReadOnlyFilesystem, message: "Read-only file system" }!
 # openshift-default GatewayClass (OpenShift Ingress / CIO Sail path).
 # Apply before annotate-gatewayclass.sh. CIO does not create this object.
 apiVersion: gateway.networking.k8s.io/v1

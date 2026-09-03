@@ -1,4 +1,3 @@
-Unable to open session log file "/home/rzago/.cache/starship/session_2155757245064198.log": Os { code: 30, kind: ReadOnlyFilesystem, message: "Read-only file system" }!
 #!/usr/bin/env bash
 # Verify CIO propagated waf-log-collector (check openshift-ingress values ConfigMap).
 set -euo pipefail

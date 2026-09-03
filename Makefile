@@ -261,7 +261,7 @@ lint.api: kube-api-linter
 
 .PHONY: cluster.kind
 cluster.kind:
-	ISTIO_VERSION=${ISTIO_VERSION} METALLB_VERSION=${METALLB_VERSION} METALLB_POOL_SIZE=${METALLB_POOL_SIZE} CONTROLLER_MANAGER_CONTAINER_IMAGE_BASE=${CONTROLLER_MANAGER_CONTAINER_IMAGE_BASE} CONTROLLER_MANAGER_CONTAINER_IMAGE_TAG=${CONTROLLER_MANAGER_CONTAINER_IMAGE_TAG} python3 hack/kind_cluster.py setup
+	ISTIO_VERSION=${ISTIO_VERSION} METALLB_VERSION=${METALLB_VERSION} METALLB_POOL_SIZE=${METALLB_POOL_SIZE} CONTROLLER_MANAGER_CONTAINER_IMAGE_BASE=${CONTROLLER_MANAGER_CONTAINER_IMAGE_BASE} CONTROLLER_MANAGER_CONTAINER_IMAGE_TAG=${CONTROLLER_MANAGER_CONTAINER_IMAGE_TAG} python3 hack/kind_cluster.py setup --name ${KIND_CLUSTER_NAME}
 
 # cluster.kind + OpenTelemetry Operator (central collector CRDs). Plain cluster.kind skips OTel.
 .PHONY: cluster.kind.otel
@@ -580,6 +580,9 @@ observability.operator.monitoring: ## Enable ServiceMonitor, PrometheusRule, and
 		--set metrics.serviceMonitor.additionalLabels.release="$(KUBE_PROM_STACK_RELEASE)" \
 		--set metrics.prometheusRule.enabled=true \
 		--set metrics.prometheusRule.additionalLabels.release="$(KUBE_PROM_STACK_RELEASE)" \
+		--set metrics.podMonitor.enabled=true \
+		--set-json 'metrics.podMonitor.gatewaySelector={"gateway.networking.k8s.io/gateway-name":"coraza-gateway"}' \
+		--set metrics.podMonitor.additionalLabels.release="$(KUBE_PROM_STACK_RELEASE)" \
 		--set metrics.grafanaDashboard.enabled=true \
 		--wait --timeout 5m; \
 	kubectl --context "$$ctx" -n "$(HELM_RELEASE_NAMESPACE)" wait --for=condition=Available \

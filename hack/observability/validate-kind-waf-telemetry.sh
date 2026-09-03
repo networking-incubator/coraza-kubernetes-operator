@@ -1,4 +1,3 @@
-Unable to open session log file "/home/rzago/.cache/starship/session_6485261712151171.log": Os { code: 30, kind: ReadOnlyFilesystem, message: "Read-only file system" }!
 #!/usr/bin/env bash
 # Preflight checks for KIND WAF ALS telemetry (Sail Istio + upstream OTEL).
 set -euo pipefail
@@ -55,10 +54,11 @@ fi
 check "Gateway ${TELEMETRY_NS}/${GATEWAY_NAME}" \
   kubectl get gateway -n "${TELEMETRY_NS}" "${GATEWAY_NAME}" >/dev/null
 
-if kubectl get gatewayclass istio -o jsonpath='{.metadata.annotations.internal\.do-not-use\.openshift\.io/waf-otel-collector}' 2>/dev/null | grep -q .; then
-  echo "OK   GatewayClass/istio WAF collector declaration"
+expected_collector="${COLLECTOR_NAME}-collector.${COLLECTOR_NS}.svc.cluster.local:4317"
+if kubectl get gatewayclass istio -o jsonpath='{.metadata.annotations.internal\.do-not-use\.openshift\.io/waf-otel-collector}' 2>/dev/null | grep -qx "${expected_collector}"; then
+  echo "OK   GatewayClass/istio WAF collector endpoint declaration"
 else
-  echo "FAIL GatewayClass/istio WAF collector declaration missing"
+  echo "FAIL GatewayClass/istio WAF collector endpoint must be ${expected_collector}"
   fail=1
 fi
 

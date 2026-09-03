@@ -1,14 +1,13 @@
-Unable to open session log file "/home/rzago/.cache/starship/session_5286870014349264.log": Os { code: 30, kind: ReadOnlyFilesystem, message: "Read-only file system" }!
 #!/usr/bin/env bash
-# Preflight checks for OpenShift WAF ALS telemetry (OSSM + RH OTEL + CIO).
+# Preflight checks for OpenShift WAF ALS telemetry (RH OTEL + CIO).
 set -euo pipefail
 
 : "${GATEWAYCLASS:=openshift-default}"
 : "${COLLECTOR_NS:=coraza-central-waf-telemetry}"
 : "${COLLECTOR_NAME:=central-waf-als}"
-: "${TELEMETRY_NS:=waf-telemetry}"
-: "${TELEMETRY_NAME:=coraza-waf-als}"
-: "${ENGINE_NS:=waf-telemetry}"
+: "${TELEMETRY_NS:=openshift-ingress}"
+: "${TELEMETRY_NAME:=coraza-engine-waf-engine-telemetry}"
+: "${ENGINE_NS:=openshift-ingress}"
 : "${ENGINE_NAME:=waf-engine}"
 : "${WASM_PLUGIN_NAME:=coraza-engine-${ENGINE_NAME}}"
 
@@ -56,6 +55,30 @@ if oc rollout status -n "${COLLECTOR_NS}" "deploy/${COLLECTOR_NAME}-collector" -
   echo "OK   Deployment/${COLLECTOR_NAME}-collector available"
 else
   echo "FAIL Deployment/${COLLECTOR_NAME}-collector not available in ${COLLECTOR_NS}"
+  fail=1
+fi
+
+destination_rule="central-waf-als-collector-plaintext"
+if oc get destinationrule -n "${COLLECTOR_NS}" "${destination_rule}" >/dev/null 2>&1; then
+  tls_mode=$(oc get destinationrule -n "${COLLECTOR_NS}" "${destination_rule}" \
+    -o jsonpath='{.spec.trafficPolicy.tls.mode}' 2>/dev/null || true)
+  if [ "${tls_mode}" = "DISABLE" ]; then
+    echo "OK   DestinationRule/${destination_rule} disables TLS for sidecarless collector"
+  else
+    echo "FAIL DestinationRule/${destination_rule} tls.mode=${tls_mode:-missing}, expected DISABLE"
+    fail=1
+  fi
+else
+  echo "FAIL DestinationRule/${destination_rule} not found in ${COLLECTOR_NS}"
+  fail=1
+fi
+
+collector_protocol=$(oc get service -n "${COLLECTOR_NS}" "${COLLECTOR_NAME}-collector" \
+  -o jsonpath='{.spec.ports[?(@.port==4317)].appProtocol}' 2>/dev/null || true)
+if [ "${collector_protocol}" = "grpc" ]; then
+  echo "OK   Collector Service port 4317 declares appProtocol=grpc"
+else
+  echo "FAIL Collector Service port 4317 appProtocol=${collector_protocol:-missing}, expected grpc"
   fail=1
 fi
 

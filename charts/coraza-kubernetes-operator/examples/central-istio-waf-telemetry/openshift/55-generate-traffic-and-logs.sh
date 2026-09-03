@@ -1,9 +1,8 @@
-Unable to open session log file "/home/rzago/.cache/starship/session_1847024212220081.log": Os { code: 30, kind: ReadOnlyFilesystem, message: "Read-only file system" }!
 #!/usr/bin/env bash
 # Generate allow/block traffic and observe WAF + ALS telemetry signals.
 set -euo pipefail
 
-NS="${NS:-waf-telemetry}"
+NS="${NS:-openshift-ingress}"
 GW="${GW:-waf-gateway}"
 COLLECTOR_NS="${COLLECTOR_NS:-coraza-central-waf-telemetry}"
 COLLECTOR_NAME="${COLLECTOR_NAME:-central-waf-als}"
@@ -11,6 +10,8 @@ ALLOW_REQUESTS="${ALLOW_REQUESTS:-5}"
 BLOCK_REQUESTS="${BLOCK_REQUESTS:-10}"
 USE_LB="${USE_LB:-1}"
 SHOW_COLLECTOR_DEBUG="${SHOW_COLLECTOR_DEBUG:-0}"
+MET_PF=""
+DBG_PF=""
 
 GW_DEPLOY="${GW_DEPLOY:-${GW}-openshift-default}"
 

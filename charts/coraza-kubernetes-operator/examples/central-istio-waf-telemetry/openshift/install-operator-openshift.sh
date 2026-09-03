@@ -1,4 +1,3 @@
-Unable to open session log file "/home/rzago/.cache/starship/session_2355115294115627.log": Os { code: 30, kind: ReadOnlyFilesystem, message: "Read-only file system" }!
 #!/usr/bin/env bash
 # Build (optional), push, and Helm-install Coraza operator on OpenShift.
 set -euo pipefail
@@ -16,12 +15,22 @@ BUILD_IMAGE="${BUILD_IMAGE:-1}"
 # buildconfig: oc start-build --from-dir (no local registry login; works on CI clusters)
 # auto: registry first, then buildconfig on failure
 BUILD_METHOD="${BUILD_METHOD:-auto}"
-IMAGE_TAG="${IMAGE_TAG:-feat-otc}"
+# Image coordinates are deliberately supplied by the test runner. This example
+# must not publish to or assume ownership of a registry repository or tag.
+IMAGE_REPOSITORY="${IMAGE_REPOSITORY:-}"
+IMAGE_TAG="${IMAGE_TAG:-}"
 REGISTRY_ROUTE="${REGISTRY_ROUTE:-$(oc get route -n openshift-image-registry default-route -o jsonpath='{.spec.host}' 2>/dev/null || true)}"
 INTERNAL_REPO="image-registry.openshift-image-registry.svc:5000/${NAMESPACE}/coraza-kubernetes-operator"
 
 ensure_namespace() {
   oc get namespace "${NAMESPACE}" >/dev/null 2>&1 || oc create namespace "${NAMESPACE}"
+}
+
+require_image_tag() {
+  if [[ -z "${IMAGE_TAG}" ]]; then
+    echo "ERROR: set IMAGE_TAG to the tag you want to build or deploy" >&2
+    exit 1
+  fi
 }
 
 expose_registry_route() {
@@ -80,6 +89,7 @@ build_with_buildconfig() {
 }
 
 if [[ "${BUILD_IMAGE}" == "1" ]]; then
+  require_image_tag
   case "${BUILD_METHOD}" in
     registry)
       build_and_push_registry
@@ -98,6 +108,10 @@ if [[ "${BUILD_IMAGE}" == "1" ]]; then
       exit 1
       ;;
   esac
+  IMAGE_REPOSITORY="${INTERNAL_REPO}"
+elif [[ -z "${IMAGE_REPOSITORY}" || -z "${IMAGE_TAG}" ]]; then
+  echo "ERROR: set IMAGE_REPOSITORY and IMAGE_TAG when BUILD_IMAGE=0" >&2
+  exit 1
 fi
 
 helm upgrade --install "${RELEASE}" "${CHART_DIR}" \
@@ -105,7 +119,7 @@ helm upgrade --install "${RELEASE}" "${CHART_DIR}" \
   --create-namespace \
   -f "${VALUES_FILE}" \
   --set createNamespace=false \
-  --set image.repository="${INTERNAL_REPO}" \
+  --set image.repository="${IMAGE_REPOSITORY}" \
   --set image.tag="${IMAGE_TAG}"
 
 echo "Waiting for operator pod..."

@@ -1,0 +1,99 @@
+# Grafana instance for the OpenShift WAF telemetry demonstrator.
+# The Grafana Operator creates the ServiceAccount <Grafana name>-sa.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: central-waf-grafana-cluster-monitoring-view
+  namespace: openshift-monitoring
+  labels:
+    app.kubernetes.io/part-of: coraza-central-istio-waf-telemetry
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-monitoring-view
+subjects:
+  - kind: ServiceAccount
+    name: central-waf-grafana-sa
+    namespace: coraza-central-waf-telemetry
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: central-waf-grafana
+  namespace: coraza-central-waf-telemetry
+  labels:
+    app.kubernetes.io/part-of: coraza-central-istio-waf-telemetry
+spec:
+  podSelector:
+    matchLabels:
+      app: central-waf-grafana
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # The Grafana Operator calls the Grafana HTTP API to reconcile datasource
+    # and dashboard CRs. The OpenShift router serves the public Route.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: openshift-operators
+      ports:
+        - protocol: TCP
+          port: 3000
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: openshift-ingress
+      ports:
+        - protocol: TCP
+          port: 3000
+  egress:
+    # This is deliberately narrow: the dashboard reads only the existing
+    # monitoring API through Thanos Querier.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: openshift-monitoring
+      ports:
+        - protocol: TCP
+          port: 9091
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: central-waf-grafana
+  namespace: coraza-central-waf-telemetry
+  labels:
+    app.kubernetes.io/part-of: coraza-central-istio-waf-telemetry
+spec:
+  # Keep the browser entry point explicit and predictable.  The Grafana
+  # Operator manages the Grafana Service, while this example owns the Route.
+  to:
+    kind: Service
+    name: central-waf-grafana-service
+  port:
+    targetPort: 3000
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+---
+apiVersion: grafana.integreatly.org/v1beta1
+kind: Grafana
+metadata:
+  name: central-waf-grafana
+  namespace: coraza-central-waf-telemetry
+  labels:
+    app.kubernetes.io/name: central-waf-grafana
+    app.kubernetes.io/part-of: coraza-central-istio-waf-telemetry
+    dashboards: coraza-waf-telemetry
+spec:
+  # The Operator creates central-waf-grafana-sa, referenced by the RoleBinding
+  # above. Its token authenticates Grafana to Thanos Querier.
+  serviceAccount:
+    automountServiceAccountToken: true
+  config:
+    analytics:
+      reporting_enabled: "false"
+      check_for_updates: "false"
+    users:
+      allow_sign_up: "false"

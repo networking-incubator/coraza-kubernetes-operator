@@ -1,9 +1,8 @@
-Unable to open session log file "/home/rzago/.cache/starship/session_2366314630118831.log": Os { code: 30, kind: ReadOnlyFilesystem, message: "Read-only file system" }!
 apiVersion: waf.k8s.coraza.io/v1alpha1
 kind: RuleSource
 metadata:
   name: base-rules
-  namespace: waf-telemetry
+  namespace: openshift-ingress
   labels:
     app.kubernetes.io/part-of: coraza-central-istio-waf-telemetry
 spec:
@@ -16,7 +15,7 @@ apiVersion: waf.k8s.coraza.io/v1alpha1
 kind: RuleSource
 metadata:
   name: block-attack
-  namespace: waf-telemetry
+  namespace: openshift-ingress
   labels:
     app.kubernetes.io/part-of: coraza-central-istio-waf-telemetry
 spec:
@@ -32,7 +31,7 @@ apiVersion: waf.k8s.coraza.io/v1alpha1
 kind: RuleSet
 metadata:
   name: waf-ruleset
-  namespace: waf-telemetry
+  namespace: openshift-ingress
   labels:
     app.kubernetes.io/part-of: coraza-central-istio-waf-telemetry
 spec:

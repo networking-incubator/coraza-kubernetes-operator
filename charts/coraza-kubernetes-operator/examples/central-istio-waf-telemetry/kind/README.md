@@ -1,4 +1,3 @@
-Unable to open session log file "/home/rzago/.cache/starship/session_2214126266281902.log": Os { code: 30, kind: ReadOnlyFilesystem, message: "Read-only file system" }!
 # Central Istio WAF telemetry on KIND (FILTER_STATE / CIO-shaped ALS)
 
 KIND fixtures mirror the OpenShift path (`../openshift/`) except MeshConfig is
@@ -10,6 +9,9 @@ validating the Engine-managed Telemetry:
 
 ```bash
 make build.image cluster.load-images
+
+# Optional, but required to populate the Grafana dashboard.
+make observability.prometheus.deploy observability.operator.monitoring
 ```
 
 Opcionalmente, publique a imagem no GHCR e reconfigure o deployment para usar
@@ -30,6 +32,7 @@ kubectl -n coraza-system rollout status deployment/coraza-kubernetes-operator --
 | File | Purpose |
 |------|---------|
 | `apply-kind.sh` | Apply collector + mesh + GatewayClass declaration + WAF |
+| `20-collector-servicemonitor.yaml` | Scrape the collector's `coraza_waf_*` metrics when Prometheus Operator is installed |
 | `31-waf-workload.yaml` | Echo + HTTPRoute (Gateway from `make cluster.kind`) |
 | `40-waf-rules.yaml` | RuleSource + RuleSet |
 | `41-waf-engine.yaml` | Observability-enabled Engine; operator creates Telemetry |
@@ -52,6 +55,10 @@ cd charts/coraza-kubernetes-operator/examples/central-istio-waf-telemetry/kind
 ./apply-kind.sh
 ./55-generate-traffic-and-logs.sh
 ```
+
+When the Prometheus stack is installed, wait at least 30 seconds after
+generating traffic for both the gateway PodMonitor and the collector
+ServiceMonitor to be scraped before opening the `Coraza WAF` dashboard.
 
 Integration test (same pipeline, ephemeral namespace):
 

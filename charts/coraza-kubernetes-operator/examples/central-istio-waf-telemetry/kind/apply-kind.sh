@@ -1,4 +1,3 @@
-Unable to open session log file "/home/rzago/.cache/starship/session_6009157993740115.log": Os { code: 30, kind: ReadOnlyFilesystem, message: "Read-only file system" }!
 #!/usr/bin/env bash
 # Apply KIND WAF ALS telemetry example end-to-end (Sail Istio + upstream OTEL).
 set -euo pipefail
@@ -31,6 +30,13 @@ step "Collector namespace + central OTEL collector"
 kubectl apply -f "${EX_DIR}/00-namespace.yaml"
 kubectl apply -f "${EX_DIR}/10-otel-collector.yaml"
 kubectl rollout status -n "${COLLECTOR_NS}" "deploy/${COLLECTOR_NAME}-collector" --timeout=300s
+
+if kubectl api-resources --api-group=monitoring.coreos.com 2>/dev/null | grep -q servicemonitors; then
+  step "Prometheus scrape for central ALS collector"
+  kubectl apply -f "${SCRIPT_DIR}/20-collector-servicemonitor.yaml"
+else
+  echo "Prometheus Operator CRDs not installed; skipping collector ServiceMonitor"
+fi
 
 if [[ "${SKIP_MESHCONFIG}" != "1" ]]; then
   step "MeshConfig extensionProvider waf-log-collector (FILTER_STATE ALS)"

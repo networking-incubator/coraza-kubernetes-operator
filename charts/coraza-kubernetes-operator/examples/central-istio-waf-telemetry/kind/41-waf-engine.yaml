@@ -1,4 +1,3 @@
-Unable to open session log file "/home/rzago/.cache/starship/session_1598428980314222.log": Os { code: 30, kind: ReadOnlyFilesystem, message: "Read-only file system" }!
 apiVersion: waf.k8s.coraza.io/v1alpha1
 kind: Engine
 metadata:

@@ -1,6 +1,6 @@
-Unable to open session log file "/home/rzago/.cache/starship/session_2330518837169801.log": Os { code: 30, kind: ReadOnlyFilesystem, message: "Read-only file system" }!
 # Central WAF ALS collector for OpenShift + Red Hat build of OpenTelemetry.
-# Do not set spec.image: the RH OTEL operator pins the collector image.
+# The Red Hat OTEL Operator reconciles this CR, but the upstream contrib image
+# is pinned here because it supplies deltatocumulativeprocessor.
 # Coraza operator does not reconcile this CR.
 apiVersion: v1
 kind: ServiceAccount
@@ -19,6 +19,8 @@ metadata:
   labels:
     app.kubernetes.io/part-of: coraza-central-istio-waf-telemetry
 spec:
+  # Keep aligned with the tested RH collector binary version.
+  image: ghcr.io/open-telemetry/opentelemetry-collector-releases/opentelemetry-collector-contrib:0.152.1
   mode: deployment
   replicas: 1
   serviceAccount: central-waf-als-collector
@@ -41,6 +43,9 @@ spec:
       memory: 256Mi
   ports:
     - name: otlp-grpc
+      # Explicit HTTP/2 selection is required for Envoy ALS gRPC exports.
+      # "otlp-grpc" is descriptive but is not an Istio protocol-name prefix.
+      appProtocol: grpc
       port: 4317
       targetPort: 4317
     - name: prometheus
@@ -59,6 +64,10 @@ spec:
             endpoint: 0.0.0.0:4318
     processors:
       batch: {}
+      # count/coraza emits delta sums; Prometheus counters must be cumulative.
+      deltatocumulative:
+        max_stale: 5m
+        max_streams: 10000
       transform/waf_als:
         log_statements:
           - context: log
@@ -72,7 +81,6 @@ spec:
               - set(attributes["engine"], "unknown") where attributes["engine"] == nil
               - set(attributes["namespace"], "unknown") where attributes["namespace"] == nil
               - set(attributes["outcome"], "unknown") where attributes["outcome"] == nil
-      # RH OTEL pinned collector does not ship deltatocumulative; batch-only metrics path.
     connectors:
       count/coraza:
         logs:
@@ -116,5 +124,5 @@ spec:
           exporters: [count/coraza]
         metrics/coraza:
           receivers: [count/coraza]
-          processors: [batch]
+          processors: [deltatocumulative, batch]
           exporters: [prometheus]

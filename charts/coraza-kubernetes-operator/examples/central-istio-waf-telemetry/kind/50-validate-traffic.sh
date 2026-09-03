@@ -1,4 +1,3 @@
-Unable to open session log file "/home/rzago/.cache/starship/session_3224438034466325.log": Os { code: 30, kind: ReadOnlyFilesystem, message: "Read-only file system" }!
 #!/usr/bin/env bash
 # Smoke-test WAF allow/block through coraza-gateway (port-forward or MetalLB).
 set -euo pipefail

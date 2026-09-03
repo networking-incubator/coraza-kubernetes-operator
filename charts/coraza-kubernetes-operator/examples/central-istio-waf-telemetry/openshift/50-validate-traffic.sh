@@ -1,9 +1,8 @@
-Unable to open session log file "/home/rzago/.cache/starship/session_1744019868153032.log": Os { code: 30, kind: ReadOnlyFilesystem, message: "Read-only file system" }!
 #!/usr/bin/env bash
 # Smoke-test WAF allow/block through waf-gateway (port-forward or external LB).
 set -euo pipefail
 
-NS="${NS:-waf-telemetry}"
+NS="${NS:-openshift-ingress}"
 GW="${GW:-waf-gateway}"
 USE_LB="${USE_LB:-0}"
 

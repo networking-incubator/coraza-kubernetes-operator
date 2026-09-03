@@ -64,8 +64,8 @@ metrics:
     # Additional alerting rules appended after the default rules.
     rules: []
   podMonitor:
-    # When true, deploys a PodMonitor CR to scrape coraza_waf_* metrics
-    # from Envoy stats on Gateway pods. Requires:
+    # When true, deploys a PodMonitor CR to scrape the bounded Coraza WAF
+    # dashboard metric set from Envoy stats on Gateway pods. Requires:
     # - monitoring.coreos.com/v1 CRD (Prometheus Operator)
     # - Istio with Envoy stats port 15090 (http-envoy-prom) exposed on Gateway pods
     # Disabled by default.
@@ -85,7 +85,7 @@ metrics:
     # Default is the Istio convention; override for non-Istio service meshes.
     portName: "http-envoy-prom"
     # Additional metricRelabelings appended AFTER the mandatory cardinality guard.
-    # The guard (keep only coraza_waf_.*) is always enforced first.
+    # The guard (keep only dashboard metric families) is always enforced first.
     metricRelabelings: []
   grafanaDashboard:
     # When true, deploys ConfigMap(s) containing Grafana dashboard JSON for the

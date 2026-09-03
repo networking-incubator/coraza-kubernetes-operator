@@ -1,4 +1,3 @@
-Unable to open session log file "/home/rzago/.cache/starship/session_2662641374694157.log": Os { code: 30, kind: ReadOnlyFilesystem, message: "Read-only file system" }!
 #!/usr/bin/env bash
 # Point CIO at the central WAF ALS collector Service (OpenShift cluster-ingress-operator).
 # Requires cluster-admin. Coraza never reconciles MeshConfig.

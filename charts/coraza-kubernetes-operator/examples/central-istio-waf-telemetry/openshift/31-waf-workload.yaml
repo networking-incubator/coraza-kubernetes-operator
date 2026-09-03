@@ -1,10 +1,11 @@
-Unable to open session log file "/home/rzago/.cache/starship/session_9917220932422511.log": Os { code: 30, kind: ReadOnlyFilesystem, message: "Read-only file system" }!
 # Sample backend + openshift-default Gateway + HTTPRoute for WAF telemetry tests.
+# OpenShift Ingress owns this namespace so gateway DNS and load-balancing
+# behaviour match the CIO-managed GatewayClass.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: echo
-  namespace: waf-telemetry
+  namespace: openshift-ingress
   labels:
     app.kubernetes.io/part-of: coraza-central-istio-waf-telemetry
 spec:
@@ -27,7 +28,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: echo
-  namespace: waf-telemetry
+  namespace: openshift-ingress
   labels:
     app.kubernetes.io/part-of: coraza-central-istio-waf-telemetry
 spec:
@@ -41,7 +42,7 @@ apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
 metadata:
   name: waf-gateway
-  namespace: waf-telemetry
+  namespace: openshift-ingress
   labels:
     app.kubernetes.io/part-of: coraza-central-istio-waf-telemetry
 spec:
@@ -58,7 +59,7 @@ apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
   name: echo-route
-  namespace: waf-telemetry
+  namespace: openshift-ingress
   labels:
     app.kubernetes.io/part-of: coraza-central-istio-waf-telemetry
 spec:

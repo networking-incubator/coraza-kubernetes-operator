@@ -1,4 +1,3 @@
-Unable to open session log file "/home/rzago/.cache/starship/session_1996212688462818.log": Os { code: 30, kind: ReadOnlyFilesystem, message: "Read-only file system" }!
 # Optional: same as ../10-otel-collector.yaml plus a debug exporter on logs/als.
 # Prints OTLP log records (ALS payloads with WAF filter-state attributes) to collector stdout.
 #

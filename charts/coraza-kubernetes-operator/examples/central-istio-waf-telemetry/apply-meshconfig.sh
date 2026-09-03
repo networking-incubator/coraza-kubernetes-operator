@@ -1,4 +1,3 @@
-Unable to open session log file "/home/rzago/.cache/starship/session_1122210391562010.log": Os { code: 30, kind: ReadOnlyFilesystem, message: "Read-only file system" }!
 #!/usr/bin/env bash
 # Patch Sail Istio CR meshConfig with an OTel ALS provider (examples only).
 # Coraza never reconciles MeshConfig.

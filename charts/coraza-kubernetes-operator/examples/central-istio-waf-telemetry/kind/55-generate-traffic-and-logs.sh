@@ -1,4 +1,3 @@
-Unable to open session log file "/home/rzago/.cache/starship/session_2746119224310161.log": Os { code: 30, kind: ReadOnlyFilesystem, message: "Read-only file system" }!
 #!/usr/bin/env bash
 # Generate allow/block traffic and observe WAF + ALS telemetry signals on KIND.
 set -euo pipefail
