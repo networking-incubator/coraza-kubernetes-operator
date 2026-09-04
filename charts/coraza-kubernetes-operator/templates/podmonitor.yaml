@@ -31,7 +31,7 @@ spec:
         # time series.
         # This rule is always first and cannot be overridden by user config.
         - sourceLabels: [__name__]
-          regex: 'coraza_waf_.*|waf_filter_.*|envoy_wasm_.*|envoy_server_(live|memory_(allocated|heap_size|physical_size)|concurrency|uptime|total_connections)|envoy_listener_manager_(total_listeners_(active|warming)|lds_update_(success|failure|rejected))|istio_(requests_total|request_duration_milliseconds_bucket)'
+          regex: 'waf_filter_.*|envoy_wasm_.*|envoy_server_(live|memory_(allocated|heap_size|physical_size)|concurrency|uptime|total_connections)|envoy_listener_manager_(total_listeners_(active|warming)|lds_update_(success|failure|rejected))|istio_(requests_total|request_duration_milliseconds_bucket)'
           action: keep
         {{- with .Values.metrics.podMonitor.metricRelabelings }}
         {{- toYaml . | nindent 8 }}
