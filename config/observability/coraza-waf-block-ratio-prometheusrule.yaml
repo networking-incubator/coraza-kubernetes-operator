@@ -1,0 +1,67 @@
+# Dataplane block-ratio alerts for the OpenShift UWM demo.
+# Mirrors charts/coraza-kubernetes-operator/templates/prometheusrule.yaml
+# (coraza-waf.dataplane.alerts) with higher thresholds so the continuous
+# traffic-generator does not page constantly.
+#
+#   oc apply -f config/observability/coraza-waf-block-ratio-prometheusrule.yaml
+#
+# Requires User Workload Monitoring (or any Prometheus that selects
+# PrometheusRules in coraza-system / openshift-user-workload-monitoring).
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: coraza-waf-block-ratio
+  namespace: coraza-system
+  labels:
+    app.kubernetes.io/name: coraza-kubernetes-operator
+    app.kubernetes.io/component: metrics
+spec:
+  groups:
+    - name: coraza-waf.dataplane.alerts
+      rules:
+        - alert: CorazaWAFBlockRatioHigh
+          expr: |
+            (
+              sum(rate(coraza_waf_requests_total{outcome="block"}[15m]))
+              /
+              clamp_min(sum(rate(coraza_waf_requests_total[15m])), 1e-9)
+              > 0.9
+            )
+            and
+            sum(rate(coraza_waf_requests_total[15m])) > 0.1
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: Coraza WAF block ratio is high
+            description: >-
+              Block ratio has been above 0.9 for more than 10 minutes
+              (demo threshold; chart default is 0.1). Check attack category
+              panels and Gateway Engines.
+
+        - alert: CorazaWAFBlockRatioRising
+          expr: |
+            (
+              (
+                sum(rate(coraza_waf_requests_total{outcome="block"}[15m]))
+                /
+                clamp_min(sum(rate(coraza_waf_requests_total[15m])), 1e-9)
+              )
+              >
+              (
+                sum(rate(coraza_waf_requests_total{outcome="block"}[2h]))
+                /
+                clamp_min(sum(rate(coraza_waf_requests_total[2h])), 1e-9)
+              )
+              * 5
+            )
+            and
+            sum(rate(coraza_waf_requests_total[15m])) > 0.1
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: Coraza WAF block ratio is rising sharply
+            description: >-
+              15m block ratio is more than 5x the 2h baseline (demo multiplier;
+              chart default is 3x). Often a focused probe or ruleset change.
