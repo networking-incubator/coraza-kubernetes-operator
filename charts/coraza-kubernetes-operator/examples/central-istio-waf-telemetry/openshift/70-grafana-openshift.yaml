@@ -48,6 +48,22 @@ spec:
         - protocol: TCP
           port: 3000
   egress:
+    # OpenShift runs the cluster DNS Service in openshift-dns.  The Service
+    # listens on 53 but forwards to DNS pods on 5353; allow both views so the
+    # policy works before and after Service NAT.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: openshift-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+        - protocol: UDP
+          port: 5353
+        - protocol: TCP
+          port: 5353
     # This is deliberately narrow: the dashboard reads only the existing
     # monitoring API through Thanos Querier.
     - to:

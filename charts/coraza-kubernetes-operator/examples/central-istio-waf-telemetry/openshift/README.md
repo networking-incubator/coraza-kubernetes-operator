@@ -16,6 +16,10 @@ This is not an OpenShift GA howto. Ownership and SCC/mTLS gaps remain
 demonstrator concerns. The optional Grafana resources reuse the chart-maintained
 Coraza WAF dashboard; they are not product docs.
 
+The user-facing deployment guide is published as
+[Observability on OpenShift](../../../../../docs/content/howto/observability-openshift.md).
+This README is the technical reference for the fixture files.
+
 `openshift-ingress` is the fixed namespace for this example's Gateway, backend
 workload, RuleSources, RuleSet, Engine, generated Telemetry, and gateway
 `PodMonitor`. Keeping those resources with the CIO-managed ingress components
@@ -36,7 +40,7 @@ The central OpenTelemetry collector intentionally remains separate in
 | 4 | `annotate-gatewayclass.sh` | CIO annotation → `waf-log-collector` |
 | 4b | `verify-mesh-waf-collector.sh` | Check `openshift-ingress/values-openshift-gateway` |
 | 5 | `15-operator-openshift-values.yaml` | Helm values (OpenShift) |
-| 5 | `install-operator-openshift.sh` | Build/push operator image + Helm install |
+| 5 | `install-operator-openshift.sh` | Optional convenience helper; the documented deployment uses Helm directly |
 | 6 | `31-waf-workload.yaml` | Echo + Gateway + HTTPRoute in `openshift-ingress` |
 | 7 | `40-waf-rules.yaml` | RuleSource + RuleSet in `openshift-ingress` |
 | 8 | `41-waf-engine.yaml` | Engine + `coraza-proxy-wasm` filter-state image in `openshift-ingress` |
@@ -45,10 +49,10 @@ The central OpenTelemetry collector intentionally remains separate in
 | 12 | `70-grafana-openshift.yaml` | Grafana instance and Thanos read-only RBAC binding |
 | 13 | `71-grafana-datasource.yaml` | Authenticated Thanos Querier Prometheus datasource |
 | 14 | `72-grafana-dashboard.yaml` | Imports the recovered chart-maintained `coraza-waf.json` dashboard |
-| 15 | `73-apply-grafana-dashboard.sh` | Creates the dashboard ConfigMap and applies steps 12–14 |
+| 15 | `73-apply-grafana-dashboard.sh` | Optional convenience helper; the documented deployment uses direct `oc` commands |
 | — | `50-validate-traffic.sh` | Smoke test allow/block |
 | — | `55-generate-traffic-and-logs.sh` | Generate traffic; show gateway logs + collector metrics |
-| — | `apply-openshift.sh` | Run all steps above |
+| — | `apply-openshift.sh` | Optional convenience helper; not the recommended deployment path |
 
 ## KIND vs OpenShift
 
@@ -67,6 +71,7 @@ The central OpenTelemetry collector intentionally remains separate in
 - OpenShift 4.20+ with Gateway API
 - Cluster Ingress Operator with the GatewayClass-to-Istio integration from CIO PR 1555; no manual OSSM installation is required for this example
 - Red Hat build of OpenTelemetry operator (`OpenTelemetryCollector` CRD)
+- Grafana Operator, installed through OperatorHub in `openshift-operators`
 - OpenShift User Workload Monitoring enabled by a cluster administrator. This is a cluster-wide prerequisite; the example never modifies `cluster-monitoring-config`.
 - `helm`, `oc` with cluster-admin for CIO annotation and resources in `openshift-ingress`
 - A Coraza operator image in a registry that this cluster can pull. Its repository
@@ -131,27 +136,17 @@ oc get pods -n openshift-user-workload-monitoring -w
 # thanos-ruler-user-workload are Running and Ready.
 ```
 
-### 2. Apply the example
+### 2. Deploy the example
 
-## Apply (all steps)
-
-```bash
-cd charts/coraza-kubernetes-operator/examples/central-istio-waf-telemetry/openshift
-chmod +x *.sh
-./apply-openshift.sh
-```
-
-Skip operator if already installed:
+Run these commands from the repository root. This is the recommended path:
+YAML resources use `oc apply -f`, while the CKO is installed with the explicit
+Helm command below. The helper scripts are not required for deployment.
 
 ```bash
-SKIP_OPERATOR=1 ./apply-openshift.sh
-```
-
-## Apply (step by step)
-
-```bash
-EX=charts/coraza-kubernetes-operator/examples/central-istio-waf-telemetry
-OS=$EX/openshift
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+EX="$REPO_ROOT/charts/coraza-kubernetes-operator/examples/central-istio-waf-telemetry"
+OS="$EX/openshift"
+OPERATOR_IMAGE=quay.io/waf/coraza-kubernetes-operator:feat-otc-controller-d3c58786ab99
 
 # 3–5 GatewayClass, collector, and CIO-generated ALS provider
 oc apply -f $OS/05-gatewayclass-openshift.yaml
@@ -179,12 +174,18 @@ oc get configmap -n openshift-ingress values-openshift-gateway \
   -o jsonpath='{.data.merged-values}' \
   | grep -A20 -B5 'waf-log-collector'
 
-# 6 Operator. Build and push the image using your chosen workflow, then provide
-# its coordinates explicitly. This example does not prescribe a registry or tag.
-: "${IMAGE_REPOSITORY:?set the operator image repository}"
-: "${IMAGE_TAG:?set the operator image tag}"
-BUILD_IMAGE=0 IMAGE_REPOSITORY="$IMAGE_REPOSITORY" IMAGE_TAG="$IMAGE_TAG" \
-  $OS/install-operator-openshift.sh
+# 6 CKO: install directly with Helm. The test runner supplies a registry image.
+IMAGE_REPOSITORY="${OPERATOR_IMAGE%:*}"
+IMAGE_TAG="${OPERATOR_IMAGE##*:}"
+helm upgrade --install coraza-kubernetes-operator \
+  "$REPO_ROOT/charts/coraza-kubernetes-operator" \
+  --namespace coraza-system \
+  --create-namespace \
+  -f "$OS/15-operator-openshift-values.yaml" \
+  --set createNamespace=false \
+  --set image.repository="$IMAGE_REPOSITORY" \
+  --set image.tag="$IMAGE_TAG"
+oc rollout status -n coraza-system deployment/coraza-kubernetes-operator --timeout=300s
 
 # 7–10 WAF workload + observability-enabled Engine. All Gateway and Engine
 # resources use openshift-ingress so CIO supplies the expected DNS and
@@ -219,11 +220,22 @@ supported production deployment.
 Validate:
 
 ```bash
-$OS/50-validate-traffic.sh
-$OS/55-generate-traffic-and-logs.sh
+"$OS/50-validate-traffic.sh"
+"$OS/55-generate-traffic-and-logs.sh"
 oc -n coraza-central-waf-telemetry port-forward svc/central-waf-als-collector 9090:9090
 curl -s localhost:9090/metrics | grep coraza_waf_
 hack/observability/validate-openshift-waf-telemetry.sh   # from repo root
+```
+
+For a continuous blocked-traffic stream while validating Grafana panels, run
+this in a separate terminal and stop it with `Ctrl+C`:
+
+```bash
+while true; do
+  BLOCK_REQUESTS=1 ALLOW_REQUESTS=0 USE_LB=0 \
+    "$OS/55-generate-traffic-and-logs.sh" >/dev/null
+  sleep 15
+done
 ```
 
 ### Generate traffic and observe logs
@@ -279,12 +291,14 @@ created at deployment time and stored only in the cluster Secret; never add a
 token to a YAML file or commit it.
 
 ```bash
-EX=charts/coraza-kubernetes-operator/examples/central-istio-waf-telemetry
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+EX="$REPO_ROOT/charts/coraza-kubernetes-operator/examples/central-istio-waf-telemetry"
 OS="$EX/openshift"
 GRAFANA_NS=coraza-central-waf-telemetry
 
 # Creates Grafana, its narrowly-scoped NetworkPolicy, and grants its
-# operator-created ServiceAccount read-only access to Thanos Querier.
+# operator-created ServiceAccount read-only access to Thanos Querier. The
+# NetworkPolicy permits DNS on both Service port 53 and DNS pod port 5353.
 oc apply -f "$OS/70-grafana-openshift.yaml"
 oc get serviceaccount -n "$GRAFANA_NS" central-waf-grafana-sa
 
@@ -297,8 +311,12 @@ oc create secret generic -n "$GRAFANA_NS" central-waf-grafana-thanos-token \
 unset THANOS_TOKEN
 
 # Copies the maintained dashboard JSON into a ConfigMap and applies the
-# datasource and GrafanaDashboard CR.
-bash "$OS/73-apply-grafana-dashboard.sh"
+# datasource and GrafanaDashboard CR without a wrapper script.
+oc create configmap -n "$GRAFANA_NS" central-waf-grafana-dashboard \
+  --from-file=coraza-waf.json="$REPO_ROOT/charts/coraza-kubernetes-operator/dashboards/coraza-waf.json" \
+  --dry-run=client -o yaml | oc apply -f -
+oc apply -f "$OS/71-grafana-datasource.yaml"
+oc apply -f "$OS/72-grafana-dashboard.yaml"
 
 oc get grafana,grafanadatasource,grafanadashboard -n "$GRAFANA_NS"
 oc get pods -n "$GRAFANA_NS" -l app.kubernetes.io/instance=central-waf-grafana

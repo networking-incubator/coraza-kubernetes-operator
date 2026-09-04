@@ -34,7 +34,7 @@ else
   PF_PID=$!
   trap 'kill ${PF_PID} 2>/dev/null || true; kill ${MET_PF} 2>/dev/null || true; kill ${DBG_PF} 2>/dev/null || true' EXIT
   sleep 2
-  BASE="http://127.0.0.1:8080"
+  BASE="http://localhost:8080"
   echo "Port-forward svc/${GW_DEPLOY} -> localhost:8080"
 fi
 
@@ -43,8 +43,8 @@ echo "=== 2) Baseline collector metrics (:9090) ==="
 oc port-forward -n "${COLLECTOR_NS}" "svc/${COLLECTOR_NAME}-collector" 19090:9090 >/tmp/waf-metrics-pf.log 2>&1 &
 MET_PF=$!
 sleep 2
-BEFORE_BLOCK="$(metric_count 'http://127.0.0.1:19090/metrics' 'coraza_waf_blocked_requests_total' || true)"
-BEFORE_REQ="$(metric_count 'http://127.0.0.1:19090/metrics' 'coraza_waf_requests_total' || true)"
+BEFORE_BLOCK="$(metric_count 'http://localhost:19090/metrics' 'coraza_waf_blocked_requests_total' || true)"
+BEFORE_REQ="$(metric_count 'http://localhost:19090/metrics' 'coraza_waf_requests_total' || true)"
 BEFORE_BLOCK="${BEFORE_BLOCK:-0}"
 BEFORE_REQ="${BEFORE_REQ:-0}"
 echo "coraza_waf_blocked_requests_total (sum): ${BEFORE_BLOCK}"
@@ -70,14 +70,14 @@ oc logs -n "${NS}" "deploy/${GW_DEPLOY}" --tail=80 \
 
 echo ""
 echo "=== 5) Collector metrics after traffic (:9090) ==="
-AFTER_BLOCK="$(metric_count 'http://127.0.0.1:19090/metrics' 'coraza_waf_blocked_requests_total' || true)"
-AFTER_REQ="$(metric_count 'http://127.0.0.1:19090/metrics' 'coraza_waf_requests_total' || true)"
+AFTER_BLOCK="$(metric_count 'http://localhost:19090/metrics' 'coraza_waf_blocked_requests_total' || true)"
+AFTER_REQ="$(metric_count 'http://localhost:19090/metrics' 'coraza_waf_requests_total' || true)"
 AFTER_BLOCK="${AFTER_BLOCK:-0}"
 AFTER_REQ="${AFTER_REQ:-0}"
 echo "coraza_waf_blocked_requests_total (sum): ${AFTER_BLOCK} (delta: $((AFTER_BLOCK - BEFORE_BLOCK)))"
 echo "coraza_waf_requests_total (sum):         ${AFTER_REQ} (delta: $((AFTER_REQ - BEFORE_REQ)))"
 echo ""
-curl -sf 'http://127.0.0.1:19090/metrics' 2>/dev/null | grep -E '^coraza_waf_' || true
+curl -sf 'http://localhost:19090/metrics' 2>/dev/null | grep -E '^coraza_waf_' || true
 
 kill "${MET_PF}" 2>/dev/null || true
 MET_PF=""
@@ -87,7 +87,7 @@ echo "=== 6) Collector OTLP intake (internal :8888) ==="
 oc port-forward -n "${COLLECTOR_NS}" "svc/${COLLECTOR_NAME}-collector-monitoring" 18888:8888 >/tmp/waf-mon-pf.log 2>&1 &
 MET_PF=$!
 sleep 2
-curl -sf 'http://127.0.0.1:18888/metrics' 2>/dev/null \
+curl -sf 'http://localhost:18888/metrics' 2>/dev/null \
   | grep -E 'otelcol_receiver_accepted_log_records_total|otelcol_exporter_sent_metric_points_total' || true
 
 if [[ "${SHOW_COLLECTOR_DEBUG}" == "1" ]]; then

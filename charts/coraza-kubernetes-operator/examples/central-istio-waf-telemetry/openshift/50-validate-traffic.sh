@@ -16,7 +16,7 @@ else
   PF_PID=$!
   trap 'kill ${PF_PID} 2>/dev/null || true' EXIT
   sleep 2
-  BASE="http://127.0.0.1:8080"
+  BASE="http://localhost:8080"
   echo "Port-forward svc/${SVC} -> localhost:8080"
 fi
 

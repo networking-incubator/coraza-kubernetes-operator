@@ -54,14 +54,14 @@ spec:
   config:
     extensions:
       health_check:
-        endpoint: 0.0.0.0:13133
+        endpoint: :13133
     receivers:
       otlp:
         protocols:
           grpc:
-            endpoint: 0.0.0.0:4317
+            endpoint: :4317
           http:
-            endpoint: 0.0.0.0:4318
+            endpoint: :4318
     processors:
       batch: {}
       # count/coraza emits delta sums; Prometheus counters must be cumulative.
@@ -114,7 +114,7 @@ spec:
                 default_value: unknown
     exporters:
       prometheus:
-        endpoint: 0.0.0.0:9090
+        endpoint: :9090
     service:
       extensions: [health_check]
       pipelines:
