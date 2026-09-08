@@ -10,6 +10,12 @@ spec:
     SecAuditLog /dev/stdout
     SecAuditLogFormat JSON
     SecAuditEngine RelevantOnly
+    # sqli-rules/xss-rules below use the "block" action, which is a deferred
+    # disruptive action - it only takes effect via whatever SecDefaultAction
+    # sets. Without this, those rules match (and log) but never actually
+    # block. no-evil-monkeys/no-evil-data use an explicit "deny" instead, so
+    # they are unaffected by this default either way.
+    SecDefaultAction "phase:2,log,deny,status:403"
 ---
 apiVersion: waf.k8s.coraza.io/v1alpha1
 kind: RuleSource

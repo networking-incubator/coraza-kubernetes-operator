@@ -169,6 +169,67 @@ spec:
         {{- toYaml . | nindent 8 }}
         {{- end }}
 
+    {{- $dp := .Values.metrics.prometheusRule.dataplane | default dict }}
+    {{- if ($dp.enabled | default true) }}
+    {{- $blockThresh := $dp.blockRatioThreshold | default 0.1 }}
+    {{- $risingMult := $dp.blockRatioRisingMultiplier | default 3 }}
+    {{- $minRate := $dp.minRequestRate | default 0.1 }}
+    - name: coraza-waf.dataplane.alerts
+      rules:
+        # Block ratio = blocked / all WAF-evaluated requests (coraza_waf_requests_total).
+        # Traffic floor avoids divide-by-near-zero noise on idle gateways.
+        # Demo traffic generators often keep ratio high — raise
+        # metrics.prometheusRule.dataplane.blockRatioThreshold for those clusters.
+        - alert: CorazaWAFBlockRatioHigh
+          expr: >-
+            (
+              sum(rate(coraza_waf_requests_total{outcome="block"}[15m]))
+              /
+              clamp_min(sum(rate(coraza_waf_requests_total[15m])), 1e-9)
+              > {{ $blockThresh }}
+            )
+            and
+            sum(rate(coraza_waf_requests_total[15m])) > {{ $minRate }}
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Coraza WAF block ratio is high"
+            description: >-
+              Block ratio has been above {{ $blockThresh }}
+              for more than 10 minutes (current value {{ "{{" }} $value | humanizePercentage {{ "}}" }}).
+              Check attack category panels and Gateway Engines for a probe or ruleset mismatch.
+
+        # Short window elevated vs longer baseline (spike / sudden campaign).
+        - alert: CorazaWAFBlockRatioRising
+          expr: >-
+            (
+              (
+                sum(rate(coraza_waf_requests_total{outcome="block"}[15m]))
+                /
+                clamp_min(sum(rate(coraza_waf_requests_total[15m])), 1e-9)
+              )
+              >
+              (
+                sum(rate(coraza_waf_requests_total{outcome="block"}[2h]))
+                /
+                clamp_min(sum(rate(coraza_waf_requests_total[2h])), 1e-9)
+              )
+              * {{ $risingMult }}
+            )
+            and
+            sum(rate(coraza_waf_requests_total[15m])) > {{ $minRate }}
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Coraza WAF block ratio is rising sharply"
+            description: >-
+              15m block ratio is more than {{ $risingMult }}x
+              the 2h baseline (current short-window ratio {{ "{{" }} $value | humanizePercentage {{ "}}" }}).
+              Often a focused probe or a false-positive storm after a ruleset change.
+    {{- end }}
+
     - name: coraza-operator.recording
       rules:
         # Aggregate Engine readiness into a scalar for low-cardinality alerting.

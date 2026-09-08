@@ -1,0 +1,91 @@
+# Grafana-only overlay for OpenShift demo/troubleshooting sessions.
+#
+# Layered on top of kube-prometheus-stack-values.yaml via a second `-f` flag.
+# Disables Prometheus/Alertmanager/exporters/rules (this cluster already runs
+# OpenShift's own UWM + Perses observability stack) and wires Grafana's
+# datasource to the cluster's existing Thanos Querier instead of a
+# chart-managed Prometheus.
+#
+# NOT part of the make observability.* flow - deployed manually for this
+# session only. Do not run `make manifests`/`helm.sync` for this file.
+
+prometheus:
+  enabled: false
+
+alertmanager:
+  enabled: false
+
+prometheusOperator:
+  enabled: false
+
+kubeStateMetrics:
+  enabled: false
+
+nodeExporter:
+  enabled: false
+
+defaultRules:
+  create: false
+
+kubeApiServer:
+  enabled: false
+
+kubeControllerManager:
+  enabled: false
+
+kubeEtcd:
+  enabled: false
+
+kubeProxy:
+  enabled: false
+
+kubeScheduler:
+  enabled: false
+
+coreDns:
+  enabled: false
+
+grafana:
+  # Chart hardcodes uid/gid 472 here (charts/grafana/values.yaml). OpenShift's
+  # restricted-v2 SCC rejects a fixed runAsUser/fsGroup outside the
+  # namespace-allocated UID range. Note: the chart has no `podSecurityContext`
+  # key (verified via `helm show values` against the vendored subchart) - the
+  # pod-level key is just `securityContext`; `containerSecurityContext` is the
+  # container-level one and doesn't hardcode a UID, so it's left at chart
+  # defaults. An empty map (`{}`) does NOT clear these under Helm's map merge
+  # (parent values win when the override contributes no keys) - each field
+  # must be explicitly nulled out so the SCC can assign its own namespace UID.
+  securityContext:
+    fsGroup: null
+    runAsGroup: null
+    runAsNonRoot: null
+    runAsUser: null
+
+  sidecar:
+    datasources:
+      # The chart's default datasource points at its own (now-disabled)
+      # Prometheus. We provide the Thanos Querier via additionalDataSources
+      # instead.
+      defaultDatasourceEnabled: false
+
+  # additionalDataSources schema confirmed via `helm show values` on the
+  # vendored subchart (grafana.additionalDataSources, list of provisioning
+  # entries passed through tpl).
+  additionalDataSources:
+    - name: Thanos Querier
+      # Pinned to match the "uid": "prometheus" hardcoded in every panel of
+      # the imported gist dashboard - without this, Grafana auto-generates a
+      # random uid and every panel fails to resolve its datasource ("No
+      # data" on all panels, regardless of how much traffic is flowing).
+      uid: prometheus
+      type: prometheus
+      access: proxy
+      url: https://thanos-querier.openshift-monitoring.svc.cluster.local:9091
+      isDefault: true
+      jsonData:
+        httpHeaderName1: "Authorization"
+        tlsSkipVerify: true
+      # Replace with: oc create token grafana-thanos-reader -n monitoring
+      # Do not commit a live token.
+      secureJsonData:
+        httpHeaderValue1: "Bearer <THANOS_READER_TOKEN>"

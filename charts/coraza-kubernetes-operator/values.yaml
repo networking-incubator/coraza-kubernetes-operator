@@ -61,6 +61,17 @@ metrics:
     additionalLabels: {}
     # Additional alerting rules appended after the default rules.
     rules: []
+    # Dataplane (coraza_waf_*) alerts. Included when prometheusRule.enabled is true.
+    # Raise thresholds for noisy demos (traffic generators often keep block ratio high).
+    dataplane:
+      # When false, skip the coraza-waf.dataplane.alerts group.
+      enabled: true
+      # Fire when block ratio over 15m stays above this value (0.0–1.0).
+      blockRatioThreshold: 0.1
+      # Fire when 15m ratio exceeds 2h baseline by this multiplier.
+      blockRatioRisingMultiplier: 3
+      # Minimum total WAF request rate (req/s over 15m) required before ratio alerts fire.
+      minRequestRate: 0.1
   podMonitor:
     # When true, deploys a PodMonitor CR to scrape coraza_waf_* metrics
     # from Envoy stats on Gateway pods. Requires:
