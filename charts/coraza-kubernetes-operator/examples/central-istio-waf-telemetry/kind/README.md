@@ -4,11 +4,28 @@ KIND fixtures mirror the OpenShift path (`../openshift/`) except MeshConfig is
 patched via `../apply-meshconfig.sh` on the Sail `Istio` CR (not CIO).
 
 Requires `make cluster.kind.otel` (Istio + OTEL operator + `coraza-gateway` in
-`integration-tests`). Rebuild/load the operator image from this branch before
-validating the Engine-managed Telemetry:
+`integration-tests`). That target also installs an initial operator deployment.
+For the validation, update that deployment to the PR 463 image you want to
+test. If `OPERATOR_IMAGE` already points to an image in an external registry,
+use it directly; no local build or `kind load docker-image` is required:
 
 ```bash
-make build.image cluster.load-images
+# OPERATOR_IMAGE must be an image reference including its tag.
+# For example, it may be exported by the CI job that built PR 463.
+test -n "${OPERATOR_IMAGE:-}" || { echo "Set OPERATOR_IMAGE to the PR 463 image first"; exit 1; }
+IMAGE_REPOSITORY="${OPERATOR_IMAGE%:*}"
+IMAGE_TAG="${OPERATOR_IMAGE##*:}"
+
+helm upgrade --install coraza-kubernetes-operator \
+  charts/coraza-kubernetes-operator \
+  --namespace coraza-system \
+  --create-namespace \
+  --set createNamespace=false \
+  --set image.repository="$IMAGE_REPOSITORY" \
+  --set image.tag="$IMAGE_TAG" \
+  --set image.pullPolicy=Always \
+  --set istio.revision=coraza
+kubectl -n coraza-system rollout status deployment/coraza-kubernetes-operator --timeout=300s
 
 # Optional, but required to populate the Grafana dashboard.
 make observability.prometheus.deploy observability.operator.monitoring
@@ -31,7 +48,8 @@ kubectl -n coraza-system rollout status deployment/coraza-kubernetes-operator --
 
 | File | Purpose |
 |------|---------|
-| `apply-kind.sh` | Apply collector + mesh + GatewayClass declaration + WAF |
+| `../00-namespace.yaml` | Central collector namespace and its NetworkPolicy |
+| `../10-otel-collector.yaml` | Sidecarless central ALS collector |
 | `20-collector-servicemonitor.yaml` | Scrape the collector's `coraza_waf_*` metrics when Prometheus Operator is installed |
 | `31-waf-workload.yaml` | Echo + HTTPRoute (Gateway from `make cluster.kind`) |
 | `40-waf-rules.yaml` | RuleSource + RuleSet |
@@ -43,17 +61,98 @@ kubectl -n coraza-system rollout status deployment/coraza-kubernetes-operator --
 Shared with parent dir: `../00-namespace.yaml`, `../10-otel-collector.yaml`,
 `../apply-meshconfig.sh`.
 
-## Quick start
+## Deploy the example
+
+Run these commands from the repository root. Every Kubernetes resource is
+applied explicitly from its versioned YAML file. Shell scripts are reserved for
+complementary actions: patching Sail's existing Istio CR without replacing its
+other extension providers, validating traffic, and generating traffic.
 
 ```bash
-# From repo root (once per machine / after operator code changes)
+# 0. Create the KIND cluster with Istio, Gateway, an initial Coraza operator,
+# and the OpenTelemetry Operator. Skip this when it has already been run.
 make cluster.kind.otel
-make build.image cluster.load-images
 
-# Pipeline
-cd charts/coraza-kubernetes-operator/examples/central-istio-waf-telemetry/kind
-./apply-kind.sh
-./55-generate-traffic-and-logs.sh
+# If OPERATOR_IMAGE is already set to a PR 463 image in an external registry,
+# use it directly. No local build and no `kind load docker-image` are needed.
+# `image.pullPolicy=Always` prevents KIND from reusing a local image with the
+# same tag.
+test -n "${OPERATOR_IMAGE:-}" || { echo "Set OPERATOR_IMAGE to the PR 463 image first"; exit 1; }
+IMAGE_REPOSITORY="${OPERATOR_IMAGE%:*}"
+IMAGE_TAG="${OPERATOR_IMAGE##*:}"
+helm upgrade --install coraza-kubernetes-operator \
+  charts/coraza-kubernetes-operator \
+  --namespace coraza-system \
+  --create-namespace \
+  --set createNamespace=false \
+  --set image.repository="$IMAGE_REPOSITORY" \
+  --set image.tag="$IMAGE_TAG" \
+  --set image.pullPolicy=Always \
+  --set istio.revision=coraza
+kubectl -n coraza-system rollout status deployment/coraza-kubernetes-operator --timeout=300s
+kubectl -n coraza-system get deployment coraza-kubernetes-operator \
+  -o jsonpath='{.spec.template.spec.containers[0].image}{"\\n"}'
+# Expected: the value of $OPERATOR_IMAGE
+
+# Paths for the remaining commands.
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+EX="$REPO_ROOT/charts/coraza-kubernetes-operator/examples/central-istio-waf-telemetry"
+KIND="$EX/kind"
+
+# 1. Platform-owned central ALS collector. This collector has no sidecar.
+kubectl apply -f "$EX/00-namespace.yaml"
+kubectl apply -f "$EX/10-otel-collector.yaml"
+kubectl rollout status -n coraza-central-waf-telemetry \
+  deployment/central-waf-als-collector --timeout=300s
+
+# 2. Sail MeshConfig. This is a patch, not a YAML apply: the script preserves
+# any existing extensionProviders and adds or replaces only waf-log-collector.
+ISTIO_NAME=coraza PROVIDER=waf-log-collector "$EX/apply-meshconfig.sh"
+
+# 3. Make the collector endpoint available to the GatewayClass.
+kubectl annotate gatewayclass istio \
+  'internal.do-not-use.openshift.io/waf-otel-collector=central-waf-als-collector.coraza-central-waf-telemetry.svc.cluster.local:4317' \
+  --overwrite
+
+# 4. Optional, but needed to display coraza_waf_* in the local Grafana stack.
+make observability.prometheus.deploy observability.operator.monitoring
+kubectl apply -f "$KIND/20-collector-servicemonitor.yaml"
+
+# 5. WAF-protected workload and rules.
+kubectl apply -f "$KIND/31-waf-workload.yaml"
+kubectl wait -n integration-tests gateway/coraza-gateway \
+  --for=condition=Programmed --timeout=180s
+kubectl wait -n integration-tests pod \
+  -l gateway.networking.k8s.io/gateway-name=coraza-gateway \
+  --for=condition=Ready --timeout=180s
+kubectl apply -f "$KIND/40-waf-rules.yaml"
+kubectl apply -f "$KIND/41-waf-engine.yaml"
+kubectl wait -n integration-tests engine/waf-engine \
+  --for=condition=Ready --timeout=180s
+```
+
+Confirm that PR 463 created the expected central-ALS resources before sending
+traffic:
+
+```bash
+kubectl get telemetry -n integration-tests coraza-engine-waf-engine-telemetry \
+  -o jsonpath='{.spec.accessLogging[0].providers[0].name}{"\\n"}'
+# Expected: waf-log-collector
+
+kubectl get wasmplugin -n integration-tests coraza-engine-waf-engine \
+  -o jsonpath='{.spec.pluginConfig.enable_filter_state_logs}{"\\n"}'
+# Expected: true
+```
+
+Run the scripts only after the manifests are applied:
+
+```bash
+# Smoke test, then generate enough traffic for metrics and Grafana.
+"$KIND/50-validate-traffic.sh"
+"$KIND/55-generate-traffic-and-logs.sh"
+
+# The preflight script checks the assembled configuration. It does not apply resources.
+hack/observability/validate-kind-waf-telemetry.sh
 ```
 
 When the Prometheus stack is installed, wait at least 30 seconds after

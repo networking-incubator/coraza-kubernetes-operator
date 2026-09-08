@@ -8,7 +8,7 @@ Shared collector/namespace/MeshConfig scripts live in this directory. **How to r
 
 | Environment | Directory | Entry |
 |-------------|-----------|--------|
-| KIND | [`kind/`](kind/) | `make cluster.kind.otel` then `kind/apply-kind.sh`, or `TestCentralALSMetricsPipeline` |
+| KIND | [`kind/`](kind/) | [`kind/README.md`](kind/README.md): explicit `kubectl apply -f` commands, or `TestCentralALSMetricsPipeline` |
 | OpenShift | [`openshift/`](openshift/) | `openshift/apply-openshift.sh` (OSSM + RH OTEL + CIO; not GA) |
 
 Ownership, SCC/mTLS gaps, and a Grafana dashboard suggestion: [gist](https://gist.github.com/rafaelvzago/35440655260569dfbafa6bae31a72781) (working notes, not product docs).
@@ -26,7 +26,10 @@ WASM image for tests and OpenShift examples:
 
 ## Apply (shared pieces)
 
-Prefer `kind/apply-kind.sh` or `openshift/apply-openshift.sh`. Piecemeal KIND:
+The KIND guide lists the complete command sequence. Its Kubernetes resources
+are applied explicitly from their YAML files; helper scripts are used only for
+the MeshConfig patch and traffic validation/generation. The equivalent core
+commands are:
 
 ```bash
 # 1) Namespace + central collector (no hostPath)
