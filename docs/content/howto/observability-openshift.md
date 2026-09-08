@@ -17,6 +17,11 @@ It is a demonstrator, not a supported production topology. The fixture is in
 Run every command below from the repository root. YAML resources are applied
 with `oc apply -f`; CKO installation uses Helm directly.
 
+The Gateway and all Engine workload resources use the OpenShift ingress
+namespace named `openshift-ingress` (without a hyphen between `open` and
+`shift`). Keep the central collector and Grafana resources in the separate
+`coraza-central-waf-telemetry` namespace.
+
 ## Prerequisites
 
 - OpenShift 4.20+ with Gateway API.
@@ -24,10 +29,11 @@ with `oc apply -f`; CKO installation uses Helm directly.
   integration. It creates the `waf-log-collector` extension provider.
 - Red Hat OpenTelemetry Operator installed.
 - Grafana Operator installed from OperatorHub in `openshift-operators`.
-- Cluster-admin access, `oc`, Helm 3, and an operator image that the cluster
-  can pull.
+- Cluster-admin access, `oc`, and Helm 3. Either provide an operator image the
+  cluster can pull or have permission to create and run a binary `BuildConfig`
+  in `coraza-system`.
 
-The commands use this tested development image:
+Start by defining the common paths and collector namespace:
 
 ```bash
 export REPO_ROOT="$(git rev-parse --show-toplevel)"
@@ -35,8 +41,10 @@ cd "$REPO_ROOT"
 export EX="$REPO_ROOT/charts/coraza-kubernetes-operator/examples/central-istio-waf-telemetry"
 export OS="$EX/openshift"
 export COLLECTOR_NS=coraza-central-waf-telemetry
-export OPERATOR_IMAGE=quay.io/waf/coraza-kubernetes-operator:feat-otc-controller-d3c58786ab99
 ```
+
+Choose the Coraza operator image for the environment before the installation
+step. This example deliberately does not select a repository or tag.
 
 ## Enable User Workload Monitoring
 
@@ -55,13 +63,17 @@ The configuration must contain `enableUserWorkload: true`.
 ## Deploy the collector and ALS provider
 
 ```bash
+# The annotation target must exist before it can be annotated.
 oc apply -f "$OS/05-gatewayclass-openshift.yaml"
+oc get gatewayclass openshift-default
 oc apply -f "$EX/00-namespace.yaml"
 oc apply -f "$OS/10-otel-collector-openshift.yaml"
 oc rollout status -n "$COLLECTOR_NS" deployment/central-waf-als-collector --timeout=300s
 oc apply -f "$OS/11-collector-destinationrule.yaml"
 
-"$OS/annotate-gatewayclass.sh"
+oc annotate gatewayclass openshift-default \
+  'internal.do-not-use.openshift.io/waf-otel-collector=central-waf-als-collector.coraza-central-waf-telemetry.svc.cluster.local:4317' \
+  --overwrite
 "$OS/verify-mesh-waf-collector.sh"
 ```
 
@@ -83,9 +95,34 @@ includes `deltatocumulative`, which converts the count connector's delta sums
 to Prometheus-safe cumulative counters. Keep one collector replica because
 that processor keeps state in memory.
 
-## Install CKO and deploy the WAF example
+## Build or select the CKO image
+
+To deploy an image you have already built and pushed to a registry reachable by
+the cluster, set its complete reference. Building locally and pushing to a
+registry is the recommended demonstrator workflow.
 
 ```bash
+export OPERATOR_IMAGE=registry.example.com/your-project/coraza-kubernetes-operator:your-tag
+```
+
+Alternatively, build the current checkout inside OpenShift. This creates or
+reuses a binary `BuildConfig` in `coraza-system`, sends the repository as the
+build input, and installs the resulting internal-registry image. Choose a tag
+that identifies your build:
+
+```bash
+export IMAGE_TAG=your-tag
+BUILD_IMAGE=1 BUILD_METHOD=buildconfig IMAGE_TAG="$IMAGE_TAG" \
+  "$OS/install-operator-openshift.sh"
+```
+
+The helper performs the Helm installation, so skip the next command block when
+using the in-cluster build path.
+
+## Install CKO from a selected image and deploy the WAF example
+
+```bash
+: "${OPERATOR_IMAGE:?Set OPERATOR_IMAGE to an image reference including its tag}"
 export IMAGE_REPOSITORY="${OPERATOR_IMAGE%:*}"
 export IMAGE_TAG="${OPERATOR_IMAGE##*:}"
 
@@ -98,6 +135,10 @@ helm upgrade --install coraza-kubernetes-operator \
   --set image.repository="$IMAGE_REPOSITORY" \
   --set image.tag="$IMAGE_TAG"
 oc rollout status -n coraza-system deployment/coraza-kubernetes-operator --timeout=300s
+
+# This must print the OPERATOR_IMAGE selected above.
+oc get deployment -n coraza-system coraza-kubernetes-operator \
+  -o jsonpath='{.spec.template.spec.containers[?(@.name=="manager")].image}{"\n"}'
 
 oc apply -f "$OS/31-waf-workload.yaml"
 oc wait -n openshift-ingress gateway/waf-gateway --for=condition=Programmed --timeout=180s

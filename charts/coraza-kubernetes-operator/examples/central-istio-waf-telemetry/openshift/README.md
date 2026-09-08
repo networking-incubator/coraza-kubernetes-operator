@@ -27,6 +27,9 @@ ensures the Gateway receives the expected DNS and load-balancing configuration.
 The central OpenTelemetry collector intentionally remains separate in
 `coraza-central-waf-telemetry`.
 
+Use the exact namespace name `openshift-ingress`; `open-shift-ingress` is not
+an equivalent Kubernetes namespace name.
+
 ## Manifest index
 
 | Step | File | Purpose |
@@ -146,7 +149,10 @@ Helm command below. The helper scripts are not required for deployment.
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 EX="$REPO_ROOT/charts/coraza-kubernetes-operator/examples/central-istio-waf-telemetry"
 OS="$EX/openshift"
-OPERATOR_IMAGE=quay.io/waf/coraza-kubernetes-operator:feat-otc-controller-d3c58786ab99
+
+# Set this to the registry image and tag chosen for this run. The example does
+# not pin an operator image.
+: "${OPERATOR_IMAGE:?Set OPERATOR_IMAGE to an image reference including its tag}"
 
 # 3–5 GatewayClass, collector, and CIO-generated ALS provider
 oc apply -f $OS/05-gatewayclass-openshift.yaml
@@ -174,7 +180,7 @@ oc get configmap -n openshift-ingress values-openshift-gateway \
   -o jsonpath='{.data.merged-values}' \
   | grep -A20 -B5 'waf-log-collector'
 
-# 6 CKO: install directly with Helm. The test runner supplies a registry image.
+# 6 CKO: install directly with Helm using the image selected above.
 IMAGE_REPOSITORY="${OPERATOR_IMAGE%:*}"
 IMAGE_TAG="${OPERATOR_IMAGE##*:}"
 helm upgrade --install coraza-kubernetes-operator \
@@ -186,6 +192,10 @@ helm upgrade --install coraza-kubernetes-operator \
   --set image.repository="$IMAGE_REPOSITORY" \
   --set image.tag="$IMAGE_TAG"
 oc rollout status -n coraza-system deployment/coraza-kubernetes-operator --timeout=300s
+
+# This must print the OPERATOR_IMAGE selected above.
+oc get deployment -n coraza-system coraza-kubernetes-operator \
+  -o jsonpath='{.spec.template.spec.containers[?(@.name=="manager")].image}{"\n"}'
 
 # 7–10 WAF workload + observability-enabled Engine. All Gateway and Engine
 # resources use openshift-ingress so CIO supplies the expected DNS and

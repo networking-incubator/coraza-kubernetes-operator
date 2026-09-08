@@ -124,4 +124,7 @@ helm upgrade --install "${RELEASE}" "${CHART_DIR}" \
 
 echo "Waiting for operator pod..."
 oc rollout status -n "${NAMESPACE}" deploy/"${RELEASE}" --timeout=300s
+echo "Deployed manager image (must match the selected image):"
+oc get deployment -n "${NAMESPACE}" "${RELEASE}" \
+  -o jsonpath='{.spec.template.spec.containers[?(@.name=="manager")].image}{"\n"}'
 oc get pods -n "${NAMESPACE}"

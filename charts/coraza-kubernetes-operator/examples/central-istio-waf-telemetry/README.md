@@ -9,9 +9,12 @@ Shared collector/namespace/MeshConfig scripts live in this directory. **How to r
 | Environment | Directory | Entry |
 |-------------|-----------|--------|
 | KIND | [`kind/`](kind/) | [`kind/README.md`](kind/README.md): explicit `kubectl apply -f` commands, or `TestCentralALSMetricsPipeline` |
-| OpenShift | [`openshift/`](openshift/) | `openshift/apply-openshift.sh` (OSSM + RH OTEL + CIO; not GA) |
+| OpenShift | [`openshift/`](openshift/) | [OpenShift observability guide](../../../../docs/content/howto/observability-openshift.md): explicit `oc apply -f` and Helm commands (RH OTEL + CIO; demonstrator only) |
 
-Ownership, SCC/mTLS gaps, and a Grafana dashboard suggestion: [gist](https://gist.github.com/rafaelvzago/35440655260569dfbafa6bae31a72781) (working notes, not product docs).
+The OpenShift guide additionally configures User Workload Monitoring scrape
+targets and imports the chart-maintained Grafana dashboard through the Grafana
+Operator. It does not install a second Prometheus or modify the Coraza chart to
+enable cluster monitoring.
 
 ## Prerequisites
 
