@@ -117,23 +117,29 @@ Use error type or reason codes, never free-form error strings. Free-form strings
 effectively unbounded cardinality (every unique message is a new series) and are
 difficult to query reliably.
 
-## Data-Plane Metrics (coraza_waf_* — emitted by WAF driver in Envoy)
+## Data-Plane Metrics (coraza_waf_* — WAF driver / collector)
 
-Data-plane metrics are emitted directly from the Coraza WASM driver running inside
-Envoy sidecars. They are NOT scraped from the operator.
+Data-plane contract metrics are **not** scraped from the operator. Prefer
+materializing them in an OpenTelemetry Collector from structured WASM logs
+(`coraza_waf_request`, `coraza_waf_blocked_request`, `coraza_waf_plugin_load`);
+Envoy `/stats/prometheus` (and legacy `waf_filter_*`) may be used transitionally.
 
-For the full specification of data-plane metric names, labels, and cardinality
-constraints (including the top-N rule limit that bounds per-rule series), see
-[driver metrics contract](https://github.com/networking-incubator/coraza-kubernetes-operator/blob/main/docs/driver-metrics-contract.md).
+Istio `Telemetry` alone cannot perform that log→metrics conversion — use OTC
+(or another collector). See the chart example
+[`otel-collector-sidecar.yaml`](https://github.com/networking-incubator/coraza-kubernetes-operator/blob/main/charts/coraza-kubernetes-operator/examples/otel-collector-sidecar.yaml).
+
+For names, labels, and cardinality constraints (including the top-N rule limit),
+see [driver metrics contract](https://github.com/networking-incubator/coraza-kubernetes-operator/blob/main/docs/driver-metrics-contract.md).
 
 **Key differences from operator metrics:**
 
 | Property | Operator metrics | Data-plane metrics |
 |----------|------------------|--------------------|
-| Source | operator `/metrics` on `:8443` | Envoy admin API or PodMonitor |
-| Scrape target | ServiceMonitor on operator pod | PodMonitor on Gateway pods |
+| Source | operator `/metrics` on `:8443` | OTC / collector export (preferred) or Envoy stats |
+| Scrape target | ServiceMonitor on operator pod | PodMonitor on Gateway / OTC sidecar |
 | Per-rule detail | No — operator never sees rule decisions | Yes — bounded by top-N limit |
 | Worst-case (10-engine cluster) | ~585 series | ~7,000 series |
+| Label path | CRD labels / controller | `engine`/`namespace` from WasmPlugin `pluginConfig` on logs |
 
 ## ServiceMonitor label handling
 

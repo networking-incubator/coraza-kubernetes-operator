@@ -7,43 +7,41 @@ The coraza-kubernetes-operator is split into two distinct planes:
 ```
 +----------------------------------+      +------------------------------------+
 |         CONTROL PLANE            |      |          DATA PLANE                |
-|  (Kubernetes operator)           |      |  (WAF driver in Envoy sidecar)     |
+|  (Kubernetes operator)           |      |  (WAF driver in Envoy / Gateway)   |
 |                                  |      |                                    |
 |  - Watches CRD state             |      |  - Intercepts HTTP requests        |
 |  - Manages rule cache server     |      |  - Executes Coraza WAF evaluation  |
-|  - Reconciles Engine/RuleSet     |      |  - Emits per-request decisions     |
-|  - Applies WasmPlugin/SSA        |      |  - Exposes Prometheus metrics      |
+|  - Reconciles Engine/RuleSet     |      |  - Emits structured WAF JSON logs  |
+|  - Applies WasmPlugin/SSA        |      |  - Optional legacy waf_filter_*    |
 |                                  |      |                                    |
-|  Metrics: operator internals     |      |  Metrics: THIS document            |
-|  (controller-runtime defaults)   |      |  (coraza_waf_* namespace)          |
+|  Metrics: operator internals     |      |  Contract metrics: THIS document  |
+|  (controller-runtime defaults)   |      |  (coraza_waf_* — often via OTC)   |
 +----------------------------------+      +------------------------------------+
          |                                          ^
-         | injects engine+namespace labels          |
-         | via WasmPlugin pluginConfig JSON         |
+         | injects engine+namespace via             |
+         | WasmPlugin pluginConfig JSON             |
          +------------------------------------------+
 ```
 
 The operator (control plane) exposes its own metrics — reconcile durations, queue depths, cache hit rates — via the standard controller-runtime metrics endpoint, collected by the ServiceMonitor Helm template.
 
-This document defines what the **data plane MUST emit**: the `coraza_waf_*` Prometheus metrics that a WAF driver produces at request-processing time, independent of any Kubernetes API interactions.
+This document defines the **data-plane contract**: the `coraza_waf_*` Prometheus metric names and labels that must be available for multi-tenant WAF observability. Drivers MAY emit those series directly (Envoy stats), but the preferred path is **structured logs → OpenTelemetry Collector (or equivalent) → Prometheus**, so WASM does not depend on Envoy `stats_tags` for label extraction.
 
 ## Applicability
 
-Every driver implementation — WASM, Dynamic Module, or any future type — MUST emit all metrics in this contract.
+Every driver implementation — WASM, Dynamic Module, or any future type — MUST make all metrics in this contract available end-to-end (directly or via a documented collector transform from driver logs).
 
 Drivers that do not implement this contract cannot be merged into the coraza-kubernetes-operator project. The implementation checklist in the final section is the mandatory pre-merge gate.
 
 ## Label Injection
 
-The operator will inject `engine` and `namespace` labels into the driver at load time via the WasmPlugin `pluginConfig` JSON field:
+The operator injects `engine` and `namespace` into the WasmPlugin `pluginConfig` JSON field at reconcile time:
 
 ```json
 {"engine": "my-engine", "namespace": "my-ns"}
 ```
 
-> **Not yet implemented:** The operator does not currently inject `engine` and `namespace` into `pluginConfig`. This injection will be added in a future PR alongside the first driver implementation. Until then, driver prototypes should use hardcoded test values for these fields.
-
-The driver MUST read these fields at initialization and apply them as Prometheus labels to **all** emitted metrics. Drivers that fail to read `pluginConfig` at startup MUST log an error and refuse to process traffic — a driver emitting metrics without the `engine` and `namespace` labels cannot be correlated to a specific Engine CRD instance, defeating the purpose of multi-tenant observability.
+The driver MUST read these fields at initialization and attach them to **all** structured WAF log events (and to any direct Prometheus series, if emitted). Missing `engine`/`namespace` weakens multi-tenant correlation; collectors SHOULD still accept events, but operators MUST treat unlabeled series as incomplete.
 
 ## Mandatory Metrics
 
@@ -267,25 +265,38 @@ coraza_waf_blocked_requests_total{engine="gw-waf",namespace="prod",driver_type="
 
 The dominant cardinality risk is `coraza_waf_rule_hits_total`. The top-N bound with `rule_id="other"` overflow is the primary mitigation and is non-negotiable. In deployments with many Gateway replicas, consider reducing N below 200 to keep total Prometheus series within budget.
 
+## Structured log events (preferred emission path)
+
+The WASM driver emits warning-level JSON logs that collectors turn into `coraza_waf_*` series:
+
+| Log `event` | Primary contract coverage |
+|---|---|
+| `coraza_waf_request` | `coraza_waf_requests_total` (`outcome`), `coraza_waf_request_anomaly_score` (`anomaly_score`) |
+| `coraza_waf_blocked_request` | `coraza_waf_blocked_requests_total` (`category`, `severity`, `rule_id`) |
+| `coraza_waf_plugin_load` | `coraza_waf_plugin_loads_total` (`status`), `coraza_waf_plugin_rule_count`, `coraza_waf_rule_overrides` |
+
+`coraza_waf_rule_hits_total` (top-N) is not fully covered by per-request logs yet; treat it as a follow-up (enrich logs or aggregate in the collector).
+
+Legacy Envoy stats (`waf_filter_tx_total`, interruption counters) remain available for transitional scraping (for example Michaela’s OTC sidecar pattern) and are **not** substitutes for the `coraza_waf_*` contract names.
+
 ## Implementation Checklist
 
-A driver PR MUST satisfy all of the following before merge:
+A driver / observability PR MUST satisfy all of the following before merge:
 
-- [ ] All metrics listed above implemented with the exact names defined in this document
-- [ ] `engine` and `namespace` labels injected from `pluginConfig` JSON at initialization
-- [ ] `coraza_waf_rule_hits_total` bounded by top-N (N≤200) with overflow aggregated to `rule_id="other"`
-- [ ] `coraza_waf_rule_overrides` set (gauge) at load time, not per request; value reset on plugin reload to reflect new configuration
+- [ ] All metrics listed above available end-to-end with the exact names defined in this document
+- [ ] `engine` and `namespace` present in WasmPlugin `pluginConfig` and on structured log events
+- [ ] `coraza_waf_rule_hits_total` bounded by top-N (N≤200) with overflow aggregated to `rule_id="other"` (when that metric is materialized)
+- [ ] Load-time posture (`rule_overrides`, `plugin_rule_count`) reflected after plugin load/reload
 - [ ] Metric names match exactly (Prometheus is case-sensitive, exact-match)
-- [ ] Integration test validates that all metrics listed above appear after a test HTTP request is processed
-- [ ] `promtool check metrics` passes on the raw exposition output from the driver
+- [ ] Integration test validates contract metrics (or equivalent collector export) after a test HTTP request
+- [ ] `promtool check metrics` passes on the exposition output (driver or collector)
 - [ ] Cardinality budget is documented for any label dimension not in this spec (if extensions are proposed)
-- [ ] Driver refuses to process traffic if `pluginConfig` is missing or malformed, with a logged error
 
 ## Scraping Configuration
 
-The `coraza_waf_*` metrics are exposed on the Envoy stats port (`http-envoy-prom`, port 15090) at `/stats/prometheus` on Gateway pods. The operator Helm chart provides an opt-in PodMonitor to collect these metrics.
+**Preferred:** scrape an OpenTelemetry Collector sidecar/deployment that materializes `coraza_waf_*` from WAF logs (and optionally re-exports selected Envoy stats). See [`charts/coraza-kubernetes-operator/examples/otel-collector-sidecar.yaml`](../charts/coraza-kubernetes-operator/examples/otel-collector-sidecar.yaml).
 
-To enable scraping, set the following in your Helm values:
+**Transitional Envoy scrape:** Gateway pods expose Envoy stats on `http-envoy-prom` (port **15090**; in-pod admin is often **15000**). The Helm chart still ships an opt-in PodMonitor that keeps only `coraza_waf_.*` when those series appear on Envoy. Do **not** rely on EnvoyFilter `stats_tags` as the long-term label path.
 
 ```yaml
 metrics:
@@ -295,9 +306,7 @@ metrics:
       gateway.networking.k8s.io/gateway-name: my-gateway
 ```
 
-See `charts/coraza-kubernetes-operator/values.yaml` for the full PodMonitor configuration reference, including `interval`, `scrapeTimeout`, and `metricRelabelings`.
-
-The PodMonitor enforces a mandatory cardinality guard: only time series matching `coraza_waf_.*` are kept. This prevents ingesting Envoy's thousands of internal stats alongside WAF metrics.
+See `charts/coraza-kubernetes-operator/values.yaml` for PodMonitor knobs. Istio `Telemetry` (`telemetry.istio.io`) configures mesh access logs / Istio metrics; it does **not** replace OTC for WASM log→metrics or JWT-protected scrape export.
 
 ## Example Prometheus Queries
 

@@ -119,3 +119,77 @@ Counters and histograms are emitted during Coraza validation in the RuleSource a
 For controller resource gauges, condition metrics, and cardinality guidance, see [Metrics cardinality reference]({{< relref "../reference/metrics-cardinality" >}}).
 
 When the Helm chart's `metrics.prometheusRule.enabled` value is true, bundled alerts cover validation failure rates, cache hit ratio, and authentication failures on the cache server.
+
+## Data-plane WAF metrics (Gateway / WASM)
+
+Control-plane metrics above are from the operator. Data-plane WAF observability uses the [`coraza_waf_*` contract](https://github.com/networking-incubator/coraza-kubernetes-operator/blob/main/docs/driver-metrics-contract.md).
+
+### OpenTelemetry Collector sidecar (log → metrics)
+
+An OTel Collector sidecar injected into the Gateway pod reads WASM plugin logs from container log files (via `file_log` receiver with hostPath `/var/log/pods`) and materializes Prometheus counters using the `count` connector.
+
+**Proven today** (with the default WASM image):
+
+| Metric | Source | Labels |
+|--------|--------|--------|
+| `coraza_waf_rule_hits_from_logs_total` | Coraza text warnings on stderr | `engine`, `namespace`, `driver_type`, `rule_id`, `severity`, `category` |
+| `waf_filter_tx_total` | Envoy stats `/stats/prometheus` | `instance`, `job` |
+
+**Requires WASM plugin with structured JSON events** (not yet in the default image):
+
+| Metric | Source |
+|--------|--------|
+| `coraza_waf_requests_total` | `coraza_waf_request` JSON event |
+| `coraza_waf_blocked_requests_total` | `coraza_waf_blocked_request` JSON event |
+| `coraza_waf_plugin_loads_total` | `coraza_waf_plugin_load` JSON event |
+
+Start from the chart example:
+
+- [`charts/coraza-kubernetes-operator/examples/otel-collector-sidecar.yaml`](https://github.com/networking-incubator/coraza-kubernetes-operator/blob/main/charts/coraza-kubernetes-operator/examples/otel-collector-sidecar.yaml)
+
+Annotate the Gateway pod template with `sidecar.opentelemetry.io/inject: "coraza-gw-sidecar"`. The sidecar requires the [OpenTelemetry Operator](https://opentelemetry.io/docs/kubernetes/operator/) CRD.
+
+#### OpenShift
+
+The `hostPath /var/log/pods` mount is blocked by the default `restricted` SCC. Create a custom SCC and bind it to the sidecar’s service account before deploying:
+
+```yaml
+apiVersion: security.openshift.io/v1
+kind: SecurityContextConstraints
+metadata:
+  name: coraza-otel-sidecar-scc
+allowPrivilegedContainer: false
+requiredDropCapabilities:
+  - ALL
+allowHostDirVolumePlugin: true
+volumes:
+  - configMap
+  - emptyDir
+  - hostPath
+  - projected
+  - secret
+defaultAllowPrivilegeEscalation: false
+allowPrivilegeEscalation: false
+runAsUser:
+  type: RunAsAny
+seLinuxContext:
+  type: RunAsAny
+readOnlyRootFilesystem: true
+forbiddenSysctls:
+  - "*"
+seccompProfiles:
+  - runtime/default
+```
+
+```bash
+oc adm policy add-scc-to-user coraza-otel-sidecar-scc \
+  -z <otel-sidecar-serviceaccount> -n <gateway-namespace>
+```
+
+`runAsUser` and `seLinuxContext` are set to `RunAsAny` so the collector can read SELinux-labelled log files without knowing the exact UID in advance. Scope them to `MustRunAsRange` once the sidecar’s actual UID is confirmed.
+
+Additionally, JWT-protect the collector’s `:9090` exporter and scrape with a `PodMonitor` + `bearerTokenSecret`.
+
+### Transitional: scrape Envoy stats
+
+Gateway Envoy exposes legacy `waf_filter_*` series on `/stats/prometheus` (port **15090** `http-envoy-prom`). The OTC sidecar config already scrapes this endpoint and filters for WAF-related metrics. This path does **not** replace the contract log→metrics design and should not depend on EnvoyFilter `stats_tags`.
