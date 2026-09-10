@@ -112,7 +112,7 @@ OCI_LABELS_CATALOG = \
 
 .PHONY: help
 help: ## Show this help message
-	@awk 'BEGIN {FS = ":.*##"; printf "\nUsage:\n  make \033[36m<target>\033[0m\n"} /^[a-zA-Z_0-9.-]+:.*?##/ { printf "  \033[36m%-30s\033[0m %s\n", $$1, $$2 } /^##@/ { printf "\n\033[1m%s\033[0m\n", substr($$0, 5) } ' $(MAKEFILE_LIST)
+	@awk 'BEGIN {FS = ":.*##"; printf "\nUsage:\n  make \033[36m<target>\033[0m\n"} /^[a-zA-Z_0-9.-]+:.*?##/ { printf "  \033[36m%-40s\033[0m %s\n", $$1, $$2 } /^##@/ { printf "\n\033[1m%s\033[0m\n", substr($$0, 5) } ' $(MAKEFILE_LIST)
 
 .PHONY: print-%
 print-%:
@@ -254,16 +254,16 @@ lint.api: kube-api-linter
 # ------------------------------------------------------------------------------
 
 .PHONY: cluster.kind
-cluster.kind:
+cluster.kind: ## Create the KIND test cluster
 	ISTIO_VERSION=${ISTIO_VERSION} METALLB_VERSION=${METALLB_VERSION} METALLB_POOL_SIZE=${METALLB_POOL_SIZE} CONTROLLER_MANAGER_CONTAINER_IMAGE_BASE=${CONTROLLER_MANAGER_CONTAINER_IMAGE_BASE} CONTROLLER_MANAGER_CONTAINER_IMAGE_TAG=${CONTROLLER_MANAGER_CONTAINER_IMAGE_TAG} python3 hack/kind_cluster.py setup --name ${KIND_CLUSTER_NAME}
 
 .PHONY: cluster.load-images
-cluster.load-images:
+cluster.load-images: ## Load the operator image into the KIND test cluster
 	@$(CONTAINER_TOOL) exec ${KIND_CLUSTER_NAME}-control-plane crictl rmi ${CONTROLLER_MANAGER_CONTAINER_IMAGE} 2>/dev/null || true
 	$(KIND) load docker-image ${CONTROLLER_MANAGER_CONTAINER_IMAGE} --name ${KIND_CLUSTER_NAME}
 
 .PHONY: clean.cluster.kind
-clean.cluster.kind:
+clean.cluster.kind: ## Delete the KIND test cluster
 	python3 hack/kind_cluster.py delete --name ${KIND_CLUSTER_NAME}
 
 # -------------------------------------------------------------------------------
