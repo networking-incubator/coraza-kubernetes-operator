@@ -26,3 +26,20 @@ make test.e2e \
 # OpenShift (override default GatewayClass)
 GATEWAY_CLASS=openshift-default make test.e2e
 ```
+
+### Central Istio ALS metrics
+
+`TestCentralALSMetricsPipeline` validates the complete data-plane path:
+Coraza Engine, WasmPlugin, Istio ALS, central OpenTelemetry Collector, and
+the collector's Prometheus metrics endpoint. It requires a dedicated KIND
+cluster because it temporarily updates the Istio `MeshConfig` provider.
+
+```bash
+make cluster.kind.otel
+
+make test.e2e \
+  TEST_ARGS='-run TestCentralALSMetricsPipeline -count=1 -v'
+```
+
+The test owns its minimal Kubernetes fixtures under
+`test/e2e/testdata/central-als/`; it does not depend on chart examples.

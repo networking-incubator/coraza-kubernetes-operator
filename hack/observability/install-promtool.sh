@@ -13,7 +13,9 @@ ARCH="$(go env GOARCH)"
 PROM_ARCHIVE="prometheus-${PROM_VERSION}.${OS}-${ARCH}.tar.gz"
 PROM_URL="https://github.com/prometheus/prometheus/releases/download/v${PROM_VERSION}/${PROM_ARCHIVE}"
 
-curl -fsSLo "${PROM_ARCHIVE}" "${PROM_URL}"
+# GitHub release downloads occasionally reset mid-transfer in CI (curl 35).
+# --retry-all-errors covers connection resets; -C - resumes a partial file.
+curl --retry 5 --retry-all-errors --retry-delay 2 -C - -fsSLo "${PROM_ARCHIVE}" "${PROM_URL}"
 
 # PROM_SHA256 is verified only on linux/amd64 (CI pin). Other platforms skip checksum.
 if [ -n "${PROM_SHA256:-}" ] && [ "${OS}" = "linux" ] && [ "${ARCH}" = "amd64" ]; then

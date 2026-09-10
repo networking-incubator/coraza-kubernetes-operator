@@ -125,6 +125,13 @@ type EngineSpec struct {
 	// +optional
 	RuleSetCacheServer *RuleSetCacheServerConfig `json:"ruleSetCacheServer,omitempty"`
 
+	// observability configures WAF dataplane observability independently of the
+	// driver used to deploy the Engine. The operator translates this intent into
+	// driver-specific settings.
+	//
+	// +optional
+	Observability ObservabilityConfig `json:"observability,omitempty,omitzero"`
+
 	// driver configures the mechanism used to deploy the WAF filter into the
 	// target workload. When omitted, the operator uses a default driver for the
 	// underlying Engine (eg.: WASM for Istio)
@@ -132,6 +139,28 @@ type EngineSpec struct {
 	// +optional
 	Driver DriverConfig `json:"driver,omitempty,omitzero"`
 }
+
+// ObservabilityConfig configures WAF dataplane observability for an Engine.
+type ObservabilityConfig struct {
+	// mode controls whether WAF dataplane telemetry is available to the target
+	// platform's observability pipeline.
+	//
+	// +required
+	Mode ObservabilityMode `json:"mode,omitempty"`
+}
+
+// ObservabilityMode controls whether WAF dataplane observability is enabled.
+//
+// +kubebuilder:validation:Enum=Enabled;Disabled
+type ObservabilityMode string
+
+const (
+	// ObservabilityModeEnabled enables WAF dataplane observability.
+	ObservabilityModeEnabled ObservabilityMode = "Enabled"
+
+	// ObservabilityModeDisabled disables WAF dataplane observability.
+	ObservabilityModeDisabled ObservabilityMode = "Disabled"
+)
 
 // -----------------------------------------------------------------------------
 // Engine - Status

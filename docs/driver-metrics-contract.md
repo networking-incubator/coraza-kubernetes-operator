@@ -7,47 +7,49 @@ The coraza-kubernetes-operator is split into two distinct planes:
 ```
 +----------------------------------+      +------------------------------------+
 |         CONTROL PLANE            |      |          DATA PLANE                |
-|  (Kubernetes operator)           |      |  (WAF driver in Envoy sidecar)     |
+|  (Kubernetes operator)           |      |  (WAF driver in Envoy / Gateway)   |
 |                                  |      |                                    |
 |  - Watches CRD state             |      |  - Intercepts HTTP requests        |
 |  - Manages rule cache server     |      |  - Executes Coraza WAF evaluation  |
-|  - Reconciles Engine/RuleSet     |      |  - Emits per-request decisions     |
-|  - Applies WasmPlugin/SSA        |      |  - Exposes Prometheus metrics      |
+|  - Reconciles Engine/RuleSet     |      |  - Emits structured WAF JSON logs  |
+|  - Applies WasmPlugin/SSA        |      |  - Optional legacy waf_filter_*    |
 |                                  |      |                                    |
-|  Metrics: operator internals     |      |  Metrics: THIS document            |
-|  (controller-runtime defaults)   |      |  (coraza_waf_* namespace)          |
+|  Metrics: operator internals     |      |  Contract metrics: THIS document  |
+|  (controller-runtime defaults)   |      |  (coraza_waf_* via central ALS)    |
 +----------------------------------+      +------------------------------------+
-         |                                          ^
-         | injects engine+namespace labels          |
-         | via WasmPlugin pluginConfig JSON         |
-         +------------------------------------------+
 ```
 
-The operator (control plane) exposes its own metrics — reconcile durations, queue depths, cache hit rates — via the standard controller-runtime metrics endpoint, collected by the ServiceMonitor Helm template.
+The operator (control plane) exposes its own metrics - reconcile durations, queue depths, cache hit rates - via the standard controller-runtime metrics endpoint, collected by the ServiceMonitor Helm template.
 
-This document defines what the **data plane MUST emit**: the `coraza_waf_*` Prometheus metrics that a WAF driver produces at request-processing time, independent of any Kubernetes API interactions.
+This document defines the **data-plane contract**: the `coraza_waf_*` Prometheus metric names and labels that must be available end-to-end. The data-plane structured-log path is structured logs -> OpenTelemetry Collector -> Prometheus; the central ALS path is Istio ALS -> platform-owned collector -> Prometheus (see "Central Istio ALS path" below). Neither is an operator path: the operator does not emit or transport `coraza_waf_*` series itself. Drivers MAY also emit the same series directly (for example via Envoy stats).
 
 ## Applicability
 
-Every driver implementation — WASM, Dynamic Module, or any future type — MUST emit all metrics in this contract.
+Every driver implementation - WASM, Dynamic Module, or any future type - MUST make all metrics in this contract available end-to-end (directly or via a documented collector transform from driver logs).
 
 Drivers that do not implement this contract cannot be merged into the coraza-kubernetes-operator project. The implementation checklist in the final section is the mandatory pre-merge gate.
 
-## Label Injection
+## Label Tenancy
 
-The operator will inject `engine` and `namespace` labels into the driver at load time via the WasmPlugin `pluginConfig` JSON field:
+Every `coraza_waf_*` series MUST carry these required labels:
 
-```json
-{"engine": "my-engine", "namespace": "my-ns"}
-```
+| Label | Meaning |
+|---|---|
+| `engine` | Engine CRD name |
+| `namespace` | Engine CRD namespace |
+| `driver_type` | one of `wasm`, `dynamic_module` |
 
-> **Not yet implemented:** The operator does not currently inject `engine` and `namespace` into `pluginConfig`. This injection will be added in a future PR alongside the first driver implementation. Until then, driver prototypes should use hardcoded test values for these fields.
+`gateway` (Gateway CR name, typically `Engine.spec.target.name`) is **optional / supplemental**. Emitters MAY include it for operational correlation. It MUST NOT be treated as a required contract label, and cardinality guidance below does not assume it is always present.
 
-The driver MUST read these fields at initialization and apply them as Prometheus labels to **all** emitted metrics. Drivers that fail to read `pluginConfig` at startup MUST log an error and refuse to process traffic — a driver emitting metrics without the `engine` and `namespace` labels cannot be correlated to a specific Engine CRD instance, defeating the purpose of multi-tenant observability.
+### Central Istio ALS path
+
+WasmPlugin `pluginConfig` carries `engine`, `namespace`, and `driver_type`. Coraza stamps those (and outcome / block fields) for Istio OpenTelemetry ALS; a platform-owned central collector materializes baseline `coraza_waf_*` series. The operator reconciles the Gateway-scoped Telemetry when Engine observability is enabled. The target GatewayClass `internal.do-not-use.openshift.io/waf-otel-collector` annotation declares the collector endpoint as `host:port`; Coraza uses the `waf-log-collector` Istio provider created for that endpoint. It does not reconcile MeshConfig or the collector.
+
+The central ALS path is baseline-only and does not by itself satisfy this contract.
 
 ## Mandatory Metrics
 
-All metrics listed below MUST be implemented. Metric names are exact — Prometheus performs case-sensitive, exact-string matching.
+All metrics listed below MUST be implemented. Metric names are exact - Prometheus performs case-sensitive, exact-string matching.
 
 ### coraza_waf_requests_total
 
@@ -56,10 +58,10 @@ Type: counter
 Description: Total WAF-evaluated HTTP requests, partitioned by outcome.
 
 Labels:
-- `engine` — Engine CRD name (injected from pluginConfig)
-- `namespace` — Engine CRD namespace (injected from pluginConfig)
-- `driver_type` — one of `wasm`, `dynamic_module`
-- `outcome` — one of `pass`, `block`, `detect`, `redirect`, `error`
+- `engine` - Engine CRD name
+- `namespace` - Engine CRD namespace
+- `driver_type` - one of `wasm`, `dynamic_module`
+- `outcome` - one of `pass`, `block`, `detect`, `redirect`, `error`
 
 Prometheus text format example:
 ```
@@ -79,14 +81,14 @@ Type: counter
 Description: Total rule match events, partitioned by rule ID, severity, and outcome.
 
 Labels:
-- `engine` — injected from pluginConfig
-- `namespace` — injected from pluginConfig
-- `driver_type` — one of `wasm`, `dynamic_module`
-- `rule_id` — numeric rule ID string (e.g., `"941100"`) or `"other"` for overflow
-- `severity` — one of `CRITICAL`, `ERROR`, `WARNING`, `NOTICE`, `INFO`
-- `outcome` — one of `block`, `detect`, `pass`
+- `engine`
+- `namespace`
+- `driver_type` - one of `wasm`, `dynamic_module`
+- `rule_id` - numeric rule ID string (e.g., `"941100"`) or `"other"` for overflow
+- `severity` - one of `CRITICAL`, `ERROR`, `WARNING`, `NOTICE`, `INFO`
+- `outcome` - one of `block`, `detect`, `pass`
 
-**IMPORTANT — Cardinality Bound:** Drivers MUST emit only the top-N rules by cumulative hit count (N ≤ 200). All rules beyond the top-N MUST be aggregated under `rule_id="other"`. Without this limit this metric is unbounded: CoreRuleSet alone has approximately 700 rules, multiplied by 3 outcome values, multiplied by the number of Engine instances. At 10 engines that is 21,000 time series from a single metric.
+**IMPORTANT - Cardinality Bound:** Drivers MUST emit only the top-N rules by cumulative hit count (N ≤ 200). All rules beyond the top-N MUST be aggregated under `rule_id="other"`. Without this limit this metric is unbounded: CoreRuleSet alone has approximately 700 rules, multiplied by 3 outcome values, multiplied by the number of Engine instances. At 10 engines that is 21,000 time series from a single metric.
 
 The top-N window is computed per engine+namespace tuple and SHOULD be reset on plugin reload.
 
@@ -106,17 +108,17 @@ Type: histogram
 Description: Distribution of per-request anomaly scores after full transaction evaluation.
 
 Labels:
-- `engine` — injected from pluginConfig
-- `namespace` — injected from pluginConfig
-- `driver_type` — one of `wasm`, `dynamic_module`
+- `engine`
+- `namespace`
+- `driver_type` - one of `wasm`, `dynamic_module`
 
 Buckets: `0, 5, 10, 15, 20, 30, 40, 50, 75, 100, +Inf`
 
 Use cases:
-- **Threshold tuning** — identify the score distribution before tightening `tx.anomaly_scoring_threshold`
-- **False-positive detection** — legitimate traffic accumulating non-zero scores indicates rule tuning is needed
-- **Attack intensity tracking** — shifts in p95/p99 signal campaign changes
-- **Paranoia level impact** — compare score distributions before and after changing `tx.paranoia_level`
+- **Threshold tuning** - identify the score distribution before tightening `tx.anomaly_scoring_threshold`
+- **False-positive detection** - legitimate traffic accumulating non-zero scores indicates rule tuning is needed
+- **Attack intensity tracking** - shifts in p95/p99 signal campaign changes
+- **Paranoia level impact** - compare score distributions before and after changing `tx.paranoia_level`
 
 Prometheus text format example:
 ```
@@ -141,20 +143,20 @@ coraza_waf_request_anomaly_score_count{engine="gw-waf",namespace="prod",driver_t
 
 Type: gauge
 
-Description: Current count of rule override directives in effect, partitioned by type. The value reflects the live state after the most recent plugin load — it is set once at load time, not incremented per request.
+Description: Current count of rule override directives in effect, partitioned by type. The value reflects the live state after the most recent plugin load - it is set once at load time, not incremented per request.
 
 Labels:
-- `engine` — injected from pluginConfig
-- `namespace` — injected from pluginConfig
-- `driver_type` — one of `wasm`, `dynamic_module`
-- `rule_id` — numeric rule ID string of the overridden rule
-- `type` — one of `disabled`, `action_changed`, `tag_removed`, `threshold_changed`
+- `engine`
+- `namespace`
+- `driver_type` - one of `wasm`, `dynamic_module`
+- `rule_id` - numeric rule ID string of the overridden rule
+- `type` - one of `disabled`, `action_changed`, `tag_removed`, `threshold_changed`
 
-**Timing:** This gauge MUST be set **once at plugin load** per override directive. It MUST NOT be modified per request. On plugin reload the gauge values are reset to reflect the new configuration — a gauge correctly represents the current override state even if overrides are removed between loads.
+**Timing:** This gauge MUST be set **once at plugin load** per override directive. It MUST NOT be modified per request. On plugin reload the gauge values are reset to reflect the new configuration - a gauge correctly represents the current override state even if overrides are removed between loads.
 
 **Why gauge, not counter:** Rule overrides are a load-time configuration snapshot, not a monotonically increasing event stream. A counter cannot decrease when overrides are removed on reload, making the old value misleading. A gauge accurately reflects the current WAF posture at any point in time.
 
-**Security note:** A change in this metric signals a WAF posture change — a rule was disabled or its action was altered. Operators SHOULD configure an alert on posture changes between scrapes:
+**Security note:** A change in this metric signals a WAF posture change - a rule was disabled or its action was altered. Operators SHOULD configure an alert on posture changes between scrapes:
 ```
 changes(coraza_waf_rule_overrides[1h]) > 0
 ```
@@ -179,10 +181,10 @@ Type: counter
 Description: Total plugin load attempts, partitioned by status.
 
 Labels:
-- `engine` — injected from pluginConfig
-- `namespace` — injected from pluginConfig
-- `driver_type` — one of `wasm`, `dynamic_module`
-- `status` — one of `success`, `failure`
+- `engine`
+- `namespace`
+- `driver_type` - one of `wasm`, `dynamic_module`
+- `status` - one of `success`, `failure`
 
 Prometheus text format example:
 ```
@@ -199,9 +201,9 @@ Type: gauge
 Description: Number of active rules after all override directives (SecRuleRemoveById, SecRuleUpdateActionById, etc.) have been applied. This reflects the live rule count, not the total rules in the ruleset before overrides.
 
 Labels:
-- `engine` — injected from pluginConfig
-- `namespace` — injected from pluginConfig
-- `driver_type` — one of `wasm`, `dynamic_module`
+- `engine`
+- `namespace`
+- `driver_type` - one of `wasm`, `dynamic_module`
 
 Prometheus text format example:
 ```
@@ -217,13 +219,13 @@ Type: counter
 Description: Blocked requests partitioned by attack category and severity. Derived from CRS tags on the matching rule.
 
 Labels:
-- `engine` — injected from pluginConfig
-- `namespace` — injected from pluginConfig
-- `driver_type` — one of `wasm`, `dynamic_module`
-- `category` — attack category (see CRS tag mapping below)
-- `severity` — one of `CRITICAL`, `ERROR`, `WARNING`, `NOTICE`, `INFO`
+- `engine`
+- `namespace`
+- `driver_type` - one of `wasm`, `dynamic_module`
+- `category` - attack category (see CRS tag mapping below)
+- `severity` - one of `CRITICAL`, `ERROR`, `WARNING`, `NOTICE`, `INFO`
 
-**Severity note:** INFO-severity rules do not produce blocking actions in standard Coraza/CRS configurations. However, `SecRuleUpdateActionById` can elevate an INFO rule's action to `block`. If the driver encounters a block attributed to an INFO-severity rule, it MUST emit the counter with `severity="INFO"` — it MUST NOT silently remap to `NOTICE` or drop the increment.
+**Severity note:** INFO-severity rules do not produce blocking actions in standard Coraza/CRS configurations. However, `SecRuleUpdateActionById` can elevate an INFO rule's action to `block`. If the driver encounters a block attributed to an INFO-severity rule, it MUST emit the counter with `severity="INFO"` - it MUST NOT silently remap to `NOTICE` or drop the increment.
 
 **CRS tag to category mapping:**
 
@@ -265,27 +267,40 @@ coraza_waf_blocked_requests_total{engine="gw-waf",namespace="prod",driver_type="
 | `coraza_waf_plugin_rule_count` | 10 × 2 driver types = 20 | Gauge; no unbounded dimension |
 | `coraza_waf_blocked_requests_total` | 10 × 9 categories × 5 severities × 2 driver types = 900 | Fixed category and severity set |
 
-The dominant cardinality risk is `coraza_waf_rule_hits_total`. The top-N bound with `rule_id="other"` overflow is the primary mitigation and is non-negotiable. In deployments with many Gateway replicas, consider reducing N below 200 to keep total Prometheus series within budget.
+The dominant cardinality risk is `coraza_waf_rule_hits_total`. Keep the top-N bound with `rule_id="other"` overflow. With many Gateway replicas, lower N below 200 if the series budget requires it.
+
+## Structured log events
+
+The WASM driver emits warning-level JSON logs that collectors turn into `coraza_waf_*` series:
+
+| Log `event` | Primary contract coverage |
+|---|---|
+| `coraza_waf_request` | `coraza_waf_requests_total` (`outcome`), `coraza_waf_request_anomaly_score` (`anomaly_score`) |
+| `coraza_waf_blocked_request` | `coraza_waf_blocked_requests_total` (`category`, `severity`, `rule_id`) |
+| `coraza_waf_plugin_load` | `coraza_waf_plugin_loads_total` (`status`), `coraza_waf_plugin_rule_count`, `coraza_waf_rule_overrides` |
+
+`coraza_waf_rule_hits_total` (top-N) is not fully covered by per-request logs yet; enrich logs or aggregate in the collector in a follow-up.
+
+Legacy Envoy stats (`waf_filter_tx_total`, interruption counters) can still be scraped from Envoy, but they do not satisfy the `coraza_waf_*` contract names.
 
 ## Implementation Checklist
 
-A driver PR MUST satisfy all of the following before merge:
+A driver / observability PR MUST satisfy all of the following before merge:
 
-- [ ] All metrics listed above implemented with the exact names defined in this document
-- [ ] `engine` and `namespace` labels injected from `pluginConfig` JSON at initialization
-- [ ] `coraza_waf_rule_hits_total` bounded by top-N (N≤200) with overflow aggregated to `rule_id="other"`
-- [ ] `coraza_waf_rule_overrides` set (gauge) at load time, not per request; value reset on plugin reload to reflect new configuration
+- [ ] All metrics listed above available end-to-end with the exact names defined in this document
+- [ ] Required labels `engine`, `namespace`, and `driver_type` present on every `coraza_waf_*` series (`gateway` optional only)
+- [ ] `coraza_waf_rule_hits_total` bounded by top-N (N≤200) with overflow aggregated to `rule_id="other"` (when that metric is materialized)
+- [ ] Load-time posture (`rule_overrides`, `plugin_rule_count`) reflected after plugin load/reload
 - [ ] Metric names match exactly (Prometheus is case-sensitive, exact-match)
-- [ ] Integration test validates that all metrics listed above appear after a test HTTP request is processed
-- [ ] `promtool check metrics` passes on the raw exposition output from the driver
+- [ ] Integration test validates contract metrics (or equivalent collector export) after a test HTTP request
+- [ ] `promtool check metrics` passes on the exposition output (driver or collector)
 - [ ] Cardinality budget is documented for any label dimension not in this spec (if extensions are proposed)
-- [ ] Driver refuses to process traffic if `pluginConfig` is missing or malformed, with a logged error
 
 ## Scraping Configuration
 
-The `coraza_waf_*` metrics are exposed on the Envoy stats port (`http-envoy-prom`, port 15090) at `/stats/prometheus` on Gateway pods. The operator Helm chart provides an opt-in PodMonitor to collect these metrics.
+Scrape a platform-owned OpenTelemetry Collector that materializes `coraza_waf_*` from Istio ALS attributes. `plugin_load` remains unsupported via access logs.
 
-To enable scraping, set the following in your Helm values:
+Gateway pods also expose Envoy stats on `http-envoy-prom` (port **15090**; in-pod admin is often **15000**). The Helm chart ships an opt-in PodMonitor that keeps only `coraza_waf_.*` when those series appear on Envoy. Do not use EnvoyFilter `stats_tags` for tenancy labels.
 
 ```yaml
 metrics:
@@ -295,9 +310,7 @@ metrics:
       gateway.networking.k8s.io/gateway-name: my-gateway
 ```
 
-See `charts/coraza-kubernetes-operator/values.yaml` for the full PodMonitor configuration reference, including `interval`, `scrapeTimeout`, and `metricRelabelings`.
-
-The PodMonitor enforces a mandatory cardinality guard: only time series matching `coraza_waf_.*` are kept. This prevents ingesting Envoy's thousands of internal stats alongside WAF metrics.
+See `charts/coraza-kubernetes-operator/values.yaml` for PodMonitor knobs. Istio `Telemetry` (`telemetry.istio.io`) configures mesh access logs and Istio metrics; ALS->metrics conversion stays on the platform collector path.
 
 ## Example Prometheus Queries
 

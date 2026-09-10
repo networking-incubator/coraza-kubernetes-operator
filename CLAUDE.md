@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 A Kubernetes operator that manages Web Application Firewall (WAF) deployments using Coraza, integrated with Istio via WASM plugins. CRDs include **RuleSource** (stores SecLang rule text), **RuleData** (stores data files for `@pmFromFile`), **RuleSet** (ordered `spec.sources` listing RuleSource names + optional `spec.data` listing RuleData names), and **Engine** (attaches a RuleSet to a Gateway via Istio WasmPlugin).
 
-Data flow: `RuleSource (validated by RuleSourceReconciler) + RuleData + RuleSet → RuleSetReconciler → RuleSetCache (HTTP server) → WASM plugin in Envoy → traffic filtering`
+Data flow: `RuleSource (validated by RuleSourceReconciler) + RuleData + RuleSet -> RuleSetReconciler -> RuleSetCache (HTTP server) -> WASM plugin in Envoy -> traffic filtering`
 
 ## Build, test, and lint commands
 
@@ -18,14 +18,14 @@ make lint.fix               # Auto-fix lint issues
 make manifests generate helm.sync  # Regenerate CRDs, RBAC, and sync to Helm chart
 ```
 
-Run a single unit test:
+Run a single unit test (read the default `ISTIO_VERSION` from `Makefile`, never hardcode it):
 ```bash
-ISTIO_VERSION=1.30.3 go test -v -run TestMyFunction ./internal/controller/...
+ISTIO_VERSION=$(grep '^ISTIO_VERSION' Makefile | cut -d' ' -f3) go test -v -run TestMyFunction ./internal/controller/...
 ```
 
 Verify test files compile (go build silently ignores `_test.go`):
 ```bash
-ISTIO_VERSION=1.30.3 go test -run ^$ ./...
+ISTIO_VERSION=$(grep '^ISTIO_VERSION' Makefile | cut -d' ' -f3) go test -run ^$ ./...
 ```
 
 ### Test tiers (require build tags and a cluster)
@@ -42,6 +42,7 @@ Without the build tag, `go test` silently finds zero tests.
 
 ```bash
 make cluster.kind           # Create KIND cluster with Istio + MetalLB + operator
+make cluster.kind.otel      # Same, plus OpenTelemetry Operator (central collector CRDs)
 make clean.cluster.kind     # Destroy it
 ```
 
@@ -49,9 +50,9 @@ make clean.cluster.kind     # Destroy it
 
 ### Controllers and shared cache
 
-- **RuleSourceReconciler** — watches `RuleSource` (spec generation and validation annotation). Validates `spec.rules` with Coraza per fragment (skips patch-only fragments that contain only `SecRuleUpdate*` / `SecRuleRemove*`; without RuleSet-scoped RuleData; aggregate validation on the RuleSet remains authoritative for `@pmFromFile`) and patches **RuleSource** status (`Validated`, `InvalidRules`, or `ValidationSkipped`).
-- **RuleSetReconciler** — watches RuleSet + referenced RuleSources + referenced RuleData. Gates on **RuleSource** status before aggregating; merges rules and RuleData, runs aggregate Coraza validation, checks for WASM-unsupported rules, stores in RuleSetCache.
-- **EngineReconciler** — watches Engine + referenced RuleSet + Gateways + Pods. When RuleSet is ready, applies a WasmPlugin resource (server-side apply) and discovers matched Gateway pods.
+- **RuleSourceReconciler** - watches `RuleSource` (spec generation and validation annotation). Validates `spec.rules` with Coraza per fragment (skips patch-only fragments that contain only `SecRuleUpdate*` / `SecRuleRemove*`; without RuleSet-scoped RuleData; aggregate validation on the RuleSet remains authoritative for `@pmFromFile`) and patches **RuleSource** status (`Validated`, `InvalidRules`, or `ValidationSkipped`).
+- **RuleSetReconciler** - watches RuleSet + referenced RuleSources + referenced RuleData. Gates on **RuleSource** status before aggregating; merges rules and RuleData, runs aggregate Coraza validation, checks for WASM-unsupported rules, stores in RuleSetCache.
+- **EngineReconciler** - watches Engine + referenced RuleSet + Gateways + Pods. When RuleSet is ready, applies a WasmPlugin resource (server-side apply) and discovers matched Gateway pods. Dataplane metrics use platform-owned central Istio ALS collectors (not per-Engine OTC sidecars).
 
 RuleSet and Engine reconcilers are initialized in `internal/controller/manager.go` with a shared `RuleSetCache`; the RuleSource reconciler shares the same manager client.
 
@@ -65,12 +66,12 @@ When `--operator-name` is set, the manager creates a ServiceEntry + DestinationR
 
 ### Key directories
 
-- `api/v1alpha1/` — CRD types (Engine, RuleSet, RuleSource, RuleData, DriverConfig)
-- `internal/controller/` — reconcilers and watch setup
-- `internal/rulesets/` — cache, memfs (virtual FS for rule validation), unsupported rule detection, `validation/` (shared Coraza helpers for rule text)
-- `cmd/manager/` — operator entry point
-- `cmd/kubectl-coraza/` — CLI plugin for rule generation
-- `test/framework/` — integration test helpers (Scenario pattern, port-forwarding, assertions)
+- `api/v1alpha1/` - CRD types (Engine, RuleSet, RuleSource, RuleData, DriverConfig)
+- `internal/controller/` - reconcilers and watch setup
+- `internal/rulesets/` - cache, memfs (virtual FS for rule validation), unsupported rule detection, `validation/` (shared Coraza helpers for rule text)
+- `cmd/manager/` - operator entry point
+- `cmd/kubectl-coraza/` - CLI plugin for rule generation
+- `test/framework/` - integration test helpers (Scenario pattern, port-forwarding, assertions)
 
 ## Source of truth and generation pipeline
 
@@ -81,26 +82,26 @@ When `--operator-name` is set, the manager creates a ServiceEntry + DestinationR
 | Helm templates | `charts/.../templates/*.yaml` | nothing |
 | Helm values | `charts/.../values.yaml` | nothing |
 
-**Never edit directly**: `config/crd/bases/*.yaml`, `config/rbac/role.yaml`, `charts/.../crds/*.yaml` — these are all regenerated.
+**Never edit directly**: `config/crd/bases/*.yaml`, `config/rbac/role.yaml`, `charts/.../crds/*.yaml` - these are all regenerated.
 
 ## Controller patterns and conventions
 
 ### Environment: ISTIO_VERSION is always required
 
-Unit tests download Istio CRDs at startup. Without `ISTIO_VERSION`, tests fail immediately. Always read the default from `Makefile` — never hardcode it:
+Unit tests download Istio CRDs at startup. Without `ISTIO_VERSION`, tests fail immediately. Always read the default from `Makefile` - never hardcode it:
 ```bash
 grep '^ISTIO_VERSION' Makefile
 ```
 
 ### GenerationChangedPredicate
 
-The Engine controller uses `predicate.GenerationChangedPredicate{}` on its primary watch. Metadata-only changes (labels, annotations, finalizers) do NOT bump `.metadata.generation`, so the update event is filtered out.
+The Engine controller uses `predicate.GenerationChangedPredicate{}` on its primary watch and on the Gateway watch. Metadata-only changes (labels, annotations, finalizers) do NOT bump `.metadata.generation`, so the update event is filtered out.
 
 If you introduce a finalizer to a controller that uses `GenerationChangedPredicate`, the finalizer-add write won't trigger an update event. You must use `RequeueAfter` (never `Requeue`, which is deprecated) to re-enter reconciliation:
 ```go
 return ctrl.Result{RequeueAfter: 100 * time.Millisecond}, nil
 ```
-This also means unit tests will need two `Reconcile()` calls — the first to add the finalizer, the second to do the actual work. The current EngineReconciler does **not** use a finalizer, so a single `Reconcile()` call is sufficient in its tests.
+This also means unit tests will need two `Reconcile()` calls - the first to add the finalizer, the second to do the actual work. The current EngineReconciler does **not** use a finalizer, so a single `Reconcile()` call is sufficient in its tests.
 
 ### EngineReconciler in tests must set operatorNamespace
 
@@ -141,7 +142,7 @@ For cluster tests, also redeploy: `make deploy`.
 
 ### Scenario pattern (mandatory)
 
-All integration tests must use the framework `Scenario` pattern — never reimplement port-forwarding or cleanup logic directly:
+All integration tests must use the framework `Scenario` pattern - never reimplement port-forwarding or cleanup logic directly:
 ```go
 s := fw.NewScenario(t)
 ns := s.GenerateNamespace("my-test")
@@ -151,11 +152,11 @@ s.Step("verify behavior")
 ```
 
 ### Key helpers
-- `s.OnCleanup(fn)` — LIFO cleanup, automatic via `t.Cleanup`
-- `s.ProxyToGateway(ns, name)` — HTTP testing against a gateway
-- `s.ProxyToPod(ns, selector, port)` — port-forward to arbitrary pods
-- `framework.DefaultTimeout` / `framework.DefaultInterval` — never hardcode durations
+- `s.OnCleanup(fn)` - LIFO cleanup, automatic via `t.Cleanup`
+- `s.ProxyToGateway(ns, name)` - HTTP testing against a gateway
+- `s.ProxyToPod(ns, selector, port)` - port-forward to arbitrary pods
+- `framework.DefaultTimeout` / `framework.DefaultInterval` - never hardcode durations
 
 ### Skip validation annotations
-- RuleSources: `waf.k8s.coraza.io/rule-validation: "false"` — skips per-source Coraza rule validation (also emitted by `kubectl coraza generate coreruleset --skip-validation-rulesource`); patch-only fragments (`SecRuleUpdate*` / `SecRuleRemove*` only) are accepted without this annotation via `IsPatchOnlyFragment` in validation
-- RuleSets: `waf.k8s.coraza.io/skip-unsupported-rules-check: "true"` — prevents degrading on unsupported rules
+- RuleSources: `waf.k8s.coraza.io/rule-validation: "false"` - skips per-source Coraza rule validation (also emitted by `kubectl coraza generate coreruleset --skip-validation-rulesource`); patch-only fragments (`SecRuleUpdate*` / `SecRuleRemove*` only) are accepted without this annotation via `IsPatchOnlyFragment` in validation
+- RuleSets: `waf.k8s.coraza.io/skip-unsupported-rules-check: "true"` - prevents degrading on unsupported rules

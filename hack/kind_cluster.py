@@ -25,6 +25,7 @@ GATEWAY_API_URL = (
     "/releases/download/v1.6.1/standard-install.yaml"
 )
 SAIL_REPO = "https://istio-ecosystem.github.io/sail-operator"
+OTEL_OPERATOR_REPO = "https://open-telemetry.github.io/opentelemetry-helm-charts"
 
 
 # ---------------------------------------------------------------------------
@@ -299,6 +300,36 @@ def create_gateway(context: str, loadbalancer: bool) -> None:
 
 
 # ---------------------------------------------------------------------------
+# OpenTelemetry Operator
+# ---------------------------------------------------------------------------
+
+
+def deploy_opentelemetry_operator(context: str) -> None:
+    """Install the OpenTelemetry Operator via Helm and wait for readiness."""
+    print("Deploying OpenTelemetry Operator")
+    run(f"helm repo add open-telemetry {OTEL_OPERATOR_REPO}")
+    run("helm repo update")
+
+    ns = "opentelemetry-operator-system"
+    run(
+        f"helm upgrade --install opentelemetry-operator "
+        f"open-telemetry/opentelemetry-operator "
+        f"--namespace {ns} --create-namespace --kube-context {context} "
+        f"--set admissionWebhooks.certManager.enabled=false "
+        f"--set admissionWebhooks.autoGenerateCert.enabled=true "
+        f'--set "manager.collectorImage.repository='
+        f'ghcr.io/open-telemetry/opentelemetry-collector-releases/'
+        f'opentelemetry-collector-contrib"'
+    )
+
+    run(
+        f"kubectl --context {context} wait --for=condition=Available "
+        f"deployment/opentelemetry-operator "
+        f"-n {ns} --timeout=300s"
+    )
+
+
+# ---------------------------------------------------------------------------
 # Operator Deployment
 # ---------------------------------------------------------------------------
 
@@ -357,6 +388,11 @@ def setup_cluster(name: str) -> None:
     deploy_istio_sail(context)
     create_istio_control_plane(context)
     create_gateway_class(context)
+    # Default off: OTC sidecars overload CI load tests. Enable with make cluster.kind.otel.
+    if os.environ.get("INSTALL_OTEL_OPERATOR", "").lower() == "true":
+        deploy_opentelemetry_operator(context)
+    else:
+        print("Skipping OpenTelemetry Operator (set INSTALL_OTEL_OPERATOR=true to enable)")
     create_gateway(context, metallb_enabled)
     deploy_coraza_operator(context)
 

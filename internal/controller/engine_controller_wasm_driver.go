@@ -109,6 +109,13 @@ func (r *EngineReconciler) provisionWasmDriver(ctx context.Context, log logr.Log
 		return ctrl.Result{}, err
 	}
 
+	// Observability is optional: a missing or temporarily invalid collector
+	// declaration must not block WAF provisioning or traffic handling.
+	if err := r.reconcileTelemetry(ctx, engine); err != nil {
+		logError(log, req, "Engine", err, "Failed to reconcile optional Telemetry")
+		r.Recorder.Eventf(engine, nil, "Warning", "TelemetryProvisioningFailed", "Provision", "Failed to reconcile Telemetry: %v", err)
+	}
+
 	logDebug(log, req, "Engine", "Updating status after successful provisioning")
 	if patchErr := patchReady(ctx, r.Status(), r.Recorder, log, req, "Engine", engine, &engine.Status.Conditions, engine.Generation, "Configured", "WasmPlugin successfully created/updated"); patchErr != nil {
 		return ctrl.Result{}, patchErr
@@ -170,11 +177,20 @@ func (r *EngineReconciler) buildWasmPlugin(engine *wafv1alpha1.Engine, wasmURL s
 		failurePolicy = engine.Spec.FailurePolicy
 	}
 
+	driverType := engine.Spec.Driver.Type
+	if driverType == "" {
+		driverType = wafv1alpha1.DriverTypeWasm
+	}
+
 	pluginConfig := map[string]any{
-		"cache_server_instance": rulesetKey,
-		"cache_server_cluster":  r.ruleSetCacheServerCluster,
-		"failure_policy":        string(failurePolicy),
-		"cache_token":           cacheToken,
+		"cache_server_instance":    rulesetKey,
+		"cache_server_cluster":     r.ruleSetCacheServerCluster,
+		"failure_policy":           string(failurePolicy),
+		"cache_token":              cacheToken,
+		"enable_filter_state_logs": observabilityEnabled(engine),
+		"engine":                   engine.Name,
+		"namespace":                engine.Namespace,
+		"driver_type":              string(driverType),
 	}
 
 	if engine.Spec.RuleSetCacheServer != nil {
@@ -226,6 +242,11 @@ func (r *EngineReconciler) buildWasmPlugin(engine *wafv1alpha1.Engine, wasmURL s
 	}
 
 	return wasmPlugin
+}
+
+func observabilityEnabled(engine *wafv1alpha1.Engine) bool {
+	return engine != nil &&
+		engine.Spec.Observability.Mode == wafv1alpha1.ObservabilityModeEnabled
 }
 
 // -----------------------------------------------------------------------------

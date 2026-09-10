@@ -14,7 +14,7 @@ for counters by Prometheus convention).
 
 ## Control-Plane Metrics (operator /metrics on :8443)
 
-### Cache Server (existing — `internal/rulesets/cache/metrics.go`)
+### Cache Server (existing - `internal/rulesets/cache/metrics.go`)
 
 | Metric | Type | Labels | Worst-case series/cluster | Notes |
 |--------|------|--------|--------------------------|-------|
@@ -29,7 +29,7 @@ for counters by Prometheus convention).
 | `coraza_cache_gc_size_limit_exceeded_total` | counter | (none) | 1 | |
 | `coraza_cache_server_auth_failures_total` | counter | (none) | 1 | Authentication failures on cache server |
 
-### Controller Observability (PR #397 — `internal/controller/metrics.go`)
+### Controller Observability (PR #397 - `internal/controller/metrics.go`)
 
 > **Note:** The metrics in this section are defined in `internal/controller/metrics.go` (merged via PR #397).
 
@@ -94,7 +94,7 @@ Well within the 5,000 series budget.
 
 ### Rule IDs on the operator side
 
-The operator never sees per-rule decisions — those live in Envoy after the WAF driver
+The operator never sees per-rule decisions - those live in Envoy after the WAF driver
 processes traffic. Adding `rule_id` labels on the operator side would require
 data-plane scraping (see [Data-Plane Metrics](#data-plane-metrics) below). Rule-level
 cardinality explodes quickly: CRS alone contains thousands of rules.
@@ -108,7 +108,7 @@ policy. Never use client IPs, source IPs, or any IP-derived value as a label.
 
 Use separate gauge metrics rather than encoding counts in label values. For example,
 `coraza_ruleset_sources{namespace="...", name="..."}` carrying the numeric count is
-correct. A label like `source_count="5"` on a parent metric is not — each distinct
+correct. A label like `source_count="5"` on a parent metric is not - each distinct
 count creates a new time series and the label conveys no structural identity.
 
 ### Raw error messages
@@ -117,23 +117,30 @@ Use error type or reason codes, never free-form error strings. Free-form strings
 effectively unbounded cardinality (every unique message is a new series) and are
 difficult to query reliably.
 
-## Data-Plane Metrics (coraza_waf_* — emitted by WAF driver in Envoy)
+## Data-Plane Metrics (coraza_waf_* - WAF driver / collector)
 
-Data-plane metrics are emitted directly from the Coraza WASM driver running inside
-Envoy sidecars. They are NOT scraped from the operator.
+Data-plane contract metrics are **not** scraped from the operator. Prefer a
+platform-owned OpenTelemetry Collector that materializes them from Istio
+OpenTelemetry access logs (`wasm.io.coraza.waf.*` filter-state attributes).
+Envoy `/stats/prometheus` (and legacy `waf_filter_*`) may be used transitionally.
 
-For the full specification of data-plane metric names, labels, and cardinality
-constraints (including the top-N rule limit that bounds per-rule series), see
-[driver metrics contract](https://github.com/networking-incubator/coraza-kubernetes-operator/blob/main/docs/driver-metrics-contract.md).
+For names, labels, and cardinality constraints (including the top-N rule limit),
+see [driver metrics contract](https://github.com/networking-incubator/coraza-kubernetes-operator/blob/main/docs/driver-metrics-contract.md).
+
+The baseline collector path does not materialize a per-`rule_id` metric:
+bounding that label's cardinality safely needs a top-N / allow-list the initial
+OpenTelemetry Collector pipeline cannot express. Get per-rule metrics (bounded
+per the top-N contract above) from the WASM driver's structured logs instead.
 
 **Key differences from operator metrics:**
 
 | Property | Operator metrics | Data-plane metrics |
 |----------|------------------|--------------------|
-| Source | operator `/metrics` on `:8443` | Envoy admin API or PodMonitor |
-| Scrape target | ServiceMonitor on operator pod | PodMonitor on Gateway pods |
-| Per-rule detail | No — operator never sees rule decisions | Yes — bounded by top-N limit |
+| Source | operator `/metrics` on `:8443` | central ALS -> collector export (preferred) or Envoy stats |
+| Scrape target | ServiceMonitor on operator pod | Service/PodMonitor on the platform collector |
+| Per-rule detail | No - operator never sees rule decisions | Yes - bounded by top-N limit |
 | Worst-case (10-engine cluster) | ~585 series | ~7,000 series |
+| Label path | CRD labels / controller | Required: `engine`/`namespace`/`driver_type` (see [driver metrics contract](https://github.com/networking-incubator/coraza-kubernetes-operator/blob/main/docs/driver-metrics-contract.md)); `gateway` optional |
 
 ## ServiceMonitor label handling
 
@@ -156,7 +163,7 @@ The Helm chart exposes `metrics.serviceMonitor.metricRelabelings` to drop or tra
 series before they are stored in your TSDB. The following examples can be pasted into
 `values.yaml`.
 
-**Example 1 — drop all info metrics in large multi-tenant clusters (keep only conditions + counts):**
+**Example 1 - drop all info metrics in large multi-tenant clusters (keep only conditions + counts):**
 
 ```yaml
 metrics:
@@ -171,7 +178,7 @@ This reduces series by 1 per Engine, 1 per RuleSet, 1 per RuleSource, and 1 per
 referenced RuleData. Useful when you have many short-lived resources and do not
 need the identity labels captured in info metrics.
 
-**Example 2 — keep only `coraza_` prefixed metrics (drop controller-runtime built-ins from this scrape job):**
+**Example 2 - keep only `coraza_` prefixed metrics (drop controller-runtime built-ins from this scrape job):**
 
 ```yaml
 metrics:
@@ -185,7 +192,7 @@ metrics:
 This is useful when controller-runtime built-ins are already collected by a
 cluster-wide scrape job and you want to avoid duplication.
 
-**Example 3 — drop high-cardinality cache histogram (keep only counter + gauge):**
+**Example 3 - drop high-cardinality cache histogram (keep only counter + gauge):**
 
 ```yaml
 metrics:
