@@ -1,0 +1,8 @@
+# Helm values for Coraza operator on OpenShift with the CIO-managed Istio revision.
+# install-operator-openshift.sh requires IMAGE_REPOSITORY and IMAGE_TAG; keep image
+# coordinates out of this example so test runners control their image lifecycle.
+openshift:
+  enabled: true
+
+istio:
+  revision: openshift-gateway

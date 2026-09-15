@@ -1,0 +1,16 @@
+# The central collector deliberately runs without an Istio sidecar. Disable
+# Istio mTLS only for this OTLP Service so Gateway ALS can use plaintext gRPC.
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: central-waf-als-collector-plaintext
+  namespace: coraza-central-waf-telemetry
+  labels:
+    app.kubernetes.io/part-of: coraza-central-istio-waf-telemetry
+spec:
+  host: central-waf-als-collector.coraza-central-waf-telemetry.svc.cluster.local
+  exportTo:
+    - "*"
+  trafficPolicy:
+    tls:
+      mode: DISABLE
