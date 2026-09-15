@@ -42,6 +42,19 @@ helm template coraza-kubernetes-operator \
 
 When `openshift.enabled=true`, `runAsUser`, `fsGroup`, and `fsGroupChangePolicy` are omitted from the pod security context so OpenShift can inject its own UID via SCCs.
 
+## Testing WAF dataplane telemetry (KIND and OpenShift)
+
+Dataplane `coraza_waf_*` metrics come from Istio ALS into a platform-owned collector. The operator reconciles the Gateway-scoped Telemetry when Engine observability is enabled; it does not install Grafana, configure MeshConfig, or create the central OpenTelemetry Collector. Fixtures live in this chart's `examples/central-istio-waf-telemetry/` directory and are omitted from the Helm tarball via `.helmignore`.
+
+For automated coverage, use the self-contained E2E gate from the repository root:
+
+```bash
+make cluster.kind.otel
+make test.e2e TEST_ARGS='-run TestCentralALSMetricsPipeline -count=1 -v'
+```
+
+For manual KIND or OpenShift setup, follow the README in the matching directory under `examples/central-istio-waf-telemetry/`. The GatewayClass annotation must name the Istio ALS provider registered in MeshConfig, for example `internal.do-not-use.openshift.io/waf-otel-collector: waf-log-collector`.
+
 ## Values
 
 | Key                                                   | Type   | Default                                                   | Description                                                                                                 |
@@ -132,8 +145,11 @@ subjects:
 
 When `metrics.grafanaDashboard.enabled=true` **and** `metrics.prometheusRule.enabled=true`,
 the chart deploys ConfigMaps labeled `grafana_dashboard=1` containing **Coraza Operator —
-Overview** and **Coraza Operator — Resources** dashboards. Health summary panels query
-recording rules from the chart PrometheusRule; enabling dashboards without PrometheusRule
-is not supported. Compatible with the kube-prometheus-stack Grafana sidecar.
+Overview**, **Coraza Operator — Resources**, and **Coraza WAF** (dataplane) dashboards.
+Health summary panels query recording rules from the chart PrometheusRule; enabling
+dashboards without PrometheusRule is not supported. Compatible with the kube-prometheus-stack
+Grafana sidecar. The WAF dashboard filters by Engine and Gateway, plots 1h and 7-day block
+ratio, and lists firing rule ids. Rule source text stays on the RuleSource / CRS, not on
+the dashboard.
 
 See [Observability demo on KIND](https://github.com/networking-incubator/coraza-kubernetes-operator/blob/main/docs/content/howto/observability-demo.md) for a local walkthrough.
