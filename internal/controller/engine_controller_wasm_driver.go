@@ -175,6 +175,10 @@ func (r *EngineReconciler) buildWasmPlugin(engine *wafv1alpha1.Engine, wasmURL s
 		"cache_server_cluster":  r.ruleSetCacheServerCluster,
 		"failure_policy":        string(failurePolicy),
 		"cache_token":           cacheToken,
+		// engine/namespace label structured WAF logs for multi-tenant observability
+		// (log→metrics collectors). See docs/driver-metrics-contract.md.
+		"engine":    engine.Name,
+		"namespace": engine.Namespace,
 	}
 
 	if engine.Spec.RuleSetCacheServer != nil {

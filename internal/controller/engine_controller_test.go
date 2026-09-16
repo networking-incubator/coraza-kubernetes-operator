@@ -164,6 +164,28 @@ func TestEngineReconciler_BuildWasmPlugin_CacheToken(t *testing.T) {
 		require.True(t, found, "cache_token key should exist even when empty")
 		assert.Empty(t, token)
 	})
+
+	t.Run("engine and namespace are set in pluginConfig", func(t *testing.T) {
+		w := reconciler.buildWasmPlugin(engine, "oci://test.example/wasm:latest", "tok")
+
+		spec, found, err := getNestedMap(w.Object, "spec")
+		require.NoError(t, err)
+		require.True(t, found)
+
+		pluginConfig, found, err := getNestedMap(spec, "pluginConfig")
+		require.NoError(t, err)
+		require.True(t, found)
+
+		engineName, found, err := getNestedString(pluginConfig, "engine")
+		require.NoError(t, err)
+		require.True(t, found, "engine should be present in pluginConfig")
+		assert.Equal(t, engine.Name, engineName)
+
+		ns, found, err := getNestedString(pluginConfig, "namespace")
+		require.NoError(t, err)
+		require.True(t, found, "namespace should be present in pluginConfig")
+		assert.Equal(t, engine.Namespace, ns)
+	})
 }
 
 func TestEngineReconciler_ReconcileMissingRuleSet(t *testing.T) {
