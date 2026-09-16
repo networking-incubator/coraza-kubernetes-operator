@@ -1,0 +1,45 @@
+# Over-provisioned echo backend. Made deliberately fast and generously resourced
+# so that it never becomes the bottleneck — we want to measure the WAF, not the app.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: echo
+  labels:
+    app: echo
+    perf.coraza.io/role: backend
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: echo
+  template:
+    metadata:
+      labels:
+        app: echo
+    spec:
+      # Pin backend off the gateway/loadgen nodes if you have labelled node pools:
+      # nodeSelector:
+      #   perf.coraza.io/pool: backend
+      containers:
+        - name: echo
+          image: registry.k8s.io/gateway-api/conformance/echo-basic:v0.1.0
+          ports:
+            - containerPort: 3000
+          resources:
+            requests:
+              cpu: "1"
+              memory: 256Mi
+            limits:
+              cpu: "2"
+              memory: 512Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: echo
+spec:
+  selector:
+    app: echo
+  ports:
+    - port: 80
+      targetPort: 3000

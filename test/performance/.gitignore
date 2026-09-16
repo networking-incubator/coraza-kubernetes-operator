@@ -1,0 +1,4 @@
+# Path A (in-cluster) run outputs — raw JSON, summaries, collected metrics
+results/
+# Generated self-contained report (regenerate with scripts/report.py)
+dashboard.html

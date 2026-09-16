@@ -1,0 +1,42 @@
+# In-cluster load generator (fortio). Runs the built-in fortio server so the pod
+# stays alive; load runs are driven via `fortio load` through kubectl exec.
+# fortio uses an open (constant-QPS) model with HDR histograms, which avoids the
+# coordinated-omission tail-latency error that closed-model tools suffer from.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: loadgen
+  labels:
+    app: loadgen
+    perf.coraza.io/role: loadgen
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: loadgen
+  template:
+    metadata:
+      labels:
+        app: loadgen
+      annotations:
+        # Keep the load generator OUT of the Istio mesh so its own sidecar does
+        # not add latency/CPU to the measurement.
+        sidecar.istio.io/inject: "false"
+    spec:
+      # Pin the load generator onto its own node pool if available:
+      # nodeSelector:
+      #   perf.coraza.io/pool: loadgen
+      containers:
+        - name: fortio
+          image: fortio/fortio:latest
+          args: ["server"]
+          ports:
+            - containerPort: 8080  # fortio UI/echo
+            - containerPort: 8079  # fortio grpc
+          resources:
+            requests:
+              cpu: "2"
+              memory: 512Mi
+            limits:
+              cpu: "4"
+              memory: 1Gi

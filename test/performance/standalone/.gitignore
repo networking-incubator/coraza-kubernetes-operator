@@ -1,0 +1,6 @@
+# Extracted binary (13 MB) — regenerate with scripts/extract-wasm.sh
+coraza.wasm
+# Run outputs
+results/
+# Generated dashboard (regenerate with scripts/report.py)
+dashboard.html

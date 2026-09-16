@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "permissions": {
+    "allow": [
+      "Bash(test/performance/scripts/setup.sh:*)",
+      "Bash(test/performance/scripts/suite.sh:*)",
+      "Bash(test/performance/scripts/run.sh:*)",
+      "Bash(test/performance/scripts/waf.sh:*)",
+      "Bash(test/performance/scripts/collect.sh:*)",
+      "Bash(test/performance/scripts/teardown.sh:*)",
+      "Bash(./scripts/setup.sh:*)",
+      "Bash(./scripts/suite.sh:*)",
+      "Bash(./scripts/run.sh:*)",
+      "Bash(./scripts/waf.sh:*)",
+      "Bash(./scripts/collect.sh:*)",
+      "Bash(./scripts/teardown.sh:*)",
+      "Bash(kubectl coraza generate:*)"
+    ]
+  }
+}
