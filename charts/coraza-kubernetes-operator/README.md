@@ -21,6 +21,17 @@ helm upgrade --install coraza-kubernetes-operator coraza-kubernetes-operator/cor
 
 Forks and other remotes use their own Pages URL: `https://<owner>.github.io/<repository>/`.
 
+### OCI registry (GitHub Container Registry)
+
+Install directly from GitHub Container Registry without adding a Helm repository:
+
+```bash
+helm upgrade --install coraza-kubernetes-operator \
+  oci://ghcr.io/networking-incubator/charts/coraza-kubernetes-operator \
+  --namespace coraza-system \
+  --create-namespace
+```
+
 ### Default (Kubernetes)
 
 ```bash
