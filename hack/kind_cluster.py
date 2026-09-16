@@ -50,8 +50,24 @@ def get_kind_context(name: str) -> str:
 # ---------------------------------------------------------------------------
 
 
+def sync_kind_provider() -> None:
+    """Set KIND_EXPERIMENTAL_PROVIDER from the detected container runtime.
+
+    The kind binary reads this env var to choose its provider. When podman is
+    the runtime, kind needs KIND_EXPERIMENTAL_PROVIDER=podman for both create
+    and delete. Deriving it here (from CONTAINER_TOOL / autodetection) means
+    users no longer have to set it alongside CONTAINER_TOOL. An explicit value
+    already in the environment is left untouched.
+    """
+    if os.environ.get("KIND_EXPERIMENTAL_PROVIDER"):
+        return
+    if detect_container_runtime() == "podman":
+        os.environ["KIND_EXPERIMENTAL_PROVIDER"] = "podman"
+
+
 def create_cluster(name: str) -> None:
     """Create a KIND cluster (no-op if it already exists)."""
+    sync_kind_provider()
     print(f"Creating kind cluster: {name}")
     result = run(f"kind get clusters | grep -q '^{name}$'", check=False)
     if result.returncode == 0:
@@ -61,6 +77,7 @@ def create_cluster(name: str) -> None:
 
 
 def delete_cluster(name: str) -> None:
+    sync_kind_provider()
     print(f"Deleting kind cluster: {name}")
     run(f"kind delete cluster --name {name}", check=False)
 
