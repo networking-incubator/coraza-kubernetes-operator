@@ -275,6 +275,11 @@ func (r *EngineReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	}
 
 	logDebug(log, req, "Engine", "Checking referenced RuleSet status")
+	if !observabilityEnabled(&engine) {
+		if err := r.reconcileTelemetry(ctx, &engine); err != nil {
+			return ctrl.Result{}, err
+		}
+	}
 	if degraded, err := r.isRuleSetDegraded(ctx, log, req, &engine); err != nil {
 		return ctrl.Result{}, err
 	} else if degraded {

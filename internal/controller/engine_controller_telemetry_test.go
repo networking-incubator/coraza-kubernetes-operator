@@ -21,11 +21,14 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-logr/logr"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
@@ -42,6 +45,23 @@ func TestIgnoreTelemetryCleanupError(t *testing.T) {
 	assert.True(t, ignoreTelemetryCleanupError(nil))
 	assert.True(t, ignoreTelemetryCleanupError(apierrors.NewNotFound(schema.GroupResource{Resource: "engines"}, "test")))
 	assert.False(t, ignoreTelemetryCleanupError(errors.New("delete failed")))
+}
+
+func TestTelemetryRetryAndObservabilityCondition(t *testing.T) {
+	conditions := []metav1.Condition{}
+	setObservabilityReady(&conditions, 7, errors.New("collector unavailable"))
+	condition := apimeta.FindStatusCondition(conditions, conditionObservabilityReady)
+	require.NotNil(t, condition)
+	assert.Equal(t, metav1.ConditionFalse, condition.Status)
+	assert.Equal(t, "TelemetryProvisioningFailed", condition.Reason)
+	assert.Equal(t, telemetryRetryAfter, telemetryRequeueAfter(time.Now().Add(time.Hour), errors.New("failed")))
+
+	setObservabilityReady(&conditions, 7, nil)
+	condition = apimeta.FindStatusCondition(conditions, conditionObservabilityReady)
+	require.NotNil(t, condition)
+	assert.Equal(t, metav1.ConditionTrue, condition.Status)
+	assert.Equal(t, "TelemetryReady", condition.Reason)
+	assert.Greater(t, telemetryRequeueAfter(time.Now().Add(time.Hour), nil), telemetryRetryAfter)
 }
 
 func ignoreTelemetryCleanupError(err error) bool {

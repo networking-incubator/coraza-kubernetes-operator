@@ -1115,12 +1115,15 @@ func TestEngineReconciler_DegradedWhenRuleSetDegraded(t *testing.T) {
 		Namespace:   testNamespace,
 		RuleSetName: ruleSet.Name,
 	})
+	engine.Spec.Observability.Mode = wafv1alpha1.ObservabilityModeDisabled
 	require.NoError(t, k8sClient.Create(ctx, engine))
 	t.Cleanup(func() {
 		if err := k8sClient.Delete(ctx, engine); err != nil {
 			t.Logf("Failed to delete Engine: %v", err)
 		}
 	})
+	telemetry := buildTelemetry(engine, wafLogCollectorProvider)
+	require.NoError(t, k8sClient.Create(ctx, telemetry))
 
 	t.Log("Reconciling Engine")
 	recorder := utils.NewFakeRecorder()
@@ -1169,6 +1172,9 @@ func TestEngineReconciler_DegradedWhenRuleSetDegraded(t *testing.T) {
 
 	assert.True(t, recorder.HasEvent("Warning", "RuleSetDegraded"),
 		"expected Warning/RuleSetDegraded event; got: %v", recorder.Events)
+
+	err = k8sClient.Get(ctx, types.NamespacedName{Namespace: engine.Namespace, Name: telemetry.GetName()}, telemetry)
+	assert.True(t, apierrors.IsNotFound(err), "Telemetry should be deleted when observability is disabled, got: %v", err)
 }
 
 func TestEngineReconciler_ValidationAllowsOmittedWasmImage(t *testing.T) {
