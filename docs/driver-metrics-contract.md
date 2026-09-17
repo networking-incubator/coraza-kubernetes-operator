@@ -103,6 +103,12 @@ coraza_waf_rule_hits_total{engine="gw-waf",namespace="prod",driver_type="wasm",r
 
 ### coraza_waf_request_anomaly_score
 
+Implementation status: not available in the current WASM / central ALS path. The
+[WASM version used by the E2E test](https://github.com/networking-incubator/coraza-proxy-wasm/blob/e20b40ca25e3c50f212999e3decfde5503e630c3/wasmplugin/logging.go)
+does not emit an `anomaly_score` filter-state attribute, and the collector fixture
+does not produce this histogram. The definition below is an unimplemented contract
+requirement; driver emission and collector histogram aggregation remain follow-up work.
+
 Type: histogram
 
 Description: Distribution of per-request anomaly scores after full transaction evaluation.
@@ -275,7 +281,7 @@ The WASM driver emits warning-level JSON logs that collectors turn into `coraza_
 
 | Log `event` | Primary contract coverage |
 |---|---|
-| `coraza_waf_request` | `coraza_waf_requests_total` (`outcome`), `coraza_waf_request_anomaly_score` (`anomaly_score`) |
+| `coraza_waf_request` | `coraza_waf_requests_total` (`outcome`) |
 | `coraza_waf_blocked_request` | `coraza_waf_blocked_requests_total` (`category`, `severity`, `rule_id`) |
 | `coraza_waf_plugin_load` | `coraza_waf_plugin_loads_total` (`status`), `coraza_waf_plugin_rule_count`, `coraza_waf_rule_overrides` |
 
@@ -333,6 +339,9 @@ sum by (engine, namespace) (
 ```
 
 ### Anomaly score p95 per engine
+
+Requires implementation of `coraza_waf_request_anomaly_score`; the current WASM /
+central ALS path does not expose this metric, so this query returns no data there.
 
 ```promql
 histogram_quantile(0.95,
