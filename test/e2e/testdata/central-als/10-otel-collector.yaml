@@ -63,12 +63,12 @@ spec:
             statements:
               - set(attributes["outcome"], "block") where attributes["waf_event"] == "coraza_waf_blocked_request"
               - set(attributes["outcome"], "block") where attributes["outcome"] == nil and attributes["action"] == "deny"
+              - set(attributes["outcome"], "pass") where attributes["outcome"] == nil
               - set(attributes["severity"], attributes["severity"]) where attributes["severity"] != nil and attributes["severity"] != "-"
               - set(attributes["category"], attributes["category"]) where attributes["category"] != nil and attributes["category"] != "-"
               - set(attributes["driver_type"], "wasm") where attributes["driver_type"] == nil
               - set(attributes["engine"], "unknown") where attributes["engine"] == nil
               - set(attributes["namespace"], "unknown") where attributes["namespace"] == nil
-              - set(attributes["outcome"], "unknown") where attributes["outcome"] == nil
       deltatocumulative: {}
     connectors:
       count/coraza:

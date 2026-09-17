@@ -345,7 +345,9 @@ func TestCentralALSMetricsPipeline(t *testing.T) {
 	collectorProxy := s.ProxyToPod(centralALSCollectorNamespace, "app.kubernetes.io/name=central-waf-als-collector", 9090)
 	metricsURL := fmt.Sprintf("http://localhost:%s/metrics", collectorProxy.LocalPort())
 	httpc := &http.Client{Timeout: framework.DefaultTimeout}
-	// Filter state is interruption-only today: block path is required; pass may be absent.
+	// Allowed requests lack FILTER_STATE and are classified as pass by the collector.
+	assertMetricLineContainsAll(t, httpc, metricsURL,
+		`coraza_waf_requests_total{`, `outcome="pass"`, `namespace="`+ns+`"`, `driver_type="wasm"`)
 	assertMetricLineContainsAll(t, httpc, metricsURL,
 		`coraza_waf_requests_total{`, `outcome="block"`, `namespace="`+ns+`"`, `driver_type="wasm"`)
 	assertMetricLineContains(t, httpc, metricsURL, `coraza_waf_blocked_requests_total{`)
