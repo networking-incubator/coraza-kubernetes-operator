@@ -8,6 +8,7 @@ import argparse
 import ipaddress
 import json
 import os
+import re
 import sys
 
 from lib import (
@@ -26,6 +27,7 @@ GATEWAY_API_URL = (
 )
 SAIL_REPO = "https://istio-ecosystem.github.io/sail-operator"
 OTEL_OPERATOR_REPO = "https://open-telemetry.github.io/opentelemetry-helm-charts"
+KIND_CLUSTER_NAME_RE = re.compile(r"[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?")
 
 
 # ---------------------------------------------------------------------------
@@ -44,6 +46,13 @@ def require_env(key: str) -> str:
 
 def get_kind_context(name: str) -> str:
     return f"kind-{name}"
+
+
+def kind_cluster_name(value: str) -> str:
+    """Accept the DNS-label names KIND uses for clusters."""
+    if not KIND_CLUSTER_NAME_RE.fullmatch(value):
+        raise argparse.ArgumentTypeError("must be a lowercase DNS label up to 63 characters")
+    return value
 
 
 # ---------------------------------------------------------------------------
@@ -409,7 +418,7 @@ def setup_cluster(name: str) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Manage KIND integration clusters")
     parser.add_argument("action", choices=["create", "delete", "setup"])
-    parser.add_argument("--name", default="coraza-kubernetes-operator-integration")
+    parser.add_argument("--name", default="coraza-kubernetes-operator-integration", type=kind_cluster_name)
     args = parser.parse_args()
 
     if args.action == "create":
