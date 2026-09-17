@@ -2123,13 +2123,21 @@ func TestRuleSetReconciler_MetricsRuleDataDeleteRefreshesNamespaceTotal(t *testi
 	ctx, cleanup := setupTest(t)
 	t.Cleanup(cleanup)
 
-	const ns = "ruledata-metrics-delete"
-	require.NoError(t, k8sClient.Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ns}}))
-	t.Cleanup(func() { _ = k8sClient.Delete(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ns}}) })
+	namespace := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{GenerateName: "ruledata-metrics-delete-"}}
+	require.NoError(t, k8sClient.Create(ctx, namespace))
+	t.Cleanup(func() { _ = k8sClient.Delete(ctx, namespace) })
+	ns := namespace.Name
 
 	rd := utils.NewTestRuleData("orphan-rd", ns, map[string]string{"orphan.data": "x"})
 	require.NoError(t, k8sClient.Create(ctx, rd))
 	t.Cleanup(func() { _ = k8sClient.Delete(ctx, rd) })
+	require.Eventually(t, func() bool {
+		var list wafv1alpha1.RuleDataList
+		if err := k8sClient.List(ctx, &list, client.InNamespace(ns)); err != nil {
+			return false
+		}
+		return len(list.Items) == 1
+	}, 5*time.Second, 50*time.Millisecond, "RuleData should appear in the test cache after create")
 
 	reg := prometheus.NewRegistry()
 	m, err := NewCorazaMetrics(reg)
