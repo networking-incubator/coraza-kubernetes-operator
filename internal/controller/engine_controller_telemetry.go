@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -39,6 +40,10 @@ const (
 
 	telemetryNameSuffix = "-telemetry"
 	engineNameLabel     = "waf.k8s.coraza.io/engine"
+
+	maxTelemetryNameLength = 253
+	maxLabelValueLength    = 63
+	nameHashLength         = 8
 )
 
 var telemetryGVK = schema.GroupVersionKind{
@@ -46,7 +51,15 @@ var telemetryGVK = schema.GroupVersionKind{
 }
 
 func telemetryName(engineName string) string {
-	return wasmPluginName(engineName) + telemetryNameSuffix
+	return boundedName(wasmPluginName(engineName)+telemetryNameSuffix, maxTelemetryNameLength)
+}
+
+func boundedName(value string, maxLength int) string {
+	if len(value) <= maxLength {
+		return value
+	}
+	hash := sha256.Sum256([]byte(value))
+	return fmt.Sprintf("%s-%x", value[:maxLength-nameHashLength-1], hash[:nameHashLength/2])
 }
 
 // reconcileTelemetry creates the Gateway-scoped Istio Telemetry requested by
@@ -105,7 +118,7 @@ func buildTelemetry(engine *wafv1alpha1.Engine, providerName string) *unstructur
 			"name":      telemetryName(engine.Name),
 			"namespace": engine.Namespace,
 			"labels": map[string]any{
-				engineNameLabel: engine.Name,
+				engineNameLabel: boundedName(engine.Name, maxLabelValueLength),
 			},
 		},
 		"spec": map[string]any{

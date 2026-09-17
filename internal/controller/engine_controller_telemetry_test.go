@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -27,6 +28,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/validation"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 
@@ -75,6 +77,21 @@ func TestEngineReconciler_BuildTelemetry(t *testing.T) {
 	entry := providers[0].(map[string]any)
 	providerRefs := entry["providers"].([]any)
 	assert.Equal(t, "custom-waf-log-collector", providerRefs[0].(map[string]any)["name"])
+}
+
+func TestEngineReconciler_BuildTelemetryBoundsLongEngineNames(t *testing.T) {
+	longName := strings.Repeat("a", 253)
+	otherLongName := strings.Repeat("a", 252) + "b"
+
+	first := buildTelemetry(utils.NewTestEngine(utils.EngineOptions{Name: longName}), wafLogCollectorProvider)
+	second := buildTelemetry(utils.NewTestEngine(utils.EngineOptions{Name: otherLongName}), wafLogCollectorProvider)
+
+	assert.Len(t, first.GetName(), 253)
+	assert.Empty(t, validation.IsDNS1123Subdomain(first.GetName()))
+	assert.Len(t, first.GetLabels()[engineNameLabel], 63)
+	assert.Empty(t, validation.IsValidLabelValue(first.GetLabels()[engineNameLabel]))
+	assert.NotEqual(t, first.GetName(), second.GetName())
+	assert.NotEqual(t, first.GetLabels()[engineNameLabel], second.GetLabels()[engineNameLabel])
 }
 
 func TestGatewayClassWAFCollectorProvider(t *testing.T) {
