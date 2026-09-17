@@ -173,7 +173,11 @@ func (s *Scenario) ApplyManifest(namespace, path string) {
 }
 
 // istioProxyContainer returns "istio-proxy" if present, else the first container name.
+// It returns an empty string when there are no containers.
 func istioProxyContainer(containers []corev1.Container) string {
+	if len(containers) == 0 {
+		return ""
+	}
 	for _, c := range containers {
 		if c.Name == "istio-proxy" {
 			return c.Name

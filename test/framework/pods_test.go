@@ -72,3 +72,22 @@ func TestAllPodsStableReady(t *testing.T) {
 		})
 	}
 }
+
+func TestIstioProxyContainer(t *testing.T) {
+	for _, tt := range []struct {
+		name       string
+		containers []corev1.Container
+		want       string
+	}{
+		{name: "nil"},
+		{name: "empty", containers: []corev1.Container{}},
+		{name: "fallback", containers: []corev1.Container{{Name: "app"}, {Name: "sidecar"}}, want: "app"},
+		{name: "proxy preferred", containers: []corev1.Container{{Name: "app"}, {Name: "istio-proxy"}}, want: "istio-proxy"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := istioProxyContainer(tt.containers); got != tt.want {
+				t.Errorf("istioProxyContainer() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
