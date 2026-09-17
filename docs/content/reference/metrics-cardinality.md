@@ -136,9 +136,9 @@ per the top-N contract above) from the WASM driver's structured logs instead.
 
 | Property | Operator metrics | Data-plane metrics |
 |----------|------------------|--------------------|
-| Source | operator `/metrics` on `:8443` | central ALS -> collector export (preferred) or Envoy stats |
+| Source | operator `/metrics` on `:8443` | central ALS -> collector export for baseline metrics; structured logs for per-rule metrics |
 | Scrape target | ServiceMonitor on operator pod | Service/PodMonitor on the platform collector |
-| Per-rule detail | No - operator never sees rule decisions | Yes - bounded by top-N limit |
+| Per-rule detail | No - operator never sees rule decisions | Not from central ALS; structured logs can provide it, bounded by the top-N limit |
 | Worst-case (10-engine cluster) | ~585 series | ~7,000 series |
 | Label path | CRD labels / controller | Required: `engine`/`namespace`/`driver_type` (see [driver metrics contract](https://github.com/networking-incubator/coraza-kubernetes-operator/blob/main/docs/driver-metrics-contract.md)); `gateway` optional |
 

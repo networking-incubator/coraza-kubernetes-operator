@@ -129,17 +129,19 @@ The operator does not create per-Engine OpenTelemetryCollector sidecars or patch
 To enable this path:
 
 1. Create the collector and configure the `waf-log-collector` ALS provider in Istio MeshConfig.
-2. Add its `host:port` endpoint to the target GatewayClass:
+2. Add the opt-in marker to the target GatewayClass:
 
    ```yaml
    metadata:
      annotations:
-       internal.do-not-use.openshift.io/waf-otel-collector: central-waf-als-collector.coraza-central-waf-telemetry.svc.cluster.local:4317
+       internal.do-not-use.openshift.io/waf-otel-collector: "true"
    ```
 
 3. Set `spec.observability.mode: Enabled` on the Engine.
 
-Coraza then reconciles the Gateway-scoped Telemetry with `waf-log-collector`; it does not reconcile MeshConfig or the collector.
+The annotation is a non-empty opt-in marker. Coraza always uses the
+`waf-log-collector` provider. Istio MeshConfig owns the provider's collector
+service and port; Coraza does not reconcile either resource.
 
 #### Scrape target
 

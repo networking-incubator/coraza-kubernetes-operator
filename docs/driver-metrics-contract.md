@@ -43,7 +43,7 @@ Every `coraza_waf_*` series MUST carry these required labels:
 
 ### Central Istio ALS path
 
-WasmPlugin `pluginConfig` carries `engine`, `namespace`, and `driver_type`. Coraza stamps those (and outcome / block fields) for Istio OpenTelemetry ALS; a platform-owned central collector materializes baseline `coraza_waf_*` series. The operator reconciles the Gateway-scoped Telemetry when Engine observability is enabled. The target GatewayClass `internal.do-not-use.openshift.io/waf-otel-collector` annotation declares the collector endpoint as `host:port`; Coraza uses the `waf-log-collector` Istio provider created for that endpoint. It does not reconcile MeshConfig or the collector.
+WasmPlugin `pluginConfig` carries `engine`, `namespace`, and `driver_type`. Coraza stamps those (and outcome / block fields) for Istio OpenTelemetry ALS; a platform-owned central collector materializes baseline `coraza_waf_*` series. The operator reconciles the Gateway-scoped Telemetry when Engine observability is enabled. A non-empty `internal.do-not-use.openshift.io/waf-otel-collector` annotation on the target GatewayClass is an opt-in marker. Coraza always uses the fixed `waf-log-collector` Istio provider. Istio MeshConfig owns the provider's collector service and port; Coraza does not reconcile MeshConfig or the collector.
 
 The central ALS path is baseline-only and does not by itself satisfy this contract.
 
