@@ -19,6 +19,7 @@ limitations under the License.
 package e2e
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -35,6 +36,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/util/retry"
 
 	"github.com/networking-incubator/coraza-kubernetes-operator/test/framework"
 )
@@ -45,10 +47,11 @@ var centralALSMeshConfigMu sync.Mutex
 const defaultFilterStateWasmImage = "oci://ghcr.io/networking-incubator/coraza-proxy-wasm:e20b40ca25e3c50f212999e3decfde5503e630c3"
 
 const (
-	centralALSCollectorNamespace = "coraza-central-waf-telemetry"
-	centralALSCollectorService   = "central-waf-als-collector.coraza-central-waf-telemetry.svc.cluster.local"
-	centralALSCollectorEndpoint  = centralALSCollectorService + ":4317"
-	centralALSProviderName       = "waf-log-collector"
+	centralALSCollectorNamespace  = "coraza-central-waf-telemetry"
+	centralALSCollectorService    = "central-waf-als-collector.coraza-central-waf-telemetry.svc.cluster.local"
+	centralALSCollectorEndpoint   = centralALSCollectorService + ":4317"
+	centralALSProviderName        = "waf-log-collector"
+	centralALSCollectorAnnotation = "internal.do-not-use.openshift.io/waf-otel-collector"
 )
 
 func centralALSTestdata(t *testing.T) string {
@@ -244,7 +247,31 @@ func TestCentralALSMetricsPipeline(t *testing.T) {
 	if annotations == nil {
 		annotations = map[string]string{}
 	}
-	annotations["internal.do-not-use.openshift.io/waf-otel-collector"] = centralALSCollectorEndpoint
+	previousCollector, hadPreviousCollector := annotations[centralALSCollectorAnnotation]
+	s.OnCleanup(func() {
+		err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+			current, err := fw.DynamicClient.Resource(framework.GatewayClassGVR).Get(context.Background(), "istio", metav1.GetOptions{})
+			if err != nil {
+				return err
+			}
+			currentAnnotations := current.GetAnnotations()
+			if hadPreviousCollector {
+				if currentAnnotations == nil {
+					currentAnnotations = map[string]string{}
+				}
+				currentAnnotations[centralALSCollectorAnnotation] = previousCollector
+			} else {
+				delete(currentAnnotations, centralALSCollectorAnnotation)
+			}
+			current.SetAnnotations(currentAnnotations)
+			_, err = fw.DynamicClient.Resource(framework.GatewayClassGVR).Update(context.Background(), current, metav1.UpdateOptions{})
+			return err
+		})
+		if err != nil {
+			t.Errorf("cleanup: restore GatewayClass collector annotation: %v", err)
+		}
+	})
+	annotations[centralALSCollectorAnnotation] = centralALSCollectorEndpoint
 	gatewayClass.SetAnnotations(annotations)
 	_, err = fw.DynamicClient.Resource(framework.GatewayClassGVR).Update(t.Context(), gatewayClass, metav1.UpdateOptions{})
 	require.NoError(t, err)
