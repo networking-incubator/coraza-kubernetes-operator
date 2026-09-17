@@ -40,6 +40,10 @@ OTEL_OPERATOR_VERSION ?= 0.114.0
 
 VERSION ?= v0.0.0-dev
 IMAGE_REGISTRY ?= ghcr.io/networking-incubator
+
+HELM_RELEASE_NAME ?= coraza-kubernetes-operator
+HELM_RELEASE_NAMESPACE ?= coraza-system
+HELM_CHART_DIR ?= charts/coraza-kubernetes-operator
 CONTROLLER_MANAGER_CONTAINER_IMAGE_BASE ?= $(IMAGE_REGISTRY)/coraza-kubernetes-operator
 CONTROLLER_MANAGER_CONTAINER_IMAGE_TAG ?= $(VERSION)
 CONTROLLER_MANAGER_CONTAINER_IMAGE ?= ${CONTROLLER_MANAGER_CONTAINER_IMAGE_BASE}:${CONTROLLER_MANAGER_CONTAINER_IMAGE_TAG}
@@ -71,22 +75,7 @@ OPM_VERSION ?= v1.64.0
 OPM_BASE_NAME ?= quay.io/operator-framework/opm:$(OPM_VERSION)
 OPM_BASE_DIGEST ?= sha256:a070b901663d00312ccabe06a3c04b961d7326868499fe6c4c6b97025c79f014
 
-OCI_LABELS_OPERATOR = \
-	--label org.opencontainers.image.title="$(OCI_IMAGE_TITLE_OPERATOR)" \
-	--label org.opencontainers.image.description="$(OCI_IMAGE_DESC_OPERATOR)" \
-	--label org.opencontainers.image.version="$(VERSION)" \
-	--label org.opencontainers.image.revision="$(GIT_REVISION)" \
-	--label org.opencontainers.image.created="$(OCI_IMAGE_CREATED)" \
-	--label org.opencontainers.image.source="$(OCI_IMAGE_SOURCE)" \
-	--label org.opencontainers.image.documentation="$(OCI_IMAGE_DOCUMENTATION)" \
-	--label org.opencontainers.image.licenses="$(OCI_IMAGE_LICENSES)" \
-	--label org.opencontainers.image.vendor="$(OCI_IMAGE_VENDOR)" \
-	--label org.opencontainers.image.base.name="$(OCI_OPERATOR_BASE_NAME)" \
-	--label org.opencontainers.image.base.digest="$(OCI_OPERATOR_BASE_DIGEST)"
-
-OCI_LABELS_BUNDLE = \
-	--label org.opencontainers.image.title="$(OCI_IMAGE_TITLE_BUNDLE)" \
-	--label org.opencontainers.image.description="$(OCI_IMAGE_DESC_BUNDLE)" \
+OCI_LABELS_COMMON = \
 	--label org.opencontainers.image.version="$(VERSION)" \
 	--label org.opencontainers.image.revision="$(GIT_REVISION)" \
 	--label org.opencontainers.image.created="$(OCI_IMAGE_CREATED)" \
@@ -95,16 +84,19 @@ OCI_LABELS_BUNDLE = \
 	--label org.opencontainers.image.licenses="$(OCI_IMAGE_LICENSES)" \
 	--label org.opencontainers.image.vendor="$(OCI_IMAGE_VENDOR)"
 
-OCI_LABELS_CATALOG = \
+OCI_LABELS_OPERATOR = $(OCI_LABELS_COMMON) \
+	--label org.opencontainers.image.title="$(OCI_IMAGE_TITLE_OPERATOR)" \
+	--label org.opencontainers.image.description="$(OCI_IMAGE_DESC_OPERATOR)" \
+	--label org.opencontainers.image.base.name="$(OCI_OPERATOR_BASE_NAME)" \
+	--label org.opencontainers.image.base.digest="$(OCI_OPERATOR_BASE_DIGEST)"
+
+OCI_LABELS_BUNDLE = $(OCI_LABELS_COMMON) \
+	--label org.opencontainers.image.title="$(OCI_IMAGE_TITLE_BUNDLE)" \
+	--label org.opencontainers.image.description="$(OCI_IMAGE_DESC_BUNDLE)"
+
+OCI_LABELS_CATALOG = $(OCI_LABELS_COMMON) \
 	--label org.opencontainers.image.title="$(OCI_IMAGE_TITLE_CATALOG)" \
 	--label org.opencontainers.image.description="$(OCI_IMAGE_DESC_CATALOG)" \
-	--label org.opencontainers.image.version="$(VERSION)" \
-	--label org.opencontainers.image.revision="$(GIT_REVISION)" \
-	--label org.opencontainers.image.created="$(OCI_IMAGE_CREATED)" \
-	--label org.opencontainers.image.source="$(OCI_IMAGE_SOURCE)" \
-	--label org.opencontainers.image.documentation="$(OCI_IMAGE_DOCUMENTATION)" \
-	--label org.opencontainers.image.licenses="$(OCI_IMAGE_LICENSES)" \
-	--label org.opencontainers.image.vendor="$(OCI_IMAGE_VENDOR)" \
 	--label org.opencontainers.image.base.name="$(OPM_BASE_NAME)" \
 	--label org.opencontainers.image.base.digest="$(OPM_BASE_DIGEST)"
 
@@ -114,7 +106,7 @@ OCI_LABELS_CATALOG = \
 
 .PHONY: help
 help: ## Show this help message
-	@awk 'BEGIN {FS = ":.*##"; printf "\nUsage:\n  make \033[36m<target>\033[0m\n"} /^[a-zA-Z_0-9.-]+:.*?##/ { printf "  \033[36m%-30s\033[0m %s\n", $$1, $$2 } /^##@/ { printf "\n\033[1m%s\033[0m\n", substr($$0, 5) } ' $(MAKEFILE_LIST)
+	@awk 'BEGIN {FS = ":.*##"; printf "\nUsage:\n  make \033[36m<target>\033[0m\n"} /^[a-zA-Z_0-9.-]+:.*?##/ { printf "  \033[36m%-40s\033[0m %s\n", $$1, $$2 } /^##@/ { printf "\n\033[1m%s\033[0m\n", substr($$0, 5) } ' $(MAKEFILE_LIST)
 
 .PHONY: print-%
 print-%:
@@ -269,14 +261,16 @@ cluster.kind:
 .PHONY: cluster.kind.otel
 cluster.kind.otel:
 	INSTALL_OTEL_OPERATOR=true $(MAKE) cluster.kind
+cluster.kind: ## Create the KIND test cluster
+	ISTIO_VERSION=${ISTIO_VERSION} METALLB_VERSION=${METALLB_VERSION} METALLB_POOL_SIZE=${METALLB_POOL_SIZE} CONTROLLER_MANAGER_CONTAINER_IMAGE_BASE=${CONTROLLER_MANAGER_CONTAINER_IMAGE_BASE} CONTROLLER_MANAGER_CONTAINER_IMAGE_TAG=${CONTROLLER_MANAGER_CONTAINER_IMAGE_TAG} python3 hack/kind_cluster.py setup --name ${KIND_CLUSTER_NAME}
 
 .PHONY: cluster.load-images
-cluster.load-images:
+cluster.load-images: ## Load the operator image into the KIND test cluster
 	@$(CONTAINER_TOOL) exec ${KIND_CLUSTER_NAME}-control-plane crictl rmi ${CONTROLLER_MANAGER_CONTAINER_IMAGE} 2>/dev/null || true
 	$(KIND) load docker-image ${CONTROLLER_MANAGER_CONTAINER_IMAGE} --name ${KIND_CLUSTER_NAME}
 
 .PHONY: clean.cluster.kind
-clean.cluster.kind:
+clean.cluster.kind: ## Delete the KIND test cluster
 	python3 hack/kind_cluster.py delete --name ${KIND_CLUSTER_NAME}
 
 # -------------------------------------------------------------------------------
@@ -318,9 +312,9 @@ test.tools:
 # -------------------------------------------------------------------------------
 
 CORERULESET_VERSION ?= v4.28.0
-LOCALRULES ?= $(shell pwd)/tmp/rules
-CORERULESET_DIR ?= $(shell pwd)/tmp/coreruleset
-TMP_DOWNLOAD_DIR ?= $(shell pwd)/tmp/download
+LOCALRULES ?= $(CURDIR)/tmp/rules
+CORERULESET_DIR ?= $(CURDIR)/tmp/coreruleset
+TMP_DOWNLOAD_DIR ?= $(CURDIR)/tmp/download
 NAMESPACE ?= default
 CORERULESET_EXTRA_FLAGS ?=
 
@@ -353,7 +347,8 @@ coraza.coreruleset: coraza.generaterules
 # Coraza Coreruleset - Conformance test
 # -------------------------------------------------------------------------------
 CONFORMANCE_EXTRA_FLAGS ?=
-FTW_OVERRIDES ?= $(shell pwd)/test/conformance/.ftw-overrides.yml
+FTW_CONFIG ?= $(CURDIR)/test/conformance/ftw.yml
+FTW_OVERRIDES ?= $(CURDIR)/test/conformance/.ftw-overrides.yml
 
 # Verifies generator output for pinned CRS (CORERULESET_VERSION + --include-test-rule + full CRS for parity) against tools/corerulesetgen/testdata/coreruleset_parity.sha256.
 # Conformance needs --ignore-unsupported-rules=none so output matches the pre-exclusion golden hash and FTW exercises the full rule set.
@@ -364,7 +359,16 @@ coreruleset.verify-parity:
 
 .PHONY: test.conformance
 test.conformance: coreruleset.verify-parity
-	cd test/conformance &&  $(CONFORMANCE_EXTRA_FLAGS) FTW_CONFIG=$(shell pwd)/test/conformance/ftw.yml FTW_OVERRIDES=$(FTW_OVERRIDES) TESTMANIFESTS_PATH=$(CORERULESET_DIR)/tests/tests RULESET_PATH=$(LOCALRULES)/rules.yaml KIND_CLUSTER_NAME=${KIND_CLUSTER_NAME} ISTIO_VERSION=${ISTIO_VERSION} ISTIO_GATEWAY_REVISION=${ISTIO_GATEWAY_REVISION} go test -tags=conformance ./... -v
+	cd test/conformance && \
+		$(CONFORMANCE_EXTRA_FLAGS) \
+		FTW_CONFIG=$(FTW_CONFIG) \
+		FTW_OVERRIDES=$(FTW_OVERRIDES) \
+		TESTMANIFESTS_PATH=$(CORERULESET_DIR)/tests/tests \
+		RULESET_PATH=$(LOCALRULES)/rules.yaml \
+		KIND_CLUSTER_NAME=${KIND_CLUSTER_NAME} \
+		ISTIO_VERSION=${ISTIO_VERSION} \
+		ISTIO_GATEWAY_REVISION=${ISTIO_GATEWAY_REVISION} \
+		go test -tags=conformance ./... -v
 
 # -------------------------------------------------------------------------------
 # OLM Bundle
@@ -463,15 +467,13 @@ catalog.undeploy: ## Remove the CatalogSource CR from the cluster
 # Helm
 # -------------------------------------------------------------------------------
 
-HELM_CHART_DIR ?= charts/coraza-kubernetes-operator
-
 .PHONY: helm.lint
 helm.lint: ## Lint the Helm chart
 	helm lint $(HELM_CHART_DIR)
 
 .PHONY: helm.template
 helm.template: ## Render the Helm chart templates locally
-	helm template coraza-kubernetes-operator $(HELM_CHART_DIR) --namespace coraza-system
+	helm template $(HELM_RELEASE_NAME) $(HELM_CHART_DIR) --namespace $(HELM_RELEASE_NAMESPACE)
 
 .PHONY: helm.sync-crds
 helm.sync-crds: manifests ## Copy generated CRDs into the Helm chart
@@ -695,7 +697,7 @@ docs.chroma: docs.image ## Regenerate Chroma syntax highlighting CSS for light a
 # Dependencies
 # -------------------------------------------------------------------------------
 
-LOCALBIN ?= $(shell pwd)/bin
+LOCALBIN ?= $(CURDIR)/bin
 $(LOCALBIN):
 	mkdir -p "$(LOCALBIN)"
 
