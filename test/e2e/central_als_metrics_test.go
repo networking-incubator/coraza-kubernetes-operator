@@ -38,13 +38,11 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/util/retry"
 
+	"github.com/networking-incubator/coraza-kubernetes-operator/internal/defaults"
 	"github.com/networking-incubator/coraza-kubernetes-operator/test/framework"
 )
 
 var centralALSMeshConfigMu sync.Mutex
-
-// defaultFilterStateWasmImage is coraza-proxy-wasm PR #20+ (Envoy filter state for CIO ALS).
-const defaultFilterStateWasmImage = "oci://ghcr.io/networking-incubator/coraza-proxy-wasm:e20b40ca25e3c50f212999e3decfde5503e630c3"
 
 const (
 	centralALSCollectorNamespace  = "coraza-central-waf-telemetry"
@@ -220,10 +218,10 @@ func TestCentralALSMetricsPipeline(t *testing.T) {
 	gwName := "gw"
 	engineName := "engine"
 
-	// FILTER_STATE WASM (coraza-proxy-wasm PR #20+). Override with CORAZA_WASM_IMAGE.
+	// Use the operator's default WASM image unless CORAZA_WASM_IMAGE overrides it.
 	wasmImage := os.Getenv("CORAZA_WASM_IMAGE")
 	if wasmImage == "" {
-		wasmImage = defaultFilterStateWasmImage
+		wasmImage = defaults.DefaultCorazaWasmOCIReference
 	}
 
 	s.Step("apply central ALS test fixture (no hostPath)")
