@@ -44,10 +44,10 @@ import (
 const debugLevel = 1
 
 const (
-	conditionReady       = "Ready"
-	conditionDegraded    = "Degraded"
-	conditionProgressing = "Progressing"
-	conditionAccepted    = "Accepted"
+	conditionReady              = "Ready"
+	conditionDegraded           = "Degraded"
+	conditionProgressing        = "Progressing"
+	conditionAccepted           = "Accepted"
 	conditionObservabilityReady = "ObservabilityReady"
 )
 
