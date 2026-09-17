@@ -126,10 +126,13 @@ Control-plane metrics above are from the operator. Data-plane WAF observability 
 
 The operator does not create per-Engine OpenTelemetryCollector sidecars or patch Gateways for `sidecar.opentelemetry.io/inject`. Dataplane `coraza_waf_*` metrics come from Istio OpenTelemetry access logs (WAF filter state `wasm.io.coraza.waf.*` via `%FILTER_STATE%`) into a platform-owned central collector.
 
-To enable this path:
+Choose the platform setup:
 
-1. Create the collector and configure the `waf-log-collector` ALS provider in Istio MeshConfig.
-2. Add the opt-in marker to the target GatewayClass:
+- On OpenShift, use the platform ALS configuration; do not modify Istio MeshConfig.
+- On other Istio distributions, create the collector and configure the
+  `waf-log-collector` ALS provider in Istio MeshConfig.
+
+Then add the opt-in marker to the target GatewayClass:
 
    ```yaml
    metadata:
@@ -137,7 +140,7 @@ To enable this path:
        internal.do-not-use.openshift.io/waf-otel-collector: "true"
    ```
 
-3. Set `spec.observability.mode: Enabled` on the Engine.
+Finally, set `spec.observability.mode: Enabled` on the Engine.
 
 The annotation is a non-empty opt-in marker. Coraza always uses the
 `waf-log-collector` provider. Istio MeshConfig owns the provider's collector
