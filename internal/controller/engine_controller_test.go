@@ -165,33 +165,6 @@ func TestEngineReconciler_BuildWasmPlugin_CacheToken(t *testing.T) {
 		assert.Empty(t, token)
 	})
 
-	t.Run("engine namespace and driver_type are set in pluginConfig", func(t *testing.T) {
-		w := reconciler.buildWasmPlugin(engine, "oci://test.example/wasm:latest", "tok")
-
-		spec, found, err := getNestedMap(w.Object, "spec")
-		require.NoError(t, err)
-		require.True(t, found)
-
-		pluginConfig, found, err := getNestedMap(spec, "pluginConfig")
-		require.NoError(t, err)
-		require.True(t, found)
-
-		gotEngine, found, err := getNestedString(pluginConfig, "engine")
-		require.NoError(t, err)
-		require.True(t, found, "engine must be present in pluginConfig for dataplane tenancy")
-		assert.Equal(t, engine.Name, gotEngine)
-
-		gotNS, found, err := getNestedString(pluginConfig, "namespace")
-		require.NoError(t, err)
-		require.True(t, found, "namespace must be present in pluginConfig for dataplane tenancy")
-		assert.Equal(t, engine.Namespace, gotNS)
-
-		gotDriver, found, err := getNestedString(pluginConfig, "driver_type")
-		require.NoError(t, err)
-		require.True(t, found, "driver_type must be present in pluginConfig for dataplane tenancy")
-		assert.Equal(t, string(wafv1alpha1.DriverTypeWasm), gotDriver)
-	})
-
 	t.Run("enable_filter_state_logs defaults to false", func(t *testing.T) {
 		w := reconciler.buildWasmPlugin(engine, "oci://test.example/wasm:latest", "tok")
 

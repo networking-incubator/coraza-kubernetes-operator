@@ -206,11 +206,6 @@ func (r *EngineReconciler) buildWasmPlugin(engine *wafv1alpha1.Engine, wasmURL s
 		failurePolicy = engine.Spec.FailurePolicy
 	}
 
-	driverType := engine.Spec.Driver.Type
-	if driverType == "" {
-		driverType = wafv1alpha1.DriverTypeWasm
-	}
-
 	pluginConfig := map[string]any{
 		"cache_server_instance":    rulesetKey,
 		"cache_server_cluster":     r.ruleSetCacheServerCluster,
@@ -218,8 +213,6 @@ func (r *EngineReconciler) buildWasmPlugin(engine *wafv1alpha1.Engine, wasmURL s
 		"cache_token":              cacheToken,
 		"enable_filter_state_logs": observabilityEnabled(engine),
 		"engine":                   engine.Name,
-		"namespace":                engine.Namespace,
-		"driver_type":              string(driverType),
 	}
 
 	if engine.Spec.RuleSetCacheServer != nil {
