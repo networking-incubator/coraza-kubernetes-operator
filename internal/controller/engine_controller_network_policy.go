@@ -66,9 +66,8 @@ const (
 	operatorPodLabelKey   = "control-plane"
 	operatorPodLabelValue = "coraza-controller-manager"
 
-	// networkPolicyEngineLabelName and networkPolicyEngineLabelNamespace are the
-	// label keys used to associate a NetworkPolicy with its owning Engine.
-	networkPolicyEngineLabelName      = "waf.k8s.coraza.io/engine-name"
+	// networkPolicyEngineLabelNamespace identifies the owning Engine's namespace
+	// because the NetworkPolicy lives in the operator namespace.
 	networkPolicyEngineLabelNamespace = "waf.k8s.coraza.io/engine-namespace"
 )
 
@@ -80,7 +79,7 @@ const (
 // NetworkPolicy owned by a given Engine.
 func engineNetworkPolicyLabels(engineNamespace, engineName string) client.MatchingLabels {
 	return client.MatchingLabels{
-		networkPolicyEngineLabelName:      engineName,
+		engineNameLabel:                   engineName,
 		networkPolicyEngineLabelNamespace: engineNamespace,
 	}
 }
@@ -234,7 +233,7 @@ func (r *EngineReconciler) buildNetworkPolicy(engine *wafv1alpha1.Engine) *netwo
 			Namespace:    r.operatorNamespace,
 			Labels: map[string]string{
 				"app.kubernetes.io/managed-by":    "coraza-kubernetes-operator",
-				networkPolicyEngineLabelName:      engine.Name,
+				engineNameLabel:                   engine.Name,
 				networkPolicyEngineLabelNamespace: engine.Namespace,
 			},
 		},
@@ -281,7 +280,7 @@ func (r *EngineReconciler) buildNetworkPolicy(engine *wafv1alpha1.Engine) *netwo
 // so they won't trigger reconciles, preventing reconcile loops.
 func networkPolicyPredicate() predicate.Predicate {
 	hasLabel := func(obj client.Object) bool {
-		_, ok := obj.GetLabels()[networkPolicyEngineLabelName]
+		_, ok := obj.GetLabels()[engineNameLabel]
 		return ok
 	}
 
@@ -305,7 +304,7 @@ func networkPolicyPredicate() predicate.Predicate {
 
 func (r *EngineReconciler) findEnginesForNetworkPolicy(_ context.Context, obj client.Object) []ctrl.Request {
 	labels := obj.GetLabels()
-	name := labels[networkPolicyEngineLabelName]
+	name := labels[engineNameLabel]
 	ns := labels[networkPolicyEngineLabelNamespace]
 	if name == "" || ns == "" {
 		return nil

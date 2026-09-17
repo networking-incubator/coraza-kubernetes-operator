@@ -90,6 +90,9 @@ type EngineReconciler struct {
 
 const engineTargetIndex = "spec.target"
 
+// engineNameLabel associates managed resources with their owning Engine.
+const engineNameLabel = "waf.k8s.coraza.io/engine-name"
+
 // engineTargetKey returns the composite index key for an Engine's target.
 func engineTargetKey(targetType wafv1alpha1.EngineTargetType, name string) string {
 	return string(targetType) + "/" + name

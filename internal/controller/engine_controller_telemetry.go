@@ -39,7 +39,6 @@ const (
 	wafLogCollectorProvider = "waf-log-collector"
 
 	telemetryNameSuffix = "-telemetry"
-	engineNameLabel     = "waf.k8s.coraza.io/engine"
 
 	maxTelemetryNameLength = 253
 	maxLabelValueLength    = 63

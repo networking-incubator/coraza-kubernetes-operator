@@ -79,7 +79,7 @@ func TestEngineReconciler_BuildTelemetry(t *testing.T) {
 
 	assert.Equal(t, "coraza-engine-telemetry-engine-telemetry", telemetry.GetName())
 	assert.Equal(t, "waf", telemetry.GetNamespace())
-	assert.Equal(t, "telemetry-engine", telemetry.GetLabels()[engineNameLabel])
+	assert.Equal(t, "telemetry-engine", telemetry.GetLabels()["waf.k8s.coraza.io/engine-name"])
 
 	spec, found, err := getNestedMap(telemetry.Object, "spec")
 	require.NoError(t, err)
