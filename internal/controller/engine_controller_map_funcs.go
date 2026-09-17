@@ -51,7 +51,8 @@ func (r *EngineReconciler) findEnginesForGatewayClass(ctx context.Context, gatew
 		}
 		var gateway gatewayv1.Gateway
 		if err := r.Get(ctx, client.ObjectKey{Namespace: engine.Namespace, Name: engine.Spec.Target.Name}, &gateway); err != nil {
-			return false
+			log.Error(err, "Engine: Failed to get Gateway for GatewayClass", "engine", engine.Name, "namespace", engine.Namespace, "gateway", engine.Spec.Target.Name)
+			return true
 		}
 		return string(gateway.Spec.GatewayClassName) == gatewayClass.GetName()
 	})

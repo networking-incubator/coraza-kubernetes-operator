@@ -27,6 +27,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	wafv1alpha1 "github.com/networking-incubator/coraza-kubernetes-operator/api/v1alpha1"
@@ -88,6 +89,24 @@ func TestGatewayClassWAFCollectorProvider(t *testing.T) {
 	assert.False(t, found)
 	_, found = gatewayClassWAFCollectorProvider(&gatewayv1.GatewayClass{})
 	assert.False(t, found)
+}
+
+func TestEngineReconciler_FindEnginesForGatewayClassRequeuesOnGatewayLookupError(t *testing.T) {
+	ctx := context.Background()
+	engine := utils.NewTestEngine(utils.EngineOptions{
+		Name:        "gateway-lookup-error",
+		Namespace:   "default",
+		GatewayName: "gateway-class-map-lookup-error",
+	})
+	engine.Spec.Observability.Mode = wafv1alpha1.ObservabilityModeEnabled
+
+	class := &gatewayv1.GatewayClass{}
+	class.SetName("istio")
+	reconciler := &EngineReconciler{Client: fake.NewClientBuilder().WithScheme(scheme).WithObjects(engine).Build()}
+	requests := reconciler.findEnginesForGatewayClass(ctx, class)
+	require.Len(t, requests, 1)
+	assert.Equal(t, engine.Name, requests[0].Name)
+	assert.Equal(t, engine.Namespace, requests[0].Namespace)
 }
 
 func TestEngineReconciler_ReconcileTelemetryCreatesAndRemovesTelemetry(t *testing.T) {
