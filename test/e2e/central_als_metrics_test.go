@@ -239,7 +239,7 @@ func TestCentralALSMetricsPipeline(t *testing.T) {
 	configureCentralALSProvider(t, istioName)
 
 	s.Step("declare central collector on the GatewayClass")
-	gatewayClass, err := fw.DynamicClient.Resource(framework.GatewayClassGVR).Get(t.Context(), "istio", metav1.GetOptions{})
+	gatewayClass, err := fw.GatewayAPIClient.GatewayV1().GatewayClasses().Get(t.Context(), "istio", metav1.GetOptions{})
 	require.NoError(t, err)
 	annotations := gatewayClass.GetAnnotations()
 	if annotations == nil {
@@ -248,7 +248,7 @@ func TestCentralALSMetricsPipeline(t *testing.T) {
 	previousCollector, hadPreviousCollector := annotations[centralALSCollectorAnnotation]
 	s.OnCleanup(func() {
 		err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
-			current, err := fw.DynamicClient.Resource(framework.GatewayClassGVR).Get(context.Background(), "istio", metav1.GetOptions{})
+			current, err := fw.GatewayAPIClient.GatewayV1().GatewayClasses().Get(context.Background(), "istio", metav1.GetOptions{})
 			if err != nil {
 				return err
 			}
@@ -262,7 +262,7 @@ func TestCentralALSMetricsPipeline(t *testing.T) {
 				delete(currentAnnotations, centralALSCollectorAnnotation)
 			}
 			current.SetAnnotations(currentAnnotations)
-			_, err = fw.DynamicClient.Resource(framework.GatewayClassGVR).Update(context.Background(), current, metav1.UpdateOptions{})
+			_, err = fw.GatewayAPIClient.GatewayV1().GatewayClasses().Update(context.Background(), current, metav1.UpdateOptions{})
 			return err
 		})
 		if err != nil {
@@ -271,7 +271,7 @@ func TestCentralALSMetricsPipeline(t *testing.T) {
 	})
 	annotations[centralALSCollectorAnnotation] = centralALSCollectorEndpoint
 	gatewayClass.SetAnnotations(annotations)
-	_, err = fw.DynamicClient.Resource(framework.GatewayClassGVR).Update(t.Context(), gatewayClass, metav1.UpdateOptions{})
+	_, err = fw.GatewayAPIClient.GatewayV1().GatewayClasses().Update(t.Context(), gatewayClass, metav1.UpdateOptions{})
 	require.NoError(t, err)
 
 	s.Step("create gateway + WAF")
