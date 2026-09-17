@@ -22,6 +22,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/go-logr/logr"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -29,6 +30,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/validation"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 
@@ -92,6 +94,23 @@ func TestEngineReconciler_BuildTelemetryBoundsLongEngineNames(t *testing.T) {
 	assert.Empty(t, validation.IsValidLabelValue(first.GetLabels()[engineNameLabel]))
 	assert.NotEqual(t, first.GetName(), second.GetName())
 	assert.NotEqual(t, first.GetLabels()[engineNameLabel], second.GetLabels()[engineNameLabel])
+}
+
+func TestEngineReconciler_CleanupNotAcceptedDeletesTelemetry(t *testing.T) {
+	ctx := context.Background()
+	engine := utils.NewTestEngine(utils.EngineOptions{Name: "rejected-telemetry", Namespace: "default"})
+	telemetry := buildTelemetry(engine, wafLogCollectorProvider)
+	reconciler := &EngineReconciler{
+		Client:            fake.NewClientBuilder().WithScheme(scheme).WithObjects(telemetry).Build(),
+		operatorNamespace: "coraza-system",
+	}
+
+	key := types.NamespacedName{Namespace: engine.Namespace, Name: engine.Name}
+	require.NoError(t, reconciler.cleanupNotAccepted(ctx, logr.Discard(), ctrl.Request{NamespacedName: key}, engine))
+	actual := &unstructured.Unstructured{}
+	actual.SetGroupVersionKind(telemetryGVK)
+	err := reconciler.Get(ctx, types.NamespacedName{Namespace: telemetry.GetNamespace(), Name: telemetry.GetName()}, actual)
+	assert.True(t, apierrors.IsNotFound(err), "Telemetry should be deleted when Engine is not accepted, got: %v", err)
 }
 
 func TestGatewayClassWAFCollectorProvider(t *testing.T) {
