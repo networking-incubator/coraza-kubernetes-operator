@@ -18,18 +18,30 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	wafv1alpha1 "github.com/networking-incubator/coraza-kubernetes-operator/api/v1alpha1"
 	"github.com/networking-incubator/coraza-kubernetes-operator/test/utils"
 )
+
+func TestIgnoreTelemetryCleanupError(t *testing.T) {
+	assert.True(t, ignoreTelemetryCleanupError(nil))
+	assert.True(t, ignoreTelemetryCleanupError(apierrors.NewNotFound(schema.GroupResource{Resource: "engines"}, "test")))
+	assert.False(t, ignoreTelemetryCleanupError(errors.New("delete failed")))
+}
+
+func ignoreTelemetryCleanupError(err error) bool {
+	return err == nil || apierrors.IsNotFound(err)
+}
 
 func TestEngineReconciler_BuildTelemetry(t *testing.T) {
 	engine := utils.NewTestEngine(utils.EngineOptions{
@@ -86,7 +98,11 @@ func TestEngineReconciler_ReconcileTelemetryCreatesAndRemovesTelemetry(t *testin
 	class.Spec.ControllerName = "example.com/gateway-controller"
 	class.Annotations = map[string]string{wafCollectorAnnotation: "collector.example.svc.cluster.local:4317"}
 	require.NoError(t, k8sClient.Create(ctx, class))
-	t.Cleanup(func() { _ = k8sClient.Delete(ctx, class) })
+	t.Cleanup(func() {
+		if err := k8sClient.Delete(ctx, class); !ignoreTelemetryCleanupError(err) {
+			t.Errorf("cleanup GatewayClass: %v", err)
+		}
+	})
 
 	gateway := createTestGateway(t, ctx, k8sClient, "telemetry-test-gateway", namespace)
 	gateway.Spec.GatewayClassName = gatewayv1.ObjectName(class.Name)
@@ -99,7 +115,11 @@ func TestEngineReconciler_ReconcileTelemetryCreatesAndRemovesTelemetry(t *testin
 	})
 	engine.Spec.Observability.Mode = wafv1alpha1.ObservabilityModeEnabled
 	require.NoError(t, k8sClient.Create(ctx, engine))
-	t.Cleanup(func() { _ = k8sClient.Delete(ctx, engine) })
+	t.Cleanup(func() {
+		if err := k8sClient.Delete(ctx, engine); !ignoreTelemetryCleanupError(err) {
+			t.Errorf("cleanup Engine: %v", err)
+		}
+	})
 
 	reconciler := &EngineReconciler{Client: k8sClient, Scheme: scheme}
 	require.NoError(t, reconciler.reconcileTelemetry(ctx, engine))
