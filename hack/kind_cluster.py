@@ -306,6 +306,7 @@ def create_gateway(context: str, loadbalancer: bool) -> None:
 
 def deploy_opentelemetry_operator(context: str) -> None:
     """Install the OpenTelemetry Operator via Helm and wait for readiness."""
+    otel_operator_version = require_env("OTEL_OPERATOR_VERSION")
     print("Deploying OpenTelemetry Operator")
     run(f"helm repo add open-telemetry {OTEL_OPERATOR_REPO}")
     run("helm repo update")
@@ -314,6 +315,7 @@ def deploy_opentelemetry_operator(context: str) -> None:
     run(
         f"helm upgrade --install opentelemetry-operator "
         f"open-telemetry/opentelemetry-operator "
+        f"--version {otel_operator_version} "
         f"--namespace {ns} --create-namespace --kube-context {context} "
         f"--set admissionWebhooks.certManager.enabled=false "
         f"--set admissionWebhooks.autoGenerateCert.enabled=true "
