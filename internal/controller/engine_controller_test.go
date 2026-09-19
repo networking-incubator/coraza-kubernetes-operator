@@ -2157,7 +2157,11 @@ func TestEngineReconciler_MetricsRecordOnSuccess(t *testing.T) {
 		Sources:   []wafv1alpha1.SourceReference{{Name: "non-existent-src"}},
 	})
 	require.NoError(t, k8sClient.Create(ctx, ruleSet))
-	t.Cleanup(func() { _ = k8sClient.Delete(ctx, ruleSet) })
+	t.Cleanup(func() {
+		if err := k8sClient.Delete(ctx, ruleSet); err != nil && !apierrors.IsNotFound(err) {
+			t.Errorf("Failed to cleanup ruleSet: %v", err)
+		}
+	})
 
 	engine := utils.NewTestEngine(utils.EngineOptions{
 		Name:        "metrics-engine",
@@ -2166,7 +2170,11 @@ func TestEngineReconciler_MetricsRecordOnSuccess(t *testing.T) {
 		RuleSetName: "metrics-engine-rs",
 	})
 	require.NoError(t, k8sClient.Create(ctx, engine))
-	t.Cleanup(func() { _ = k8sClient.Delete(ctx, engine) })
+	t.Cleanup(func() {
+		if err := k8sClient.Delete(ctx, engine); err != nil && !apierrors.IsNotFound(err) {
+			t.Errorf("Failed to cleanup engine: %v", err)
+		}
+	})
 
 	reg := prometheus.NewRegistry()
 	m, err := NewCorazaMetrics(reg)
@@ -2199,6 +2207,116 @@ func TestEngineReconciler_MetricsRecordOnSuccess(t *testing.T) {
 	// All engineConditionTypes must be emitted (Ready, Progressing, Degraded, Accepted).
 	assert.Equal(t, len(engineConditionTypes), testutil.CollectAndCount(reg, "coraza_engine_condition"),
 		"coraza_engine_condition must emit one series per engineConditionType")
+}
+
+func TestEngineReconciler_TokenDurationAnnotation(t *testing.T) {
+	ctx := context.Background()
+
+	createTestGateway(t, ctx, k8sClient, "test-gw", testNamespace)
+
+	ruleset := utils.NewTestRuleSet(utils.RuleSetOptions{
+		Name:      "token-annotation-ruleset",
+		Namespace: testNamespace,
+	})
+	require.NoError(t, k8sClient.Create(ctx, ruleset))
+	t.Cleanup(func() {
+		if err := k8sClient.Delete(ctx, ruleset); err != nil && !apierrors.IsNotFound(err) {
+			t.Errorf("Failed to cleanup ruleset: %v", err)
+		}
+	})
+
+	engine := utils.NewTestEngine(utils.EngineOptions{
+		Name:        "token-annotation-engine",
+		Namespace:   testNamespace,
+		RuleSetName: ruleset.Name,
+	})
+	// Initial duration: default (1h) implicitly by omitting annotation
+	require.NoError(t, k8sClient.Create(ctx, engine))
+	t.Cleanup(func() {
+		if err := k8sClient.Delete(ctx, engine); err != nil && !apierrors.IsNotFound(err) {
+			t.Errorf("Failed to cleanup engine: %v", err)
+		}
+	})
+
+	reconciler := &EngineReconciler{
+		Client:                    k8sClient,
+		Scheme:                    scheme,
+		Recorder:                  utils.NewTestRecorder(),
+		kubeClient:                testKubeClient,
+		ruleSetCacheServerCluster: "test-cluster",
+		defaultWasmImage:          defaults.DefaultCorazaWasmOCIReference,
+		operatorNamespace:         testNamespace,
+	}
+	req := ctrl.Request{
+		NamespacedName: types.NamespacedName{
+			Name:      engine.Name,
+			Namespace: engine.Namespace,
+		},
+	}
+
+	// First reconcile: adds finalizer
+	_, err := reconciler.Reconcile(ctx, req)
+	require.NoError(t, err)
+	// Second reconcile: provisions token (default 1h)
+	_, err = reconciler.Reconcile(ctx, req)
+	require.NoError(t, err)
+
+	tokenKey := fmt.Sprintf("%s/%s/%s", engine.Namespace, engine.Name, ruleset.Name)
+	val, found := reconciler.tokenStore.Load(tokenKey)
+	require.True(t, found, "tokenStore should have entry")
+	entry1 := val.(*TokenEntry)
+	duration1 := entry1.ExpiresAt.Sub(entry1.IssuedAt)
+	// Token API often caps at something else, or gives exactly 1h.
+	assert.True(t, duration1 > 50*time.Minute && duration1 <= 1*time.Hour, "token duration should be ~1h, got %v", duration1)
+	assert.Equal(t, int64(3600), entry1.ExpirationSeconds)
+
+	// Transition: Change duration to 2h via annotation
+	require.NoError(t, k8sClient.Get(ctx, req.NamespacedName, engine))
+	engine.Annotations = map[string]string{
+		wafv1alpha1.AnnotationTokenDuration: "2h",
+	}
+	require.NoError(t, k8sClient.Update(ctx, engine))
+
+	// Reconcile again: should regenerate token due to new duration
+	_, err = reconciler.Reconcile(ctx, req)
+	require.NoError(t, err)
+
+	val, found = reconciler.tokenStore.Load(tokenKey)
+	require.True(t, found, "tokenStore should have entry")
+	entry2 := val.(*TokenEntry)
+	duration2 := entry2.ExpiresAt.Sub(entry2.IssuedAt)
+	assert.True(t, duration2 > 1*time.Hour+50*time.Minute && duration2 <= 2*time.Hour, "token duration should be ~2h, got %v", duration2)
+	assert.Equal(t, int64(7200), entry2.ExpirationSeconds)
+	assert.NotEqual(t, entry1.Token, entry2.Token, "token should have been regenerated")
+
+	// Transition: Change duration to invalid/too short (1m) -> should ignore and use default
+	require.NoError(t, k8sClient.Get(ctx, req.NamespacedName, engine))
+	engine.Annotations[wafv1alpha1.AnnotationTokenDuration] = "1m"
+	require.NoError(t, k8sClient.Update(ctx, engine))
+
+	_, err = reconciler.Reconcile(ctx, req)
+	require.NoError(t, err)
+
+	val, found = reconciler.tokenStore.Load(tokenKey)
+	require.True(t, found, "tokenStore should have entry")
+	entry3 := val.(*TokenEntry)
+	// Because it ignores 1m and falls back to 1h, and the previous token was 2h, it will regenerate (2h != 1h)
+	assert.Equal(t, int64(3600), entry3.ExpirationSeconds)
+	assert.NotEqual(t, entry2.Token, entry3.Token, "token should have been regenerated because effective duration changed back to default")
+
+	// Transition: Change duration to invalid/too long (1200000h) -> should ignore and use default (which doesn't change anything, so no regenerate)
+	require.NoError(t, k8sClient.Get(ctx, req.NamespacedName, engine))
+	engine.Annotations[wafv1alpha1.AnnotationTokenDuration] = "1200000h"
+	require.NoError(t, k8sClient.Update(ctx, engine))
+
+	_, err = reconciler.Reconcile(ctx, req)
+	require.NoError(t, err)
+
+	val, found = reconciler.tokenStore.Load(tokenKey)
+	require.True(t, found, "tokenStore should have entry")
+	entry4 := val.(*TokenEntry)
+	assert.Equal(t, int64(3600), entry4.ExpirationSeconds)
+	assert.Equal(t, entry3.Token, entry4.Token, "token should NOT have been regenerated because effective duration is still the fallback 1h")
 }
 
 // TestEngineReconciler_DeleteRecreateGetsNewToken verifies that deleting an

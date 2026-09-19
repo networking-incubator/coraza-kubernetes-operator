@@ -88,6 +88,19 @@ type EngineReconciler struct {
 
 const engineTargetIndex = "spec.target"
 
+func tokenDurationAnnotationChangedPredicate() predicate.Predicate {
+	return predicate.Funcs{
+		UpdateFunc: func(e event.UpdateEvent) bool {
+			if e.ObjectOld == nil || e.ObjectNew == nil {
+				return false
+			}
+			oldAnn := e.ObjectOld.GetAnnotations()[wafv1alpha1.AnnotationTokenDuration]
+			newAnn := e.ObjectNew.GetAnnotations()[wafv1alpha1.AnnotationTokenDuration]
+			return oldAnn != newAnn
+		},
+	}
+}
+
 // engineTargetKey returns the composite index key for an Engine's target.
 func engineTargetKey(targetType wafv1alpha1.EngineTargetType, name string) string {
 	return string(targetType) + "/" + name
@@ -113,7 +126,10 @@ func (r *EngineReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	})
 
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&wafv1alpha1.Engine{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
+		For(&wafv1alpha1.Engine{}, builder.WithPredicates(predicate.Or(
+			predicate.GenerationChangedPredicate{},
+			tokenDurationAnnotationChangedPredicate(),
+		))).
 		Owns(wasmPlugin).
 		Watches(&gatewayv1.Gateway{}, handler.EnqueueRequestsFromMapFunc(r.findEnginesForGateway)).
 		Watches(&wafv1alpha1.RuleSet{}, handler.EnqueueRequestsFromMapFunc(r.findEnginesForRuleSet)).

@@ -93,7 +93,7 @@ func (r *EngineReconciler) provisionWasmDriver(ctx context.Context, log logr.Log
 	r.cleanupStaleTokens(req.Namespace, req.Name, engine.Spec.RuleSet.Name)
 
 	logDebug(log, req, "Engine", "Ensuring cache client token")
-	cacheToken, renewAt, err := r.ensureCacheToken(ctx, log, req, saName, engine.Spec.RuleSet.Name)
+	cacheToken, renewAt, err := r.ensureCacheToken(ctx, log, req, saName, engine.Spec.RuleSet.Name, engine)
 	if err != nil {
 		if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "Engine", engine, &engine.Status.Conditions, engine.Generation, "TokenFailed", fmt.Sprintf("Failed to ensure cache client token: %v", err)); patchErr != nil {
 			return ctrl.Result{}, patchErr

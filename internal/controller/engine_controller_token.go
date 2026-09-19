@@ -52,18 +52,16 @@ const (
 	tokenRenewalFraction = 0.8
 )
 
-// tokenExpirationSeconds is tokenDuration in seconds for the TokenRequest API.
-var tokenExpirationSeconds = int64(tokenDuration.Seconds())
-
 // -----------------------------------------------------------------------------
 // TokenEntry
 // -----------------------------------------------------------------------------
 
 // TokenEntry holds a cache client token and its issuance/expiry times.
 type TokenEntry struct {
-	Token     string
-	IssuedAt  time.Time
-	ExpiresAt time.Time
+	Token             string
+	IssuedAt          time.Time
+	ExpiresAt         time.Time
+	ExpirationSeconds int64
 }
 
 // RenewalDeadline returns the absolute time at which the token should be renewed.
@@ -165,25 +163,41 @@ func (r *EngineReconciler) ensureCacheClientServiceAccount(ctx context.Context, 
 // If the stored token is missing or near expiry, a new one is generated via
 // the Kubernetes TokenRequest API. The token audience encodes the RuleSet
 // being accessed ("coraza-cache:namespace/rulesetName").
-func (r *EngineReconciler) ensureCacheToken(ctx context.Context, log logr.Logger, req ctrl.Request, saName, rulesetName string) (string, time.Time, error) {
+func (r *EngineReconciler) ensureCacheToken(ctx context.Context, log logr.Logger, req ctrl.Request, saName, rulesetName string, engine *wafv1alpha1.Engine) (string, time.Time, error) {
 	key := fmt.Sprintf("%s/%s/%s", req.Namespace, req.Name, rulesetName)
 	audience := rcache.Audience(fmt.Sprintf("%s/%s", req.Namespace, rulesetName))
 
-	// Check if we have a valid cached token.
+	expirationSeconds := int64(tokenDuration.Seconds())
+	if engine.Annotations != nil {
+		if val, ok := engine.Annotations[wafv1alpha1.AnnotationTokenDuration]; ok {
+			if d, err := time.ParseDuration(val); err == nil {
+				secs := int64(d.Seconds())
+				if secs >= 600 && secs <= 4294967296 {
+					expirationSeconds = secs
+				} else {
+					log.Info("Token duration out of bounds, ignoring annotation", "annotation", wafv1alpha1.AnnotationTokenDuration, "value", val, "seconds", secs, "minSeconds", 600, "maxSeconds", 4294967296)
+				}
+			} else {
+				log.Error(err, "Failed to parse token duration from annotation", "annotation", wafv1alpha1.AnnotationTokenDuration, "value", val)
+			}
+		}
+	}
+
+	// Check if we have a valid cached token with the same requested duration.
 	if val, ok := r.tokenStore.Load(key); ok {
 		entry := val.(*TokenEntry)
-		if !entry.NeedsRenewal() {
+		if !entry.NeedsRenewal() && entry.ExpirationSeconds == expirationSeconds {
 			logDebug(log, req, "Engine", "Using cached token", "expiresAt", entry.ExpiresAt)
 			return entry.Token, entry.RenewalDeadline(), nil
 		}
 	}
 
-	logInfo(log, req, "Engine", "Generating new cache client token", "serviceAccount", saName)
+	logInfo(log, req, "Engine", "Generating new cache client token", "serviceAccount", saName, "duration", time.Duration(expirationSeconds)*time.Second)
 
 	tokenReq := &authv1.TokenRequest{
 		Spec: authv1.TokenRequestSpec{
 			Audiences:         []string{audience},
-			ExpirationSeconds: &tokenExpirationSeconds,
+			ExpirationSeconds: &expirationSeconds,
 		},
 	}
 
@@ -200,7 +214,7 @@ func (r *EngineReconciler) ensureCacheToken(ctx context.Context, log logr.Logger
 
 	now := time.Now()
 	expiresAt := result.Status.ExpirationTimestamp.Time
-	entry := &TokenEntry{Token: result.Status.Token, IssuedAt: now, ExpiresAt: expiresAt}
+	entry := &TokenEntry{Token: result.Status.Token, IssuedAt: now, ExpiresAt: expiresAt, ExpirationSeconds: expirationSeconds}
 	r.tokenStore.Store(key, entry)
 
 	// Lazily prune expired entries to prevent unbounded growth when
