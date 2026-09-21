@@ -2,7 +2,7 @@
   "private": true,
   "description": "PostCSS dependencies for Hugo/Docsy documentation build",
   "dependencies": {
-    "autoprefixer": "10.5.5",
+    "autoprefixer": "10.6.1",
     "postcss": "8.5.28",
     "postcss-cli": "12.0.0"
   }
