@@ -77,7 +77,10 @@ func TestResolveDefaultWasmImage(t *testing.T) {
 	})
 
 	t.Run("falls back to hardcoded default when env var unset", func(t *testing.T) {
-		assert.Equal(t, defaults.DefaultCorazaWasmOCIReference, resolveDefaultWasmImage())
+		const defaultWasmImage = "oci://ghcr.io/networking-incubator/coraza-proxy-wasm@sha256:4ceac8465dc94dbb9c7bf0e2a79a1c6ad9eb27bd80bcfe44843f362b6cb8c329"
+		assert.Equal(t, defaultWasmImage, defaults.DefaultCorazaWasmOCIReference)
+		assert.Equal(t, defaultWasmImage, resolveDefaultWasmImage())
+		assert.NoError(t, validateDefaultWasmImage(defaultWasmImage))
 	})
 }
 

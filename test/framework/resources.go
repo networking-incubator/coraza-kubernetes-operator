@@ -77,6 +77,11 @@ var (
 		Group: "gateway.networking.k8s.io", Version: "v1", Resource: "gateways",
 	}
 
+	// GatewayClassGVR is the GroupVersionResource for GatewayClass resources.
+	GatewayClassGVR = schema.GroupVersionResource{
+		Group: "gateway.networking.k8s.io", Version: "v1", Resource: "gatewayclasses",
+	}
+
 	// HTTPRouteGVR is the GroupVersionResource for HTTPRoute resources.
 	HTTPRouteGVR = schema.GroupVersionResource{
 		Group: "gateway.networking.k8s.io", Version: "v1", Resource: "httproutes",
@@ -85,6 +90,11 @@ var (
 	// WasmPluginGVR is the GroupVersionResource for WasmPlugin resources.
 	WasmPluginGVR = schema.GroupVersionResource{
 		Group: "extensions.istio.io", Version: "v1alpha1", Resource: "wasmplugins",
+	}
+
+	// TelemetryGVR is the GroupVersionResource for Istio Telemetry resources.
+	TelemetryGVR = schema.GroupVersionResource{
+		Group: "telemetry.istio.io", Version: "v1", Resource: "telemetries",
 	}
 )
 
@@ -111,6 +121,9 @@ type EngineOpts struct {
 	// PollInterval is the ruleSetCacheServer poll interval in seconds.
 	// Defaults to 5.
 	PollInterval int32
+
+	// EnableObservability sets spec.observability.mode to Enabled.
+	EnableObservability bool
 }
 
 // -----------------------------------------------------------------------------
@@ -248,6 +261,12 @@ func BuildEngine(namespace, name string, opts EngineOpts) *unstructured.Unstruct
 	if opts.GatewayName == "" {
 		opts.GatewayName = "gateway"
 	}
+	var observability wafv1alpha1.ObservabilityConfig
+	if opts.EnableObservability {
+		observability = wafv1alpha1.ObservabilityConfig{
+			Mode: wafv1alpha1.ObservabilityModeEnabled,
+		}
+	}
 
 	engine := &wafv1alpha1.Engine{
 		TypeMeta: metav1.TypeMeta{
@@ -268,6 +287,7 @@ func BuildEngine(namespace, name string, opts EngineOpts) *unstructured.Unstruct
 				Provider: wafv1alpha1.EngineTargetProviderIstio,
 			},
 			FailurePolicy: opts.FailurePolicy,
+			Observability: observability,
 			RuleSetCacheServer: &wafv1alpha1.RuleSetCacheServerConfig{
 				PollIntervalSeconds: opts.PollInterval,
 			},

@@ -22,9 +22,11 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	wafv1alpha1 "github.com/networking-incubator/coraza-kubernetes-operator/api/v1alpha1"
@@ -45,6 +47,7 @@ import (
 
 // WasmPluginNamePrefix is the prefix used for all created WasmPlugin resources
 const WasmPluginNamePrefix = "coraza-engine-"
+const telemetryRetryAfter = 30 * time.Second
 
 // wasmPluginName returns the deterministic name for the WasmPlugin child
 // resource derived from the given Engine name. All call sites MUST use this
@@ -109,6 +112,23 @@ func (r *EngineReconciler) provisionWasmDriver(ctx context.Context, log logr.Log
 		return ctrl.Result{}, err
 	}
 
+	// Observability is optional: a missing or temporarily invalid collector
+	// declaration must not block WAF provisioning or traffic handling.
+	telemetryErr := r.reconcileTelemetry(ctx, engine)
+	if observabilityEnabled(engine) {
+		patch := client.MergeFrom(engine.DeepCopy())
+		before := snapshotConditions(engine.Status.Conditions)
+		setObservabilityReady(&engine.Status.Conditions, engine.Generation, telemetryErr)
+		if err := r.Status().Patch(ctx, engine, patch); err != nil {
+			return ctrl.Result{}, err
+		}
+		logConditionTransitions(log, req, "Engine", before, engine.Status.Conditions)
+	}
+	if telemetryErr != nil {
+		logError(log, req, "Engine", telemetryErr, "Failed to reconcile optional Telemetry")
+		r.Recorder.Eventf(engine, nil, "Warning", "TelemetryProvisioningFailed", "Provision", "Failed to reconcile Telemetry: %v", telemetryErr)
+	}
+
 	logDebug(log, req, "Engine", "Updating status after successful provisioning")
 	if patchErr := patchReady(ctx, r.Status(), r.Recorder, log, req, "Engine", engine, &engine.Status.Conditions, engine.Generation, "Configured", "WasmPlugin successfully created/updated"); patchErr != nil {
 		return ctrl.Result{}, patchErr
@@ -118,9 +138,25 @@ func (r *EngineReconciler) provisionWasmDriver(ctx context.Context, log logr.Log
 	// Schedule re-reconciliation at the token's renewal deadline. This is a
 	// single requeue that fires exactly when the token needs refreshing,
 	// avoiding repeated intermediate reconciliations.
-	requeueAfter := max(time.Until(renewAt), time.Second)
+	requeueAfter := telemetryRequeueAfter(renewAt, telemetryErr)
 	logDebug(log, req, "Engine", "Scheduling token renewal", "requeueAfter", requeueAfter)
 	return ctrl.Result{RequeueAfter: requeueAfter}, nil
+}
+
+func setObservabilityReady(conditions *[]metav1.Condition, generation int64, telemetryErr error) {
+	if telemetryErr != nil {
+		setConditionFalse(conditions, generation, conditionObservabilityReady, "TelemetryProvisioningFailed", telemetryErr.Error())
+		return
+	}
+	setConditionTrue(conditions, generation, conditionObservabilityReady, "TelemetryReady", "Telemetry successfully created or updated")
+}
+
+func telemetryRequeueAfter(renewAt time.Time, telemetryErr error) time.Duration {
+	requeueAfter := max(time.Until(renewAt), time.Second)
+	if telemetryErr != nil && requeueAfter > telemetryRetryAfter {
+		return telemetryRetryAfter
+	}
+	return requeueAfter
 }
 
 // applyWasmPlugin builds the WasmPlugin resource, sets the controller reference,
@@ -171,10 +207,12 @@ func (r *EngineReconciler) buildWasmPlugin(engine *wafv1alpha1.Engine, wasmURL s
 	}
 
 	pluginConfig := map[string]any{
-		"cache_server_instance": rulesetKey,
-		"cache_server_cluster":  r.ruleSetCacheServerCluster,
-		"failure_policy":        string(failurePolicy),
-		"cache_token":           cacheToken,
+		"cache_server_instance":    rulesetKey,
+		"cache_server_cluster":     r.ruleSetCacheServerCluster,
+		"failure_policy":           string(failurePolicy),
+		"cache_token":              cacheToken,
+		"enable_filter_state_logs": observabilityEnabled(engine),
+		"engine":                   engine.Name,
 	}
 
 	if engine.Spec.RuleSetCacheServer != nil {
@@ -226,6 +264,11 @@ func (r *EngineReconciler) buildWasmPlugin(engine *wafv1alpha1.Engine, wasmURL s
 	}
 
 	return wasmPlugin
+}
+
+func observabilityEnabled(engine *wafv1alpha1.Engine) bool {
+	return engine != nil &&
+		engine.Spec.Observability.Mode == wafv1alpha1.ObservabilityModeEnabled
 }
 
 // -----------------------------------------------------------------------------

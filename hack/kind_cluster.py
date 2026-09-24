@@ -8,6 +8,7 @@ import argparse
 import ipaddress
 import json
 import os
+import re
 import sys
 
 from lib import (
@@ -25,6 +26,8 @@ GATEWAY_API_URL = (
     "/releases/download/v1.6.1/standard-install.yaml"
 )
 SAIL_REPO = "https://istio-ecosystem.github.io/sail-operator"
+OTEL_OPERATOR_REPO = "https://open-telemetry.github.io/opentelemetry-helm-charts"
+KIND_CLUSTER_NAME_RE = re.compile(r"[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?")
 
 
 # ---------------------------------------------------------------------------
@@ -43,6 +46,13 @@ def require_env(key: str) -> str:
 
 def get_kind_context(name: str) -> str:
     return f"kind-{name}"
+
+
+def kind_cluster_name(value: str) -> str:
+    """Accept the DNS-label names KIND uses for clusters."""
+    if not KIND_CLUSTER_NAME_RE.fullmatch(value):
+        raise argparse.ArgumentTypeError("must be a lowercase DNS label up to 63 characters")
+    return value
 
 
 # ---------------------------------------------------------------------------
@@ -299,6 +309,38 @@ def create_gateway(context: str, loadbalancer: bool) -> None:
 
 
 # ---------------------------------------------------------------------------
+# OpenTelemetry Operator
+# ---------------------------------------------------------------------------
+
+
+def deploy_opentelemetry_operator(context: str) -> None:
+    """Install the OpenTelemetry Operator via Helm and wait for readiness."""
+    otel_operator_version = require_env("OTEL_OPERATOR_VERSION")
+    print("Deploying OpenTelemetry Operator")
+    run(f"helm repo add open-telemetry {OTEL_OPERATOR_REPO}")
+    run("helm repo update")
+
+    ns = "opentelemetry-operator-system"
+    run(
+        f"helm upgrade --install opentelemetry-operator "
+        f"open-telemetry/opentelemetry-operator "
+        f"--version {otel_operator_version} "
+        f"--namespace {ns} --create-namespace --kube-context {context} "
+        f"--set admissionWebhooks.certManager.enabled=false "
+        f"--set admissionWebhooks.autoGenerateCert.enabled=true "
+        f'--set "manager.collectorImage.repository='
+        f'ghcr.io/open-telemetry/opentelemetry-collector-releases/'
+        f'opentelemetry-collector-contrib"'
+    )
+
+    run(
+        f"kubectl --context {context} wait --for=condition=Available "
+        f"deployment/opentelemetry-operator "
+        f"-n {ns} --timeout=300s"
+    )
+
+
+# ---------------------------------------------------------------------------
 # Operator Deployment
 # ---------------------------------------------------------------------------
 
@@ -357,6 +399,11 @@ def setup_cluster(name: str) -> None:
     deploy_istio_sail(context)
     create_istio_control_plane(context)
     create_gateway_class(context)
+    # Default off: OTC sidecars overload CI load tests. Enable with make cluster.kind.otel.
+    if os.environ.get("INSTALL_OTEL_OPERATOR", "").lower() == "true":
+        deploy_opentelemetry_operator(context)
+    else:
+        print("Skipping OpenTelemetry Operator (set INSTALL_OTEL_OPERATOR=true to enable)")
     create_gateway(context, metallb_enabled)
     deploy_coraza_operator(context)
 
@@ -371,7 +418,7 @@ def setup_cluster(name: str) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Manage KIND integration clusters")
     parser.add_argument("action", choices=["create", "delete", "setup"])
-    parser.add_argument("--name", default="coraza-kubernetes-operator-integration")
+    parser.add_argument("--name", default="coraza-kubernetes-operator-integration", type=kind_cluster_name)
     args = parser.parse_args()
 
     if args.action == "create":

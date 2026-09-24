@@ -65,7 +65,7 @@ func createTestGateway(t *testing.T, ctx context.Context, c client.Client, name,
 	}
 	require.NoError(t, c.Create(ctx, gw))
 	t.Cleanup(func() {
-		if err := c.Delete(context.Background(), gw); err != nil && !apierrors.IsNotFound(err) {
+		if err := c.Delete(ctx, gw); err != nil && !apierrors.IsNotFound(err) {
 			t.Logf("Failed to delete gateway: %v", err)
 		}
 	})
@@ -163,6 +163,43 @@ func TestEngineReconciler_BuildWasmPlugin_CacheToken(t *testing.T) {
 		require.NoError(t, err)
 		require.True(t, found, "cache_token key should exist even when empty")
 		assert.Empty(t, token)
+	})
+
+	t.Run("enable_filter_state_logs defaults to false", func(t *testing.T) {
+		w := reconciler.buildWasmPlugin(engine, "oci://test.example/wasm:latest", "tok")
+
+		spec, found, err := getNestedMap(w.Object, "spec")
+		require.NoError(t, err)
+		require.True(t, found)
+
+		pluginConfig, found, err := getNestedMap(spec, "pluginConfig")
+		require.NoError(t, err)
+		require.True(t, found)
+
+		got, ok := pluginConfig["enable_filter_state_logs"].(bool)
+		require.True(t, ok, "enable_filter_state_logs must be a bool in pluginConfig")
+		assert.False(t, got, "omitted spec.observability must disable Istio ALS filter state")
+	})
+
+	t.Run("observability enables filter-state logs", func(t *testing.T) {
+		enabled := engine.DeepCopy()
+		enabled.Spec.Observability = wafv1alpha1.ObservabilityConfig{
+			Mode: wafv1alpha1.ObservabilityModeEnabled,
+		}
+
+		w := reconciler.buildWasmPlugin(enabled, "oci://test.example/wasm:latest", "tok")
+
+		spec, found, err := getNestedMap(w.Object, "spec")
+		require.NoError(t, err)
+		require.True(t, found)
+
+		pluginConfig, found, err := getNestedMap(spec, "pluginConfig")
+		require.NoError(t, err)
+		require.True(t, found)
+
+		got, ok := pluginConfig["enable_filter_state_logs"].(bool)
+		require.True(t, ok, "enable_filter_state_logs must be a bool in pluginConfig")
+		assert.True(t, got, "spec.observability.mode=Enabled must enable filter state for the WASM driver")
 	})
 }
 
@@ -1051,12 +1088,15 @@ func TestEngineReconciler_DegradedWhenRuleSetDegraded(t *testing.T) {
 		Namespace:   testNamespace,
 		RuleSetName: ruleSet.Name,
 	})
+	engine.Spec.Observability.Mode = wafv1alpha1.ObservabilityModeDisabled
 	require.NoError(t, k8sClient.Create(ctx, engine))
 	t.Cleanup(func() {
 		if err := k8sClient.Delete(ctx, engine); err != nil {
 			t.Logf("Failed to delete Engine: %v", err)
 		}
 	})
+	telemetry := buildTelemetry(engine, wafLogCollectorProvider)
+	require.NoError(t, k8sClient.Create(ctx, telemetry))
 
 	t.Log("Reconciling Engine")
 	recorder := utils.NewFakeRecorder()
@@ -1105,6 +1145,9 @@ func TestEngineReconciler_DegradedWhenRuleSetDegraded(t *testing.T) {
 
 	assert.True(t, recorder.HasEvent("Warning", "RuleSetDegraded"),
 		"expected Warning/RuleSetDegraded event; got: %v", recorder.Events)
+
+	err = k8sClient.Get(ctx, types.NamespacedName{Namespace: engine.Namespace, Name: telemetry.GetName()}, telemetry)
+	assert.True(t, apierrors.IsNotFound(err), "Telemetry should be deleted when observability is disabled, got: %v", err)
 }
 
 func TestEngineReconciler_ValidationAllowsOmittedWasmImage(t *testing.T) {
@@ -1260,7 +1303,29 @@ func TestEngineReconciler_TokenStoreIntegration(t *testing.T) {
 	t.Run("token in WasmPlugin matches tokenStore", func(t *testing.T) {
 		val, _ := reconciler.tokenStore.Load(tokenKey)
 		storedToken := val.(*TokenEntry).Token
-		assertWasmPluginCacheToken(t, ctx, engine.Name, engine.Namespace, storedToken)
+
+		wasmPlugin := &unstructured.Unstructured{}
+		wasmPlugin.SetGroupVersionKind(schema.GroupVersionKind{
+			Group:   "extensions.istio.io",
+			Version: "v1alpha1",
+			Kind:    "WasmPlugin",
+		})
+		err := k8sClient.Get(ctx, types.NamespacedName{
+			Name:      wasmPluginName(engine.Name),
+			Namespace: engine.Namespace,
+		}, wasmPlugin)
+		require.NoError(t, err)
+
+		spec, found, err := getNestedMap(wasmPlugin.Object, "spec")
+		require.NoError(t, err)
+		require.True(t, found)
+		pluginConfig, found, err := getNestedMap(spec, "pluginConfig")
+		require.NoError(t, err)
+		require.True(t, found)
+		cacheToken, found, err := getNestedString(pluginConfig, "cache_token")
+		require.NoError(t, err)
+		require.True(t, found)
+		assert.Equal(t, storedToken, cacheToken, "WasmPlugin cache_token should match tokenStore entry")
 	})
 
 	t.Run("second reconcile reuses cached token", func(t *testing.T) {

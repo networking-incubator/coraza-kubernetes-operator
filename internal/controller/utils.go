@@ -44,10 +44,11 @@ import (
 const debugLevel = 1
 
 const (
-	conditionReady       = "Ready"
-	conditionDegraded    = "Degraded"
-	conditionProgressing = "Progressing"
-	conditionAccepted    = "Accepted"
+	conditionReady              = "Ready"
+	conditionDegraded           = "Degraded"
+	conditionProgressing        = "Progressing"
+	conditionAccepted           = "Accepted"
+	conditionObservabilityReady = "ObservabilityReady"
 )
 
 // logInfo logs an info-level message with consistent structured context.
@@ -119,7 +120,7 @@ func extractStatusErrorFields(err error) []any {
 
 // trackedConditionTypes are the operator-owned condition types whose transitions
 // are logged at Info level.
-var trackedConditionTypes = []string{conditionReady, conditionDegraded, conditionProgressing, conditionAccepted}
+var trackedConditionTypes = []string{conditionReady, conditionDegraded, conditionProgressing, conditionAccepted, conditionObservabilityReady}
 
 // conditionSnapshot captures the Status and Reason of each tracked condition
 // type before mutation. A nil entry means the condition was absent.

@@ -172,6 +172,20 @@ func (s *Scenario) ApplyManifest(namespace, path string) {
 	})
 }
 
+// istioProxyContainer returns "istio-proxy" if present, else the first container name.
+// It returns an empty string when there are no containers.
+func istioProxyContainer(containers []corev1.Container) string {
+	if len(containers) == 0 {
+		return ""
+	}
+	for _, c := range containers {
+		if c.Name == "istio-proxy" {
+			return c.Name
+		}
+	}
+	return containers[0].Name
+}
+
 // StreamGatewayLogs opens a log stream for the named Gateway's pod and returns
 // an io.ReadCloser. The stream follows logs in real-time. Callers may close
 // the stream early if desired; cleanup is also registered automatically to
@@ -219,7 +233,7 @@ func (s *Scenario) StreamGatewayLogs(namespace, gatewayName string) io.ReadClose
 					continue
 				}
 				podName = pod.Name
-				containerName = pod.Spec.Containers[0].Name
+				containerName = istioProxyContainer(pod.Spec.Containers)
 				return true
 			}
 			return false

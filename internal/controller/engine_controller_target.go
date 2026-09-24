@@ -83,10 +83,18 @@ func (r *EngineReconciler) rejectTarget(ctx context.Context, log logr.Logger, re
 }
 
 // cleanupNotAccepted removes child resources that were created when the Engine
-// was previously accepted (WasmPlugin, NetworkPolicy, cached token). This
+// was previously accepted (WasmPlugin, Telemetry, NetworkPolicy, cached token). This
 // prevents stale WasmPlugins from enforcing rules for an Engine that is no
 // longer accepted due to TargetNotFound or TargetConflict.
 func (r *EngineReconciler) cleanupNotAccepted(ctx context.Context, log logr.Logger, req ctrl.Request, engine *wafv1alpha1.Engine) error {
+	telemetry := &unstructured.Unstructured{}
+	telemetry.SetGroupVersionKind(telemetryGVK)
+	telemetry.SetNamespace(engine.Namespace)
+	telemetry.SetName(telemetryName(engine.Name))
+	if err := r.deleteTelemetry(ctx, telemetry); err != nil {
+		return err
+	}
+
 	wasmPlugin := &unstructured.Unstructured{}
 	wasmPlugin.SetGroupVersionKind(schema.GroupVersionKind{
 		Group:   "extensions.istio.io",

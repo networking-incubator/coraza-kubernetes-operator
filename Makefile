@@ -35,6 +35,8 @@ PROM_VERSION ?= 3.12.0
 PROM_SHA256_LINUX_AMD64 ?= 20da47f8e5303f74aecb78edd7f7e39041dac08ac4939dba75efd7a900ae8867
 METALLB_VERSION ?= 0.16.1
 METALLB_POOL_SIZE ?= 128 # Defines the size of MetalLB pool, when being used
+# OpenTelemetry Operator chart used by make cluster.kind.otel.
+OTEL_OPERATOR_VERSION ?= 0.114.0
 
 VERSION ?= v0.0.0-dev
 IMAGE_REGISTRY ?= ghcr.io/networking-incubator
@@ -178,6 +180,13 @@ release.operatorhub: ## Submit OLM bundle to OperatorHub community-operators
 # Deployment
 # ------------------------------------------------------------------------------
 
+HELM_RELEASE_NAME ?= coraza-kubernetes-operator
+HELM_RELEASE_NAMESPACE ?= coraza-system
+# Extra flags for helm upgrade --install (e.g. HELM_EXTRA_ARGS='--set foo=bar').
+HELM_EXTRA_ARGS ?=
+# KIND pre-creates coraza-system for Istio; do not let Helm manage that Namespace resource.
+HELM_CREATE_NAMESPACE ?= false
+
 .PHONY: install
 install: deploy ## Alias for deploy (Helm installs CRDs and operator together)
 
@@ -189,10 +198,12 @@ deploy: helm.sync ## Deploy operator into the cluster using Helm (dev logging en
 	helm upgrade --install $(HELM_RELEASE_NAME) $(HELM_CHART_DIR) \
 		--namespace $(HELM_RELEASE_NAMESPACE) \
 		--create-namespace \
+		--set createNamespace=$(HELM_CREATE_NAMESPACE) \
 		--set image.repository=$(CONTROLLER_MANAGER_CONTAINER_IMAGE_BASE) \
 		--set image.tag=$(CONTROLLER_MANAGER_CONTAINER_IMAGE_TAG) \
 		--set istio.revision=$(ISTIO_GATEWAY_REVISION) \
-		--set logging.development=true
+		--set logging.development=true \
+		$(HELM_EXTRA_ARGS)
 
 .PHONY: undeploy
 undeploy: ## Remove operator from the cluster using Helm
@@ -243,6 +254,13 @@ lint.api: kube-api-linter
 # ------------------------------------------------------------------------------
 
 .PHONY: cluster.kind
+cluster.kind:
+	ISTIO_VERSION=${ISTIO_VERSION} METALLB_VERSION=${METALLB_VERSION} METALLB_POOL_SIZE=${METALLB_POOL_SIZE} OTEL_OPERATOR_VERSION=${OTEL_OPERATOR_VERSION} CONTROLLER_MANAGER_CONTAINER_IMAGE_BASE=${CONTROLLER_MANAGER_CONTAINER_IMAGE_BASE} CONTROLLER_MANAGER_CONTAINER_IMAGE_TAG=${CONTROLLER_MANAGER_CONTAINER_IMAGE_TAG} python3 hack/kind_cluster.py setup
+
+# cluster.kind + OpenTelemetry Operator (central collector CRDs). Plain cluster.kind skips OTel.
+.PHONY: cluster.kind.otel
+cluster.kind.otel:
+	INSTALL_OTEL_OPERATOR=true $(MAKE) cluster.kind
 cluster.kind: ## Create the KIND test cluster
 	ISTIO_VERSION=${ISTIO_VERSION} METALLB_VERSION=${METALLB_VERSION} METALLB_POOL_SIZE=${METALLB_POOL_SIZE} CONTROLLER_MANAGER_CONTAINER_IMAGE_BASE=${CONTROLLER_MANAGER_CONTAINER_IMAGE_BASE} CONTROLLER_MANAGER_CONTAINER_IMAGE_TAG=${CONTROLLER_MANAGER_CONTAINER_IMAGE_TAG} python3 hack/kind_cluster.py setup --name ${KIND_CLUSTER_NAME}
 
@@ -281,7 +299,7 @@ test.integration:
 .PHONY: test.e2e
 test.e2e:
 	go clean -testcache
-	KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) ISTIO_VERSION=${ISTIO_VERSION} ISTIO_GATEWAY_REVISION=${ISTIO_GATEWAY_REVISION} go test -tags=e2e ./test/e2e/... -v
+	KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) ISTIO_VERSION=${ISTIO_VERSION} ISTIO_GATEWAY_REVISION=${ISTIO_GATEWAY_REVISION} go test -tags=e2e ./test/e2e/... -v $(TEST_ARGS)
 
 .PHONY: test.tools
 test.tools:
@@ -733,7 +751,16 @@ set -e; \
 package=$(2)@$(3) ;\
 echo "Downloading $${package}" ;\
 rm -f "$(1)" ;\
-GOBIN="$(LOCALBIN)" go install $${package} ;\
+n=0 ;\
+until GOBIN="$(LOCALBIN)" go install $${package}; do \
+	n=$$((n+1)) ;\
+	if [ $$n -ge 3 ]; then \
+		echo "go install $${package} failed after 3 attempts" ;\
+		exit 1 ;\
+	fi ;\
+	echo "go install $${package} failed (attempt $$n/3), retrying..." ;\
+	sleep $$((n*2)) ;\
+done ;\
 mv "$(LOCALBIN)/$$(basename "$(1)")" "$(1)-$(3)" ;\
 } ;\
 ln -sf "$$(realpath "$(1)-$(3)")" "$(1)"

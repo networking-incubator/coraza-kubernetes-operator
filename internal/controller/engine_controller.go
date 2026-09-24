@@ -58,6 +58,8 @@ import (
 // +kubebuilder:rbac:groups=waf.k8s.coraza.io,resources=rulesets,verbs=get;list;watch
 // +kubebuilder:rbac:groups=waf.k8s.coraza.io,resources=rulesets/status,verbs=get
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gateways,verbs=get;list;watch
+// +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gatewayclasses,verbs=get;list;watch
+// +kubebuilder:rbac:groups=telemetry.istio.io,resources=telemetries,verbs=get;list;watch;create;update;patch;delete
 
 // -----------------------------------------------------------------------------
 // EngineReconciler
@@ -88,6 +90,9 @@ type EngineReconciler struct {
 
 const engineTargetIndex = "spec.target"
 
+// engineNameLabel associates managed resources with their owning Engine.
+const engineNameLabel = "waf.k8s.coraza.io/engine-name"
+
 // engineTargetKey returns the composite index key for an Engine's target.
 func engineTargetKey(targetType wafv1alpha1.EngineTargetType, name string) string {
 	return string(targetType) + "/" + name
@@ -111,11 +116,18 @@ func (r *EngineReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Version: "v1alpha1",
 		Kind:    "WasmPlugin",
 	})
+	telemetry := &unstructured.Unstructured{}
+	telemetry.SetGroupVersionKind(telemetryGVK)
 
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&wafv1alpha1.Engine{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		Owns(wasmPlugin).
-		Watches(&gatewayv1.Gateway{}, handler.EnqueueRequestsFromMapFunc(r.findEnginesForGateway)).
+		Owns(telemetry, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
+		// GenerationChanged only: status/managedFields updates must not requeue Engines.
+		Watches(&gatewayv1.Gateway{}, handler.EnqueueRequestsFromMapFunc(r.findEnginesForGateway),
+			builder.WithPredicates(predicate.GenerationChangedPredicate{})).
+		Watches(&gatewayv1.GatewayClass{}, handler.EnqueueRequestsFromMapFunc(r.findEnginesForGatewayClass),
+			builder.WithPredicates(gatewayClassWatchPredicate())).
 		Watches(&wafv1alpha1.RuleSet{}, handler.EnqueueRequestsFromMapFunc(r.findEnginesForRuleSet)).
 		Watches(&wafv1alpha1.Engine{}, r.competingEngineHandler(), builder.WithPredicates(
 			predicate.Funcs{
@@ -266,6 +278,11 @@ func (r *EngineReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	}
 
 	logDebug(log, req, "Engine", "Checking referenced RuleSet status")
+	if !observabilityEnabled(&engine) {
+		if err := r.reconcileTelemetry(ctx, &engine); err != nil {
+			return ctrl.Result{}, err
+		}
+	}
 	if degraded, err := r.isRuleSetDegraded(ctx, log, req, &engine); err != nil {
 		return ctrl.Result{}, err
 	} else if degraded {
