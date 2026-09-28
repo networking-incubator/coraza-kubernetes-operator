@@ -71,11 +71,26 @@ jobs:
 
       - name: render docs
         run: |
-          docs_dir=$(mktemp -d)
-          trap 'rm -rf "${docs_dir}"' EXIT
-          cp -a docs/. "${docs_dir}/"
+          work_dir=$(mktemp -d)
+          cleanup() {
+            docker run --rm -v "${work_dir}:/work" alpine \
+              chown -R "$(id -u):$(id -g)" /work 2>/dev/null || true
+            rm -rf "${work_dir}"
+          }
+          trap cleanup EXIT
+          git archive HEAD | tar -x -C "${work_dir}"
           docker run --rm \
-            -v "${docs_dir}:/src" \
+            -v "${work_dir}:/repo" \
+            -w /repo \
+            coraza-kubernetes-operator-docs \
+            sh -c 'crd-ref-docs \
+              --source-path=api \
+              --config=hack/crd-ref-templates/config.yaml \
+              --templates-dir=hack/crd-ref-templates \
+              --renderer=markdown \
+              --output-path=docs/content/reference/api.md'
+          docker run --rm \
+            -v "${work_dir}/docs:/src" \
             coraza-kubernetes-operator-docs \
             --minify \
             --destination /tmp/site
