@@ -1,0 +1,56 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: coraza-central-waf-telemetry
+  labels:
+    app.kubernetes.io/part-of: coraza-central-istio-waf-telemetry
+    app.kubernetes.io/component: examples
+---
+# Default-deny the central collector, then explicitly allow only what it needs:
+# OTLP ingress from Gateway proxies (any namespace, since Gateways may live
+# anywhere), Prometheus scrape ingress on 9090, and DNS egress. The collector
+# needs no other egress (no Kubernetes API access; see 10-otel-collector.yaml).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: central-waf-als-collector
+  namespace: coraza-central-waf-telemetry
+spec:
+  # Do not make the whole namespace default-deny: the OpenShift example also
+  # deploys Grafana here, and its Route must remain reachable on port 3000.
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: opentelemetry-collector
+      app.kubernetes.io/instance: coraza-central-waf-telemetry.central-waf-als
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        # Gateway proxies only, identified by the standard Gateway API pod
+        # label; Gateways may live in any namespace.
+        - namespaceSelector: {}
+          podSelector:
+            matchExpressions:
+              - key: gateway.networking.k8s.io/gateway-name
+                operator: Exists
+      ports:
+        - protocol: TCP
+          port: 4317
+        - protocol: TCP
+          port: 4318
+    - from:
+        - namespaceSelector: {}
+      ports:
+        - protocol: TCP
+          port: 9090
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
