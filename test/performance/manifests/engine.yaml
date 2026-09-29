@@ -1,0 +1,21 @@
+# Engine that attaches the ruleset to the perf gateway. Names and the optional
+# cache-poll block are substituted by waf.sh. failurePolicy is configurable via
+# FAILURE_POLICY (default: fail | allow).
+#
+# By default the Engine embeds rules STATICALLY (no ruleSetCacheServer) — the
+# least-fragile mode, correct for Tier-1 latency. Set POLL_CACHE=true in waf.sh
+# to inject ruleSetCacheServer (cache-poll model) for Tier 2/4 scenarios; that
+# path requires the operator's cache prerequisites (see ARCHITECTURE.md §3.2).
+apiVersion: waf.k8s.coraza.io/v1alpha1
+kind: Engine
+metadata:
+  name: ${ENGINE_NAME}
+spec:
+  ruleSet:
+    name: ${RULESET_NAME}
+  target:
+    type: Gateway
+    name: ${GATEWAY_NAME}
+    provider: Istio
+  failurePolicy: ${FAILURE_POLICY}
+${RULESET_CACHE_SERVER_BLOCK}

@@ -1,0 +1,41 @@
+# Standalone Path B rig: Envoy + coraza-proxy-wasm, an over-provisioned echo
+# backend, and an in-network fortio load generator. No Kubernetes, no operator,
+# no cache server — the WAF runs from static inline rules in the Envoy config.
+#
+#   ENVOY_CONFIG=envoy-waf.yaml      (default) WAF on
+#   ENVOY_CONFIG=envoy-baseline.yaml           B0 baseline, no filter
+#
+# The load generator shares Envoy's Docker network, keeping the client->Envoy hop
+# internal (out of the WAF measurement), mirroring the in-cluster fortio design.
+services:
+  backend:
+    # Trivially fast, multi-arch echo — must never be the bottleneck.
+    image: traefik/whoami:v1.10.3
+    command: ["--port", "80"]
+    networks: [perf]
+
+  envoy:
+    image: envoyproxy/envoy:v1.31-latest
+    command: ["-c", "/etc/envoy/envoy.yaml", "--concurrency", "2"]
+    depends_on: [backend]
+    volumes:
+      - ./envoy/${ENVOY_CONFIG:-envoy-waf.yaml}:/etc/envoy/envoy.yaml:ro
+      - ./coraza.wasm:/etc/envoy/coraza.wasm:ro
+    ports:
+      - "10000:10000"   # proxy listener (for host-side curl / manual probes)
+      - "9901:9901"     # envoy admin (stats, config_dump)
+    networks: [perf]
+
+  # Load generator. Not started by `up`; invoked explicitly by scripts/run.sh via
+  # `docker compose run` so its lifecycle matches a single measured run.
+  fortio:
+    image: fortio/fortio:latest
+    depends_on: [envoy]
+    entrypoint: ["fortio"]
+    volumes:
+      - ./results:/results
+    networks: [perf]
+    profiles: ["load"]
+
+networks:
+  perf: {}

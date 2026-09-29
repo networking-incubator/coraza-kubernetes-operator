@@ -1,0 +1,71 @@
+# Standalone Envoy with the coraza-proxy-wasm filter loading the full OWASP
+# CoreRuleSet (~900 rules) — the dominant latency driver (see ARCHITECTURE.md
+# Tier 1 / §6.3). CRS is embedded in the extension, so no RuleData/cache wiring:
+# just Include the embedded aliases. Identical to envoy-waf.yaml except the rules.
+admin:
+  address:
+    socket_address: { address: 0.0.0.0, port_value: 9901 }
+
+static_resources:
+  listeners:
+  - name: main
+    address:
+      socket_address: { address: 0.0.0.0, port_value: 10000 }
+    filter_chains:
+    - filters:
+      - name: envoy.filters.network.http_connection_manager
+        typed_config:
+          "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+          stat_prefix: ingress_http
+          codec_type: AUTO
+          route_config:
+            name: local_route
+            virtual_hosts:
+            - name: backend
+              domains: ["*"]
+              routes:
+              - match: { prefix: "/" }
+                route: { cluster: backend }
+          http_filters:
+          - name: envoy.filters.http.wasm
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.filters.http.wasm.v3.Wasm
+              config:
+                name: coraza
+                root_id: coraza
+                vm_config:
+                  runtime: envoy.wasm.runtime.v8
+                  code:
+                    local: { filename: /etc/envoy/coraza.wasm }
+                configuration:
+                  "@type": type.googleapis.com/google.protobuf.StringValue
+                  # Embedded CRS. @demo-conf sets recommended defaults (incl.
+                  # SecRequestBodyAccess); @crs-setup-conf sets anomaly-scoring
+                  # blocking mode (PL1, threshold 5); @owasp_crs/*.conf is the ruleset.
+                  value: |
+                    {
+                      "directives_map": {
+                        "default": [
+                          "Include @demo-conf",
+                          "SecRuleEngine On",
+                          "Include @crs-setup-conf",
+                          "Include @owasp_crs/*.conf"
+                        ]
+                      },
+                      "default_directives": "default"
+                    }
+          - name: envoy.filters.http.router
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+
+  clusters:
+  - name: backend
+    type: STRICT_DNS
+    lb_policy: ROUND_ROBIN
+    load_assignment:
+      cluster_name: backend
+      endpoints:
+      - lb_endpoints:
+        - endpoint:
+            address:
+              socket_address: { address: backend, port_value: 80 }
