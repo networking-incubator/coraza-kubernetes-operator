@@ -16,6 +16,25 @@ env:
   GOPROXY: https://proxy.golang.org,direct
 
 jobs:
+  codeql:
+    name: CodeQL
+    if: github.event_name != 'push' || github.ref == 'refs/heads/main'
+    permissions:
+      actions: read
+      contents: read
+      packages: read
+      security-events: write
+    uses: $/.github/workflows/codeql.yml
+
+  zizmor:
+    name: zizmor
+    if: github.event_name != 'push' || github.ref == 'refs/heads/main'
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    uses: $/.github/workflows/zizmor.yml
+
   changes:
       name: classify changed files
       runs-on: ubuntu-latest
@@ -432,3 +451,41 @@ jobs:
       - name: clean up kind cluster
         if: always()
         run: kind delete cluster --name coraza-kubernetes-operator-integration || true
+
+  required:
+    name: required
+    if: always()
+    needs:
+      - codeql
+      - zizmor
+      - changes
+      - docs-build
+      - build
+      - lint
+      - bundle-validate
+      - chart-lint
+      - helm-validate
+      - unit-tests
+      - tools-tests
+      - conformance-tests
+      - integration-tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: fail if a required check failed or was unexpectedly skipped
+        if: >-
+          ${{
+            needs.changes.result != 'success' ||
+            needs.build.result != 'success' ||
+            needs.lint.result != 'success' ||
+            needs['bundle-validate'].result != 'success' ||
+            needs['chart-lint'].result != 'success' ||
+            needs['helm-validate'].result != 'success' ||
+            needs['unit-tests'].result != 'success' ||
+            needs['tools-tests'].result != 'success' ||
+            (needs['docs-build'].result != 'success' && !(needs['docs-build'].result == 'skipped' && (github.event_name != 'pull_request' || needs.changes.outputs.docs_changed != 'true'))) ||
+            (needs['conformance-tests'].result != 'success' && !(needs.changes.outputs.docs_only == 'true' && needs['conformance-tests'].result == 'skipped')) ||
+            (needs['integration-tests'].result != 'success' && !(needs.changes.outputs.docs_only == 'true' && needs['integration-tests'].result == 'skipped')) ||
+            (needs.codeql.result != 'success' && !(github.event_name == 'push' && startsWith(github.ref, 'refs/tags/') && needs.codeql.result == 'skipped')) ||
+            (needs.zizmor.result != 'success' && !(github.event_name == 'push' && startsWith(github.ref, 'refs/tags/') && needs.zizmor.result == 'skipped'))
+          }}
+        run: exit 1
