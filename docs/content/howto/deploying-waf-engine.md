@@ -65,6 +65,26 @@ spec:
 
 Lower values mean faster rule updates but slightly more network traffic between the WASM plugin and the cache server.
 
+## Configuring Cache Token Lifetime
+
+The operator issues a Kubernetes ServiceAccount token so the WASM plugin can authenticate to the RuleSet cache server. By default the token is valid for **1 hour**. When it approaches expiry (at 80% of its lifetime), the operator renews it and updates the WasmPlugin, which reloads the WASM filter.
+
+Frequent renewals can increase memory use in the Envoy process because each WasmPlugin update loads a new WASM instance. To reduce renewal frequency, set a longer lifetime with the `waf.k8s.coraza.io/token-duration` annotation on the Engine:
+
+```yaml
+metadata:
+  annotations:
+    waf.k8s.coraza.io/token-duration: "10h"
+```
+
+The value is a Go duration string (for example `2h`, `24h`, or `90m`). Constraints:
+
+| Rule | Behavior |
+|------|----------|
+| Valid range | At least **10 minutes** (`600s`) and at most **4294967296** seconds. |
+| Invalid or out of range | The annotation is ignored and the default of 1 hour is used. |
+| Annotation change | Triggers reconciliation immediately and regenerates the token when the effective duration changes. |
+
 ## Using a Custom WASM Image
 
 By default, the operator uses its built-in WASM plugin image. To use a custom image, specify it in the Engine:
