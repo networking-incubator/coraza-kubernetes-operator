@@ -3,16 +3,7 @@ name: zizmor
 permissions: {}
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - ".github/workflows/**"
-      - ".github/zizmor.yml"
-  pull_request:
-    branches: [main]
-    paths:
-      - ".github/workflows/**"
-      - ".github/zizmor.yml"
+  workflow_call:
 
 jobs:
   zizmor:
@@ -30,4 +21,3 @@ jobs:
 
       - name: run zizmor
         uses: zizmorcore/zizmor-action@cc914d7f3750a2d13d75c7f184a1060aa0e9d482 # v0.6.4
-
