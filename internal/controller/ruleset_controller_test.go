@@ -2139,6 +2139,14 @@ func TestRuleSetReconciler_MetricsRuleDataDeleteRefreshesNamespaceTotal(t *testi
 		return len(list.Items) == 1
 	}, 5*time.Second, 50*time.Millisecond, "RuleData should appear in the test cache after create")
 
+	require.Eventually(t, func() bool {
+		var list wafv1alpha1.RuleDataList
+		if err := k8sClient.List(ctx, &list, client.InNamespace(ns)); err != nil {
+			return false
+		}
+		return len(list.Items) == 1
+	}, 5*time.Second, 50*time.Millisecond, "RuleData should appear in the test cache")
+
 	reg := prometheus.NewRegistry()
 	m, err := NewCorazaMetrics(reg)
 	require.NoError(t, err)
