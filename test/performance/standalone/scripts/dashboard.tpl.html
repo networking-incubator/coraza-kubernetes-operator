@@ -1,0 +1,249 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Coraza WAF — Standalone Perf (Path B)</title>
+<style>
+  :root{
+    color-scheme: light;
+    --plane:#f9f9f7; --surface:#fcfcfb;
+    --ink:#0b0b0b; --ink2:#52514e; --muted:#898781;
+    --grid:#e1e0d9; --axis:#c3c2b7; --ring:rgba(11,11,11,.10);
+    --s-base:#2a78d6; --s-min:#eb6834; --s-crs:#1baf7a; /* blue / orange / aqua */
+  }
+  @media (prefers-color-scheme:dark){ :root:where(:not([data-theme="light"])){
+    color-scheme:dark;
+    --plane:#0d0d0d; --surface:#1a1a19;
+    --ink:#fff; --ink2:#c3c2b7; --muted:#898781;
+    --grid:#2c2c2a; --axis:#383835; --ring:rgba(255,255,255,.10);
+    --s-base:#3987e5; --s-min:#d95926; --s-crs:#199e70;
+  }}
+  :root[data-theme="dark"]{
+    color-scheme:dark;
+    --plane:#0d0d0d; --surface:#1a1a19;
+    --ink:#fff; --ink2:#c3c2b7; --muted:#898781;
+    --grid:#2c2c2a; --axis:#383835; --ring:rgba(255,255,255,.10);
+    --s-base:#3987e5; --s-min:#d95926; --s-crs:#199e70;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--plane);color:var(--ink);
+    font:14px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
+  .wrap{max-width:980px;margin:0 auto;padding:28px 20px 64px}
+  header{display:flex;align-items:baseline;justify-content:space-between;gap:16px;flex-wrap:wrap}
+  h1{font-size:20px;margin:0}
+  h2{font-size:14px;font-weight:600;margin:0 0 12px;color:var(--ink2)}
+  .sub{color:var(--muted);font-size:12.5px;margin-top:4px}
+  .toggle{border:1px solid var(--ring);background:var(--surface);color:var(--ink2);
+    border-radius:8px;padding:6px 12px;font:inherit;font-size:12.5px;cursor:pointer}
+  .card{background:var(--surface);border:1px solid var(--ring);border-radius:14px;
+    padding:18px 18px 12px;margin-top:18px}
+  .tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-top:18px}
+  .tile{background:var(--surface);border:1px solid var(--ring);border-radius:14px;padding:14px 16px}
+  .tile .k{font-size:12px;color:var(--ink2)}
+  .tile .v{font-size:26px;font-weight:650;margin-top:2px;letter-spacing:-.01em}
+  .tile .u{font-size:13px;color:var(--muted);font-weight:500}
+  .tile .cx{font-size:11.5px;color:var(--muted);margin-top:3px}
+  .legend{display:flex;gap:16px;flex-wrap:wrap;margin:2px 0 10px;font-size:12.5px;color:var(--ink2)}
+  .legend span{display:inline-flex;align-items:center;gap:7px}
+  .sw{width:11px;height:11px;border-radius:3px;display:inline-block}
+  svg{width:100%;height:auto;display:block;overflow:visible}
+  .gl{stroke:var(--grid);stroke-width:1}
+  .ax{stroke:var(--axis);stroke-width:1}
+  .tk{fill:var(--muted);font-size:11px}
+  .tkx{fill:var(--ink2);font-size:12px}
+  .dl{fill:var(--ink2);font-size:11.5px}
+  .cross{stroke:var(--axis);stroke-width:1;stroke-dasharray:3 3}
+  table{border-collapse:collapse;width:100%;font-size:13px;font-variant-numeric:tabular-nums}
+  th,td{text-align:right;padding:7px 10px;border-bottom:1px solid var(--grid)}
+  th:first-child,td:first-child{text-align:left}
+  thead th{color:var(--ink2);font-weight:600;border-bottom:1px solid var(--axis)}
+  td .dot{width:9px;height:9px;border-radius:2px;display:inline-block;margin-right:7px;vertical-align:middle}
+  .tt{position:fixed;pointer-events:none;z-index:9;background:var(--surface);color:var(--ink);
+    border:1px solid var(--ring);border-radius:9px;padding:8px 10px;font-size:12px;
+    box-shadow:0 6px 22px rgba(0,0,0,.16);opacity:0;transition:opacity .08s;min-width:120px}
+  .tt b{font-weight:650} .tt .row{display:flex;justify-content:space-between;gap:14px;margin-top:3px}
+  .tt .row i{font-style:normal;color:var(--ink2);display:inline-flex;align-items:center;gap:6px}
+  footer{color:var(--muted);font-size:11.5px;margin-top:22px;line-height:1.6}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1>Coraza WAF — added latency</h1>
+      <div class="sub" id="sub"></div>
+    </div>
+    <button class="toggle" id="theme">◐ Theme</button>
+  </header>
+
+  <div class="tiles" id="tiles"></div>
+
+  <div class="card">
+    <h2>Latency tail by ruleset — median of runs</h2>
+    <div class="legend" id="leg1"></div>
+    <div id="chartLine"></div>
+  </div>
+
+  <div class="card">
+    <h2>WAF cost — added latency vs baseline (Δ ms)</h2>
+    <div class="legend" id="leg2"></div>
+    <div id="chartDelta"></div>
+  </div>
+
+  <div class="card">
+    <h2>All medians</h2>
+    <div id="table"></div>
+  </div>
+
+  <footer id="foot"></footer>
+</div>
+<div class="tt" id="tt"></div>
+
+<script>
+const DATA = /*__DATA__*/null;
+const SVGNS = "http://www.w3.org/2000/svg";
+const COLOR = {baseline:"var(--s-base)", minimal:"var(--s-min)", crs:"var(--s-crs)"};
+const PCTS = DATA.percentiles;
+const modes = DATA.modes;
+const wafModes = modes.filter(m=>m.mode!=="baseline");
+const fmt = v => v==null ? "—" : v.toFixed(2);
+const el=(t,a={},...kids)=>{const n=document.createElement(t);for(const k in a)k==="html"?n.innerHTML=a[k]:n.setAttribute(k,a[k]);kids.forEach(c=>n.append(c));return n;};
+const S=(t,a={})=>{const n=document.createElementNS(SVGNS,t);for(const k in a)n.setAttribute(k,a[k]);return n;};
+const tt=document.getElementById("tt");
+function showTT(html,x,y){tt.innerHTML=html;tt.style.opacity=1;
+  const w=tt.offsetWidth,h=tt.offsetHeight;
+  tt.style.left=Math.min(x+14,innerWidth-w-8)+"px";
+  tt.style.top=Math.max(8,y-h-12)+"px";}
+function hideTT(){tt.style.opacity=0;}
+function niceMax(v){if(v<=0)return 1;const p=Math.pow(10,Math.floor(Math.log10(v)));const n=v/p;
+  const s=n<=1?1:n<=2?2:n<=5?5:10;return s*p;}
+
+// ---- sub + footer
+const base=modes.find(m=>m.mode==="baseline");
+const conn=(modes.find(m=>m.conn)||{}).conn, rq=(modes.find(m=>m.requested_qps)||{}).requested_qps;
+document.getElementById("sub").textContent =
+  `${modes.reduce((a,m)=>a+m.runs,0)} runs · median of ${Math.max(...modes.map(m=>m.runs))} `
+  + (rq?`· ~${Math.round(rq)} qps target `:"") + (conn?`· ${conn} conns `:"") + `· generated ${DATA.generated}`;
+document.getElementById("foot").innerHTML =
+  "Standalone Envoy + coraza-proxy-wasm (Path B) — same binary the operator deploys, static rules, no cache. "
+  + "WAF cost = mode − baseline, per percentile, median of repeats. "
+  + "Docker Desktop on macOS has no CPU pinning, so tails are noisy — read deltas, not absolutes.";
+
+// ---- KPI tiles: p95/p99 added per WAF ruleset
+const tiles=document.getElementById("tiles");
+for(const m of wafModes){
+  for(const p of ["p95","p99"]){
+    const d=m.delta[p];
+    tiles.append(el("div",{class:"tile"},
+      el("div",{class:"k",html:`<span class="sw" style="background:${COLOR[m.mode]}"></span> ${m.label} · ${p} added`}),
+      el("div",{class:"v"}, document.createTextNode((d==null?"—":"+"+d.toFixed(2))), el("span",{class:"u",html:" ms"})),
+      el("div",{class:"cx"}, `${fmt(base?base.pcts[p]:null)} → ${fmt(m.pcts[p])} ms`)
+    ));
+  }
+}
+
+// ---- legends
+function legend(id,ms){const c=document.getElementById(id);
+  ms.forEach(m=>c.append(el("span",{},el("i",{class:"sw",style:`background:${COLOR[m.mode]}`}),document.createTextNode(m.label))));}
+legend("leg1",modes); legend("leg2",wafModes);
+
+// ---- LINE CHART: latency tail
+(function(){
+  const W=720,H=360,mL=52,mR=96,mT=16,mB=38, pw=W-mL-mR, ph=H-mT-mB;
+  const svg=S("svg",{viewBox:`0 0 ${W} ${H}`,role:"img"});
+  const maxV=niceMax(Math.max(...modes.flatMap(m=>PCTS.map(p=>m.pcts[p]||0)))*1.08);
+  const X=i=>mL+(PCTS.length===1?pw/2:pw*i/(PCTS.length-1));
+  const Y=v=>mT+ph-(v/maxV)*ph;
+  for(let t=0;t<=5;t++){const v=maxV*t/5,y=Y(v);
+    svg.append(S("line",{class:"gl",x1:mL,y1:y,x2:mL+pw,y2:y}));
+    const tx=S("text",{class:"tk",x:mL-8,y:y+4,"text-anchor":"end"});tx.textContent=v.toFixed(v<10?1:0);svg.append(tx);}
+  svg.append(S("line",{class:"ax",x1:mL,y1:mT+ph,x2:mL+pw,y2:mT+ph}));
+  PCTS.forEach((p,i)=>{const tx=S("text",{class:"tkx",x:X(i),y:mT+ph+22,"text-anchor":"middle"});tx.textContent=p;svg.append(tx);});
+  const yl=S("text",{class:"tk",x:mL-8,y:mT-4,"text-anchor":"end"});yl.textContent="ms";svg.append(yl);
+  modes.forEach(m=>{
+    const pts=PCTS.map((p,i)=>[X(i),Y(m.pcts[p]||0)]);
+    const pl=S("polyline",{fill:"none",stroke:COLOR[m.mode],"stroke-width":2,"stroke-linjoin":"round",
+      points:pts.map(a=>a.join(",")).join(" ")});svg.append(pl);
+    pts.forEach(([x,y])=>{svg.append(S("circle",{cx:x,cy:y,r:2.5,fill:"var(--surface)",stroke:COLOR[m.mode],"stroke-width":2}));});
+    const last=pts[pts.length-1];
+    svg.append(S("circle",{cx:last[0]+12,cy:last[1],r:4,fill:COLOR[m.mode]}));
+    const lbl=S("text",{class:"dl",x:last[0]+20,y:last[1]+4});lbl.textContent=m.mode;svg.append(lbl);
+  });
+  // hover crosshair
+  const cross=S("line",{class:"cross",y1:mT,y2:mT+ph,x1:0,x2:0,style:"opacity:0"});svg.append(cross);
+  const hit=S("rect",{x:mL,y:mT,width:pw,height:ph,fill:"transparent"});svg.append(hit);
+  hit.addEventListener("mousemove",e=>{
+    const r=svg.getBoundingClientRect(),sx=(e.clientX-r.left)/r.width*W;
+    let i=Math.round((sx-mL)/(pw/(PCTS.length-1)));i=Math.max(0,Math.min(PCTS.length-1,i));
+    cross.setAttribute("x1",X(i));cross.setAttribute("x2",X(i));cross.style.opacity=1;
+    const rows=modes.map(m=>`<div class="row"><i><span class="sw" style="background:${COLOR[m.mode]}"></span>${m.mode}</i><b>${fmt(m.pcts[PCTS[i]])} ms</b></div>`).join("");
+    showTT(`<b>${PCTS[i]}</b>${rows}`,e.clientX,e.clientY);
+  });
+  hit.addEventListener("mouseleave",()=>{cross.style.opacity=0;hideTT();});
+  document.getElementById("chartLine").append(svg);
+})();
+
+// ---- DELTA BARS: added latency vs baseline
+(function(){
+  if(!wafModes.length) return;
+  const W=720,H=320,mL=52,mR=16,mT=16,mB=38, pw=W-mL-mR, ph=H-mT-mB;
+  const svg=S("svg",{viewBox:`0 0 ${W} ${H}`,role:"img"});
+  const maxV=niceMax(Math.max(0.001,...wafModes.flatMap(m=>PCTS.map(p=>m.delta[p]||0)))*1.12);
+  const Y=v=>mT+ph-(Math.max(0,v)/maxV)*ph;
+  for(let t=0;t<=5;t++){const v=maxV*t/5,y=Y(v);
+    svg.append(S("line",{class:"gl",x1:mL,y1:y,x2:mL+pw,y2:y}));
+    const tx=S("text",{class:"tk",x:mL-8,y:y+4,"text-anchor":"end"});tx.textContent=v.toFixed(2);svg.append(tx);}
+  svg.append(S("line",{class:"ax",x1:mL,y1:mT+ph,x2:mL+pw,y2:mT+ph}));
+  const gw=pw/PCTS.length, n=wafModes.length, bw=Math.min(34,(gw-14)/n);
+  PCTS.forEach((p,gi)=>{
+    const gx=mL+gw*gi+(gw-bw*n-2*(n-1))/2;
+    const tx=S("text",{class:"tkx",x:mL+gw*gi+gw/2,y:mT+ph+22,"text-anchor":"middle"});tx.textContent=p;svg.append(tx);
+    wafModes.forEach((m,bi)=>{
+      const v=m.delta[p]||0, x=gx+bi*(bw+2), y=Y(v), h=mT+ph-y;
+      const bar=S("rect",{x:x,y:y,width:bw,height:Math.max(0,h),rx:4,ry:4,fill:COLOR[m.mode]});
+      // square off the bottom (rounded data-end only)
+      if(h>4){svg.append(S("rect",{x:x,y:y+4,width:bw,height:Math.max(0,h-4),fill:COLOR[m.mode]}));}
+      svg.append(bar);
+      bar.addEventListener("mousemove",e=>showTT(
+        `<b>${m.mode} · ${p}</b><div class="row"><i>added</i><b>+${fmt(v)} ms</b></div>`
+        +`<div class="row"><i>base→waf</i><b>${fmt(base.pcts[p])}→${fmt(m.pcts[p])}</b></div>`,e.clientX,e.clientY));
+      bar.addEventListener("mouseleave",hideTT);
+    });
+  });
+  document.getElementById("chartDelta").append(svg);
+})();
+
+// ---- TABLE
+(function(){
+  const t=el("table");
+  const head=el("tr",{}, el("th",{},document.createTextNode("ruleset")));
+  PCTS.forEach(p=>head.append(el("th",{},document.createTextNode(p+" ms"))));
+  ["qps","err %","runs"].forEach(h=>head.append(el("th",{},document.createTextNode(h))));
+  t.append(el("thead",{},head));
+  const tb=el("tbody");
+  modes.forEach(m=>{
+    const tr=el("tr",{});
+    tr.append(el("td",{html:`<span class="dot" style="background:${COLOR[m.mode]}"></span>${m.label}`}));
+    PCTS.forEach(p=>{
+      const d=m.delta[p];
+      tr.append(el("td",{html: fmt(m.pcts[p]) + (m.mode!=="baseline"&&d!=null?` <span style="color:var(--muted)">(+${d.toFixed(2)})</span>`:"")}));
+    });
+    tr.append(el("td",{},document.createTextNode(m.qps?m.qps.toFixed(0):"—")));
+    tr.append(el("td",{},document.createTextNode(m.err!=null?m.err.toFixed(2):"—")));
+    tr.append(el("td",{},document.createTextNode(m.runs)));
+    tb.append(tr);
+  });
+  t.append(tb);
+  document.getElementById("table").append(t);
+})();
+
+// ---- theme toggle
+document.getElementById("theme").addEventListener("click",()=>{
+  const cur=document.documentElement.getAttribute("data-theme");
+  const dark=cur? cur==="dark" : matchMedia("(prefers-color-scheme:dark)").matches;
+  document.documentElement.setAttribute("data-theme", dark?"light":"dark");
+});
+</script>
+</body>
+</html>

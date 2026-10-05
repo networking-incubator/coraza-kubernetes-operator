@@ -1,0 +1,69 @@
+# Standalone Envoy with the coraza-proxy-wasm HTTP filter (WAF ON).
+# Identical to envoy-baseline.yaml except for the envoy.filters.http.wasm filter,
+# so the measured delta (waf - baseline) is attributable to the WASM filter alone.
+admin:
+  address:
+    socket_address: { address: 0.0.0.0, port_value: 9901 }
+
+static_resources:
+  listeners:
+  - name: main
+    address:
+      socket_address: { address: 0.0.0.0, port_value: 10000 }
+    filter_chains:
+    - filters:
+      - name: envoy.filters.network.http_connection_manager
+        typed_config:
+          "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+          stat_prefix: ingress_http
+          codec_type: AUTO
+          route_config:
+            name: local_route
+            virtual_hosts:
+            - name: backend
+              domains: ["*"]
+              routes:
+              - match: { prefix: "/" }
+                route: { cluster: backend }
+          http_filters:
+          # --- WAF: coraza-proxy-wasm, static inline rules, no cache server ---
+          - name: envoy.filters.http.wasm
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.filters.http.wasm.v3.Wasm
+              config:
+                name: coraza
+                root_id: coraza
+                vm_config:
+                  runtime: envoy.wasm.runtime.v8
+                  code:
+                    local: { filename: /etc/envoy/coraza.wasm }
+                configuration:
+                  "@type": type.googleapis.com/google.protobuf.StringValue
+                  # Minimal ruleset (~2 rules): WASM filter overhead floor + one
+                  # deny rule so the harness validity probe (GET /admin -> 403)
+                  # proves the WAF is actually on. Mirrors manifests/rulesets/minimal.
+                  value: |
+                    {
+                      "directives_map": {
+                        "default": [
+                          "SecRuleEngine On",
+                          "SecRule REQUEST_URI \"@streq /admin\" \"id:101,phase:1,t:lowercase,deny,status:403,msg:'blocked by minimal ruleset'\""
+                        ]
+                      },
+                      "default_directives": "default"
+                    }
+          - name: envoy.filters.http.router
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+
+  clusters:
+  - name: backend
+    type: STRICT_DNS
+    lb_policy: ROUND_ROBIN
+    load_assignment:
+      cluster_name: backend
+      endpoints:
+      - lb_endpoints:
+        - endpoint:
+            address:
+              socket_address: { address: backend, port_value: 80 }

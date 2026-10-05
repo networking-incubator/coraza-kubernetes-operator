@@ -1,0 +1,68 @@
+# Medium synthetic ruleset (~30 detection rules across headers, args, and body).
+# Represents a typical hand-written policy — heavier than minimal, far lighter
+# than CRS. Rules mostly "pass,log" (detect) so they force full evaluation
+# without short-circuiting; rule 1001 blocks on the "attack" keyword.
+apiVersion: waf.k8s.coraza.io/v1alpha1
+kind: RuleSource
+metadata:
+  name: perf-base
+spec:
+  rules: |
+    SecRuleEngine On
+    SecRequestBodyAccess On
+    SecResponseBodyAccess Off
+---
+apiVersion: waf.k8s.coraza.io/v1alpha1
+kind: RuleSource
+metadata:
+  name: perf-medium-rules
+spec:
+  rules: |
+    # Blocking rule
+    SecRule ARGS "@contains attack" "id:1001,phase:2,deny,status:403,msg:'attack keyword'"
+
+    # Header inspection (phase 1)
+    SecRule REQUEST_HEADERS:User-Agent "@rx (?i)(sqlmap|nikto|nmap|masscan|acunetix)" "id:1100,phase:1,pass,log,msg:'scanner UA'"
+    SecRule REQUEST_HEADERS:User-Agent "@rx (?i)(curl|wget|python-requests)" "id:1101,phase:1,pass,log,msg:'cli client'"
+    SecRule REQUEST_HEADERS:Content-Type "@rx (?i)multipart/form-data" "id:1102,phase:1,pass,log,msg:'multipart'"
+    SecRule REQUEST_HEADERS:Referer "@rx (?i)(javascript:|data:)" "id:1103,phase:1,pass,log,msg:'suspicious referer'"
+    SecRule REQUEST_HEADERS_NAMES "@rx (?i)^x-forwarded" "id:1104,phase:1,pass,log,msg:'xff header'"
+
+    # URI / args inspection (phase 1/2)
+    SecRule REQUEST_URI "@rx (?i)(\.\./|\.\.\\)" "id:1200,phase:1,pass,log,msg:'path traversal pattern'"
+    SecRule REQUEST_URI "@rx (?i)(union\s+select|select.+from)" "id:1201,phase:1,pass,log,msg:'sqli pattern uri'"
+    SecRule ARGS "@rx (?i)(<script|onerror=|onload=)" "id:1202,phase:2,pass,log,msg:'xss pattern'"
+    SecRule ARGS "@rx (?i)(union|select|insert|update|delete|drop)\s" "id:1203,phase:2,pass,log,msg:'sql keyword'"
+    SecRule ARGS "@rx (?i)(;|\||&&|\$\()" "id:1204,phase:2,pass,log,msg:'cmd injection chars'"
+    SecRule ARGS "@rx (?i)(/etc/passwd|/bin/sh|cmd\.exe)" "id:1205,phase:2,pass,log,msg:'sensitive path'"
+    SecRule ARGS_NAMES "@rx (?i)(passwd|token|secret|apikey)" "id:1206,phase:2,pass,log,msg:'sensitive arg name'"
+    SecRule ARGS "@gt 1000" "id:1207,phase:2,pass,log,msg:'large numeric arg',t:length"
+    SecRule ARGS "@rx (?i)(\$where|\$ne|\$gt)" "id:1208,phase:2,pass,log,msg:'nosql operator'"
+    SecRule ARGS "@rx (?i)(base64_decode|eval\(|system\()" "id:1209,phase:2,pass,log,msg:'php code'"
+    SecRule ARGS "@rx (?i)(\%3Cscript|\%3E)" "id:1210,phase:2,pass,log,msg:'encoded xss'"
+    SecRule ARGS "@rx (?i)(file://|gopher://|dict://)" "id:1211,phase:2,pass,log,msg:'ssrf scheme'"
+
+    # Body inspection (phase 2)
+    SecRule REQUEST_BODY "@rx (?i)(<script|onerror=)" "id:1300,phase:2,pass,log,msg:'xss in body'"
+    SecRule REQUEST_BODY "@rx (?i)(union\s+select)" "id:1301,phase:2,pass,log,msg:'sqli in body'"
+    SecRule REQUEST_BODY "@rx (?i)(\$\{jndi:)" "id:1302,phase:2,pass,log,msg:'log4shell pattern'"
+    SecRule REQUEST_BODY "@rx (?i)(<!ENTITY)" "id:1303,phase:2,pass,log,msg:'xxe entity'"
+    SecRule REQUEST_BODY "@rx (?i)(cmd=|exec=|system\()" "id:1304,phase:2,pass,log,msg:'rce in body'"
+
+    # Method / protocol checks (phase 1)
+    SecRule REQUEST_METHOD "@rx (?i)^(TRACE|TRACK|CONNECT)$" "id:1400,phase:1,pass,log,msg:'unusual method'"
+    SecRule REQUEST_PROTOCOL "@rx (?i)^HTTP/1\.0$" "id:1401,phase:1,pass,log,msg:'http 1.0'"
+    SecRule REQUEST_HEADERS:Host "@rx (?i)(localhost|127\.0\.0\.1)" "id:1402,phase:1,pass,log,msg:'internal host header'"
+    SecRule REQUEST_COOKIES "@rx (?i)(<script|union\s+select)" "id:1403,phase:1,pass,log,msg:'cookie injection'"
+    SecRule REQUEST_HEADERS:Content-Length "@gt 1048576" "id:1404,phase:1,pass,log,msg:'large body declared'"
+    SecRule REQUEST_URI "@rx (?i)\.(bak|old|swp|~)$" "id:1405,phase:1,pass,log,msg:'backup file access'"
+    SecRule REQUEST_URI "@rx (?i)/(wp-admin|phpmyadmin|\.git|\.env)" "id:1406,phase:1,pass,log,msg:'sensitive path access'"
+---
+apiVersion: waf.k8s.coraza.io/v1alpha1
+kind: RuleSet
+metadata:
+  name: perf-ruleset
+spec:
+  sources:
+    - name: perf-base
+    - name: perf-medium-rules

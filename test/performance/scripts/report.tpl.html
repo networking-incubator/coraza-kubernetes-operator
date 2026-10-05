@@ -1,0 +1,641 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Coraza WAF — In-cluster Perf (Path A)</title>
+<style>
+  :root{
+    color-scheme: light;
+    --plane:#f9f9f7; --surface:#fcfcfb;
+    --ink:#0b0b0b; --ink2:#52514e; --muted:#898781;
+    --grid:#e1e0d9; --axis:#c3c2b7; --ring:rgba(11,11,11,.10);
+    --s-base:#2a78d6; --s-min:#eb6834; --s-crs:#1baf7a; --s-4:#8b5cf6; --s-5:#d4a017;
+  }
+  @media (prefers-color-scheme:dark){ :root:where(:not([data-theme="light"])){
+    color-scheme:dark;
+    --plane:#0d0d0d; --surface:#1a1a19;
+    --ink:#fff; --ink2:#c3c2b7; --muted:#898781;
+    --grid:#2c2c2a; --axis:#383835; --ring:rgba(255,255,255,.10);
+    --s-base:#3987e5; --s-min:#d95926; --s-crs:#199e70; --s-4:#9a6cf7; --s-5:#c79a1f;
+  }}
+  :root[data-theme="dark"]{
+    color-scheme:dark;
+    --plane:#0d0d0d; --surface:#1a1a19;
+    --ink:#fff; --ink2:#c3c2b7; --muted:#898781;
+    --grid:#2c2c2a; --axis:#383835; --ring:rgba(255,255,255,.10);
+    --s-base:#3987e5; --s-min:#d95926; --s-crs:#199e70; --s-4:#9a6cf7; --s-5:#c79a1f;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;padding-left:188px;background:var(--plane);color:var(--ink);
+    font:14px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
+  .wrap{max-width:1400px;margin:0 auto;padding:28px 32px 64px}
+  html{scroll-behavior:smooth}
+  #sidenav{position:fixed;left:0;top:0;bottom:0;width:188px;background:var(--surface);
+    border-right:1px solid var(--ring);z-index:20;overflow-y:auto;display:flex;flex-direction:column}
+  .nav-brand{padding:18px 14px 14px;border-bottom:1px solid var(--ring);line-height:1.35}
+  .nav-brand b{font-size:13px;font-weight:650;color:var(--ink);display:block}
+  .nav-brand span{font-size:11px;color:var(--muted)}
+  .nav-section{font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.07em;
+    color:var(--muted);padding:16px 14px 6px}
+  .nav-item{display:block;padding:9px 14px;font-size:12.5px;line-height:1.35;color:var(--ink2);
+    cursor:pointer;border-left:2px solid transparent;transition:background .1s,color .1s}
+  .nav-item:hover{background:var(--grid);color:var(--ink)}
+  .nav-item.active{border-left-color:var(--s-base);color:var(--ink);font-weight:500;background:var(--grid)}
+  header{display:flex;align-items:baseline;justify-content:space-between;gap:16px;flex-wrap:wrap}
+  h1{font-size:20px;margin:0}
+  h2{font-size:14px;font-weight:600;margin:0 0 12px;color:var(--ink2)}
+  .sub{color:var(--muted);font-size:12.5px;margin-top:4px}
+  .toggle{border:1px solid var(--ring);background:var(--surface);color:var(--ink2);
+    border-radius:8px;padding:6px 12px;font:inherit;font-size:12.5px;cursor:pointer}
+  .card{background:var(--surface);border:1px solid var(--ring);border-radius:14px;
+    padding:18px 18px 12px;margin-top:18px}
+.legend{display:flex;gap:16px;flex-wrap:wrap;margin:2px 0 10px;font-size:12.5px;color:var(--ink2)}
+  .legend span{display:inline-flex;align-items:center;gap:7px}
+  .sw{width:11px;height:11px;border-radius:3px;display:inline-block}
+  svg{width:100%;height:auto;display:block;overflow:visible}
+  .gl{stroke:var(--grid);stroke-width:1}
+  .ax{stroke:var(--axis);stroke-width:1}
+  .tk{fill:var(--muted);font-size:11px}
+  .tkx{fill:var(--ink2);font-size:12px}
+  .dl{fill:var(--ink2);font-size:11.5px}
+  .cross{stroke:var(--axis);stroke-width:1;stroke-dasharray:3 3}
+  table{border-collapse:collapse;width:100%;font-size:13px;font-variant-numeric:tabular-nums}
+  th,td{text-align:right;padding:7px 10px;border-bottom:1px solid var(--grid)}
+  th:first-child,td:first-child{text-align:left}
+  thead th{color:var(--ink2);font-weight:600;border-bottom:1px solid var(--axis)}
+  td .dot{width:9px;height:9px;border-radius:2px;display:inline-block;margin-right:7px;vertical-align:middle}
+  .tt{position:fixed;pointer-events:none;z-index:9;background:var(--surface);color:var(--ink);
+    border:1px solid var(--ring);border-radius:9px;padding:8px 10px;font-size:12px;
+    box-shadow:0 6px 22px rgba(0,0,0,.16);opacity:0;transition:opacity .08s;min-width:120px}
+  .tt b{font-weight:650} .tt .row{display:flex;justify-content:space-between;gap:14px;margin-top:3px}
+  .tt .row i{font-style:normal;color:var(--ink2);display:inline-flex;align-items:center;gap:6px}
+  footer{color:var(--muted);font-size:11.5px;margin-top:22px;line-height:1.6}
+  .rulesets-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px;margin-top:4px}
+  .cfg{display:grid;grid-template-columns:150px 1fr;gap:7px 16px;font-size:13px;align-items:baseline}
+  .cfg dt{color:var(--ink2);font-weight:500}
+  .cfg dd{margin:0;color:var(--ink);font-variant-numeric:tabular-nums;word-break:break-word}
+  .cfg dd code{font:12px/1.5 "SF Mono",ui-monospace,monospace;background:var(--grid);
+    border-radius:5px;padding:1px 6px}
+  .cfg-name{font-size:15px;font-weight:650;margin-bottom:12px;display:flex;align-items:center;gap:9px}
+  .cfg-note{font-size:12px;color:var(--muted);margin-top:12px;line-height:1.55}
+  .cfg-warn{font-size:12.5px;color:var(--s-min)}
+  .pcrd{background:var(--plane);border:1px solid var(--ring);border-radius:12px;padding:16px 18px;cursor:pointer;transition:border-color .15s}
+  .pcrd:hover{border-color:var(--axis)}
+  .pcrd-header{display:flex;align-items:center;gap:8px;margin-bottom:8px}
+  .pcrd-name{font-size:13.5px;font-weight:600;color:var(--ink)}
+  .pcrd-count{font-size:30px;font-weight:650;letter-spacing:-.02em;line-height:1}
+  .pcrd-unit{font-size:12px;color:var(--muted);font-weight:400;margin-left:3px}
+  .pcrd-toggle{font-size:11.5px;color:var(--s-base);margin-top:10px;cursor:pointer;user-select:none}
+  .pcrd-empty{font-size:12px;color:var(--muted);font-style:italic}
+  /* modal */
+  .modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:100;
+    display:flex;align-items:center;justify-content:center;padding:24px;
+    animation:fadeIn .15s ease}
+  @keyframes fadeIn{from{opacity:0}to{opacity:1}}
+  .modal{background:var(--surface);border:1px solid var(--ring);border-radius:16px;
+    max-width:860px;width:100%;max-height:85vh;display:flex;flex-direction:column;
+    box-shadow:0 24px 64px rgba(0,0,0,.32);animation:slideUp .18s ease}
+  @keyframes slideUp{from{transform:translateY(16px);opacity:0}to{transform:none;opacity:1}}
+  .modal-head{display:flex;align-items:center;justify-content:space-between;
+    padding:18px 22px;border-bottom:1px solid var(--ring);flex-shrink:0;gap:12px}
+  .modal-title{display:flex;align-items:center;gap:9px;font-size:15px;font-weight:650;color:var(--ink)}
+  .modal-close{border:none;background:var(--grid);color:var(--ink2);border-radius:8px;
+    width:30px;height:30px;font-size:18px;cursor:pointer;flex-shrink:0;
+    display:flex;align-items:center;justify-content:center;line-height:1}
+  .modal-close:hover{background:var(--axis);color:var(--ink)}
+  .modal-body{overflow-y:auto;padding:16px 22px 22px;display:flex;flex-direction:column;gap:6px}
+  /* flex-shrink:0 is load-bearing: without it 26 overflowing rows get squeezed
+     and the source names clip mid-glyph. */
+  .msrc{border:1px solid var(--ring);border-radius:10px;overflow:hidden;flex:0 0 auto}
+  .msrc-head{display:flex;align-items:center;gap:9px;padding:10px 13px;cursor:pointer;
+    user-select:none;background:var(--plane);min-height:38px;line-height:1.4}
+  .msrc-head:hover{background:var(--grid)}
+  .msrc-caret{color:var(--muted);font-size:10px;width:10px;flex-shrink:0}
+  .msrc-name{font-size:12.5px;font-weight:600;color:var(--ink);
+    font-family:"SF Mono",ui-monospace,monospace;flex:1;word-break:break-all}
+  .msrc-count{font-size:11px;color:var(--muted);flex-shrink:0}
+  pre.modal-code{display:none;font:12.5px/1.7 "SF Mono",ui-monospace,"Cascadia Code",monospace;
+    background:var(--surface);border-top:1px solid var(--ring);
+    padding:14px 16px;overflow-x:auto;margin:0;color:var(--ink);white-space:pre;max-height:52vh}
+  .msrc.open pre.modal-code{display:block}
+</style>
+</head>
+<body>
+<nav id="sidenav">
+  <div class="nav-brand"><b>Coraza WAF</b><span>Performance Report</span></div>
+  <div class="nav-section">Sections</div>
+  <div class="nav-item active" data-target="section-setup">Setup Architecture</div>
+  <div class="nav-item" data-target="section-scenario">Scenario</div>
+  <div class="nav-item" data-target="section-profile">Load profile</div>
+  <div class="nav-item" data-target="section-rulesets">RuleSets</div>
+  <div class="nav-item" data-target="section-percentiles">Latency percentiles</div>
+  <div class="nav-item" data-target="section-tail">Latency tail by tag</div>
+  <div class="nav-item" data-target="section-delta">WAF cost Δ ms</div>
+</nav>
+<div class="wrap">
+  <header>
+    <div>
+      <h1>Coraza WAF — added latency <span style="color:var(--muted);font-weight:400">· Path A (in-cluster)</span></h1>
+      <div class="sub" id="sub"></div>
+    </div>
+    <button class="toggle" id="theme">◐ Theme</button>
+  </header>
+
+  <div class="card" id="section-setup" style="margin-top:18px">
+    <h2>Test setup — traffic flow (Path A, in-cluster)</h2>
+    <div id="setupDiagram"></div>
+    <p class="sub" style="text-align:center;margin-top:8px;margin-bottom:2px">
+      fortio (in-cluster) sends HTTP to the Gateway; Envoy runs coraza-proxy-wasm inline on every request.
+      The WAF pulls its rule set from the operator's RuleSetCache via HTTP poll (~15 s interval).
+      fortio measures the <strong>complete client-observable round-trip</strong> (loadgen → Gateway → echo → Gateway → loadgen).
+      WAF cost&nbsp;=&nbsp;Δ latency vs. <em>waf-off</em> baseline, per percentile, median of repeats.
+    </p>
+  </div>
+
+  <div class="card" id="section-scenario">
+    <h2>Scenario — how hard we pushed</h2>
+    <div id="scenarioBody"></div>
+  </div>
+
+  <div class="card" id="section-profile">
+    <h2>Load profile — what each request looked like</h2>
+    <div id="profileBody"></div>
+  </div>
+
+  <div class="card" id="section-rulesets">
+    <h2>RuleSets</h2>
+    <div class="rulesets-grid" id="rulesetsGrid"></div>
+  </div>
+
+  <div class="card" id="section-percentiles">
+    <h2>Latency percentiles — all tags (client, median of runs)</h2>
+    <p class="sub" style="margin:-4px 0 12px">
+      Each cell reads <b>latency&nbsp;(+Δ&nbsp;ms, +%)</b> — the median, then what the WAF
+      <em>added</em> versus the <code>waf-off</code> baseline <strong>at that same percentile</strong>.
+      The percentage is that Δ as a share of the baseline, so <b>+100% means the WAF doubled it</b>
+      (not that it took 100% of baseline). Percentages differ across a row because each
+      is measured against its own percentile's baseline.
+    </p>
+    <div id="table"></div>
+  </div>
+
+  <div class="card" id="section-tail">
+    <h2>Latency tail by tag — median of runs</h2>
+    <div class="legend" id="leg1"></div>
+    <div id="chartLine"></div>
+  </div>
+
+  <div class="card" id="section-delta">
+    <h2>WAF cost — added latency vs baseline (Δ ms)</h2>
+    <div class="legend" id="leg2"></div>
+    <div id="chartDelta"></div>
+  </div>
+
+  <div class="card" id="serverCard" style="display:none">
+    <h2>Server-side summary — from collect.sh (per-tag, median of runs)</h2>
+    <div id="serverTable"></div>
+  </div>
+
+  <footer id="foot"></footer>
+</div>
+<div class="tt" id="tt"></div>
+
+<script>
+const DATA = /*__DATA__*/null;
+const SVGNS = "http://www.w3.org/2000/svg";
+const PALETTE = ["var(--s-base)","var(--s-min)","var(--s-crs)","var(--s-4)","var(--s-5)"];
+const PCTS = DATA.percentiles;
+const modes = DATA.modes;
+// baseline (waf-off) = blue; others cycle through the rest of the palette
+const COLOR = {};
+let ci = 0;
+modes.forEach(m => { COLOR[m.mode] = (m.delta && Object.values(m.delta).every(v=>v==null))
+  ? PALETTE[0] : PALETTE[1 + (ci++ % (PALETTE.length-1))]; });
+const wafModes = modes.filter(m => Object.values(m.delta).some(v=>v!=null));
+const fmt = v => v==null ? "—" : v.toFixed(2);
+const el=(t,a={},...kids)=>{const n=document.createElement(t);for(const k in a)k==="html"?n.innerHTML=a[k]:n.setAttribute(k,a[k]);kids.forEach(c=>n.append(c));return n;};
+const S=(t,a={})=>{const n=document.createElementNS(SVGNS,t);for(const k in a)n.setAttribute(k,a[k]);return n;};
+const tt=document.getElementById("tt");
+function showTT(html,x,y){tt.innerHTML=html;tt.style.opacity=1;
+  const w=tt.offsetWidth,h=tt.offsetHeight;
+  tt.style.left=Math.min(x+14,innerWidth-w-8)+"px";
+  tt.style.top=Math.max(8,y-h-12)+"px";}
+function hideTT(){tt.style.opacity=0;}
+function niceMax(v){if(v<=0)return 1;const p=Math.pow(10,Math.floor(Math.log10(v)));const n=v/p;
+  const s=n<=1?1:n<=2?2:n<=5?5:10;return s*p;}
+
+// ---- sub + footer
+const base=modes.find(m=>Object.values(m.delta).every(v=>v==null)) || modes[0];
+const conn=(modes.find(m=>m.conn)||{}).conn, rq=(modes.find(m=>m.requested_qps)||{}).requested_qps;
+document.getElementById("sub").textContent =
+  `scenario '${DATA.scenario}' · ${modes.reduce((a,m)=>a+m.runs,0)} runs · median of ${Math.max(...modes.map(m=>m.runs))} `
+  + (rq?`· ~${Math.round(rq)} qps target `:"") + (conn?`· ${conn} conns `:"") + `· generated ${DATA.generated}`;
+document.getElementById("foot").innerHTML =
+  "Full operator on cluster (Path A) — Envoy + coraza-proxy-wasm behind the Gateway, operator cache, Istio. "
+  + "WAF cost = tag − waf-off (B0), per percentile, median of repeats. "
+  + "Client latency is fortio (HDR); server-side tiles are pulled from Prometheus by collect.sh for the run window. "
+  + "This is the frozen per-run artifact — compare runs report-to-report, not on live Grafana.";
+
+// ---- legends
+function legend(id,ms){const c=document.getElementById(id);
+  ms.forEach(m=>c.append(el("span",{},el("i",{class:"sw",style:`background:${COLOR[m.mode]}`}),document.createTextNode(m.label))));}
+legend("leg1",modes); legend("leg2",wafModes);
+
+// ---- SETUP DIAGRAM: traffic flow
+(function(){
+  const W=720, H=200;
+  const svg=S("svg",{viewBox:`0 0 ${W} ${H}`,role:"img","aria-label":"Traffic flow: fortio → Gateway (Envoy + WAF) → echo backend"});
+
+  // arrowhead markers
+  const defs=S("defs");
+  const mkr=(id,col)=>{
+    const m=S("marker",{id,markerWidth:"8",markerHeight:"6",refX:"8",refY:"3",orient:"auto"});
+    const p=S("path",{d:"M0,0 L8,3 L0,6 Z"});
+    p.style.fill=col; m.append(p); return m;
+  };
+  defs.append(mkr("mArr","var(--axis)"),mkr("mDsh","var(--muted)"));
+  svg.append(defs);
+
+  // helpers
+  const box=(x,y,w,h,o={})=>{
+    const r=S("rect",{x,y,width:w,height:h,rx:o.rx??10,ry:o.rx??10});
+    r.style.fill=o.fill??"var(--surface)";
+    r.style.stroke=o.stroke??"var(--ring)";
+    r.style.strokeWidth=o.sw??"1.2";
+    return r;
+  };
+  const txt=(s,x,y,o={})=>{
+    const t=S("text",{x,y,"text-anchor":o.a??"middle","dominant-baseline":"middle"});
+    t.style.fill=o.fill??"var(--ink)";
+    t.style.fontSize=(o.size??13)+"px";
+    t.style.fontWeight=o.w??600;
+    t.textContent=s; return t;
+  };
+  const line=(x1,y1,x2,y2,dash=false)=>{
+    const l=S("line",{x1,y1,x2,y2,"marker-end":dash?"url(#mDsh)":"url(#mArr)"});
+    l.style.stroke=dash?"var(--muted)":"var(--axis)";
+    l.style.strokeWidth="1.5";
+    if(dash)l.style.strokeDasharray="5 3";
+    return l;
+  };
+
+  // layout
+  const LG={x:15,  y:40, w:118, h:62};   // fortio loadgen
+  const GW={x:192, y:20, w:290, h:110};  // gateway outer (Envoy)
+  const WF={x:210, y:60, w:254, h:52};   // coraza-proxy-wasm inner
+  const BE={x:542, y:40, w:118, h:62};   // echo backend
+  const RC={x:258, y:150, w:155, h:38};  // ruleset cache
+  const rowY=LG.y+LG.h/2;                // 71 — request-path centre
+
+  // === boxes (draw order = layering) ===
+  // 1. gateway outer (opaque surface; WAF box draws on top)
+  svg.append(box(GW.x,GW.y,GW.w,GW.h));
+  svg.append(txt("Gateway  ·  Envoy proxy",GW.x+GW.w/2,GW.y+17,{size:10.5,w:600,fill:"var(--ink2)"}));
+
+  // 2. WAF inner (blue tint, accent border)
+  svg.append(box(WF.x,WF.y,WF.w,WF.h,{rx:8,fill:"rgba(42,120,214,0.09)",stroke:"var(--s-base)",sw:"1.5"}));
+  svg.append(txt("coraza-proxy-wasm",WF.x+WF.w/2,WF.y+WF.h/2-8,{size:12.5}));
+  svg.append(txt("WAF filter (Envoy WASM extension)",WF.x+WF.w/2,WF.y+WF.h/2+9,{size:10,w:400,fill:"var(--ink2)"}));
+
+  // 3. loadgen
+  svg.append(box(LG.x,LG.y,LG.w,LG.h));
+  svg.append(txt("fortio",LG.x+LG.w/2,rowY-9));
+  svg.append(txt("load generator",LG.x+LG.w/2,rowY+9,{size:10.5,w:400,fill:"var(--ink2)"}));
+
+  // 4. backend
+  svg.append(box(BE.x,BE.y,BE.w,BE.h));
+  svg.append(txt("echo",BE.x+BE.w/2,rowY-9));
+  svg.append(txt("backend",BE.x+BE.w/2,rowY+9,{size:10.5,w:400,fill:"var(--ink2)"}));
+
+  // 5. ruleset cache
+  svg.append(box(RC.x,RC.y,RC.w,RC.h,{rx:8}));
+  svg.append(txt("RuleSetCache",RC.x+RC.w/2,RC.y+RC.h/2-7,{size:11.5,w:600}));
+  svg.append(txt("operator  ·  :18080",RC.x+RC.w/2,RC.y+RC.h/2+8,{size:10,w:400,fill:"var(--ink2)"}));
+
+  // === arrows (always on top) ===
+  // request path (solid)
+  svg.append(line(LG.x+LG.w,rowY,GW.x,rowY));
+  svg.append(txt("HTTP",(LG.x+LG.w+GW.x)/2,rowY-11,{size:10,w:400,fill:"var(--muted)"}));
+  svg.append(line(GW.x+GW.w,rowY,BE.x,rowY));
+  svg.append(txt("upstream",(GW.x+GW.w+BE.x)/2,rowY-11,{size:10,w:400,fill:"var(--muted)"}));
+
+  // poll: WAF → RuleSetCache (dashed, downward from gateway bottom)
+  const px=RC.x+RC.w/2;
+  svg.append(line(px,GW.y+GW.h,px,RC.y,true));
+  svg.append(txt("polls ~15 s",px+10,(GW.y+GW.h+RC.y)/2,{size:10,w:400,fill:"var(--muted)",a:"start"}));
+
+  document.getElementById("setupDiagram").append(svg);
+})();
+
+// ---- LINE CHART: latency tail
+(function(){
+  const W=720,H=360,mL=52,mR=120,mT=16,mB=38, pw=W-mL-mR, ph=H-mT-mB;
+  const svg=S("svg",{viewBox:`0 0 ${W} ${H}`,role:"img"});
+  const maxV=niceMax(Math.max(...modes.flatMap(m=>PCTS.map(p=>m.pcts[p]||0)))*1.08);
+  const X=i=>mL+(PCTS.length===1?pw/2:pw*i/(PCTS.length-1));
+  const Y=v=>mT+ph-(v/maxV)*ph;
+  for(let t=0;t<=5;t++){const v=maxV*t/5,y=Y(v);
+    svg.append(S("line",{class:"gl",x1:mL,y1:y,x2:mL+pw,y2:y}));
+    const tx=S("text",{class:"tk",x:mL-8,y:y+4,"text-anchor":"end"});tx.textContent=v.toFixed(v<10?1:0);svg.append(tx);}
+  svg.append(S("line",{class:"ax",x1:mL,y1:mT+ph,x2:mL+pw,y2:mT+ph}));
+  PCTS.forEach((p,i)=>{const tx=S("text",{class:"tkx",x:X(i),y:mT+ph+22,"text-anchor":"middle"});tx.textContent=p;svg.append(tx);});
+  const yl=S("text",{class:"tk",x:mL-8,y:mT-4,"text-anchor":"end"});yl.textContent="ms";svg.append(yl);
+  modes.forEach(m=>{
+    const pts=PCTS.map((p,i)=>[X(i),Y(m.pcts[p]||0)]);
+    const pl=S("polyline",{fill:"none",stroke:COLOR[m.mode],"stroke-width":2,"stroke-linejoin":"round",
+      points:pts.map(a=>a.join(",")).join(" ")});svg.append(pl);
+    pts.forEach(([x,y])=>{svg.append(S("circle",{cx:x,cy:y,r:2.5,fill:"var(--surface)",stroke:COLOR[m.mode],"stroke-width":2}));});
+    const last=pts[pts.length-1];
+    svg.append(S("circle",{cx:last[0]+12,cy:last[1],r:4,fill:COLOR[m.mode]}));
+    const lbl=S("text",{class:"dl",x:last[0]+20,y:last[1]+4});lbl.textContent=m.mode;svg.append(lbl);
+  });
+  const cross=S("line",{class:"cross",y1:mT,y2:mT+ph,x1:0,x2:0,style:"opacity:0"});svg.append(cross);
+  const hit=S("rect",{x:mL,y:mT,width:pw,height:ph,fill:"transparent"});svg.append(hit);
+  hit.addEventListener("mousemove",e=>{
+    const r=svg.getBoundingClientRect(),sx=(e.clientX-r.left)/r.width*W;
+    let i=Math.round((sx-mL)/(pw/(PCTS.length-1)));i=Math.max(0,Math.min(PCTS.length-1,i));
+    cross.setAttribute("x1",X(i));cross.setAttribute("x2",X(i));cross.style.opacity=1;
+    const rows=modes.map(m=>`<div class="row"><i><span class="sw" style="background:${COLOR[m.mode]}"></span>${m.mode}</i><b>${fmt(m.pcts[PCTS[i]])} ms</b></div>`).join("");
+    showTT(`<b>${PCTS[i]}</b>${rows}`,e.clientX,e.clientY);
+  });
+  hit.addEventListener("mouseleave",()=>{cross.style.opacity=0;hideTT();});
+  document.getElementById("chartLine").append(svg);
+})();
+
+// ---- DELTA BARS: added latency vs baseline
+(function(){
+  if(!wafModes.length) return;
+  const W=720,H=320,mL=52,mR=16,mT=16,mB=38, pw=W-mL-mR, ph=H-mT-mB;
+  const svg=S("svg",{viewBox:`0 0 ${W} ${H}`,role:"img"});
+  const maxV=niceMax(Math.max(0.001,...wafModes.flatMap(m=>PCTS.map(p=>m.delta[p]||0)))*1.12);
+  const Y=v=>mT+ph-(Math.max(0,v)/maxV)*ph;
+  for(let t=0;t<=5;t++){const v=maxV*t/5,y=Y(v);
+    svg.append(S("line",{class:"gl",x1:mL,y1:y,x2:mL+pw,y2:y}));
+    const tx=S("text",{class:"tk",x:mL-8,y:y+4,"text-anchor":"end"});tx.textContent=v.toFixed(2);svg.append(tx);}
+  svg.append(S("line",{class:"ax",x1:mL,y1:mT+ph,x2:mL+pw,y2:mT+ph}));
+  const gw=pw/PCTS.length, n=wafModes.length, bw=Math.min(34,(gw-14)/n);
+  PCTS.forEach((p,gi)=>{
+    const gx=mL+gw*gi+(gw-bw*n-2*(n-1))/2;
+    const tx=S("text",{class:"tkx",x:mL+gw*gi+gw/2,y:mT+ph+22,"text-anchor":"middle"});tx.textContent=p;svg.append(tx);
+    wafModes.forEach((m,bi)=>{
+      const v=m.delta[p]||0, x=gx+bi*(bw+2), y=Y(v), h=mT+ph-y;
+      const bar=S("rect",{x:x,y:y,width:bw,height:Math.max(0,h),rx:4,ry:4,fill:COLOR[m.mode]});
+      svg.append(bar);
+      bar.addEventListener("mousemove",e=>showTT(
+        `<b>${m.mode} · ${p}</b><div class="row"><i>added</i><b>+${fmt(v)} ms</b></div>`
+        +`<div class="row"><i>base→waf</i><b>${fmt(base.pcts[p])}→${fmt(m.pcts[p])}</b></div>`,e.clientX,e.clientY));
+      bar.addEventListener("mouseleave",hideTT);
+    });
+  });
+  document.getElementById("chartDelta").append(svg);
+})();
+
+// ---- CLIENT TABLE
+(function(){
+  const t=el("table");
+  const head=el("tr",{}, el("th",{},document.createTextNode("tag")));
+  PCTS.forEach(p=>head.append(el("th",{},document.createTextNode(p+" ms"))));
+  ["qps","err %","runs"].forEach(h=>head.append(el("th",{},document.createTextNode(h))));
+  t.append(el("thead",{},head));
+  const tb=el("tbody");
+  modes.forEach(m=>{
+    const tr=el("tr",{});
+    tr.append(el("td",{html:`<span class="dot" style="background:${COLOR[m.mode]}"></span>${m.label}`}));
+    PCTS.forEach(p=>{
+      const d=m.delta[p];
+      const b=base?base.pcts[p]:null;
+      const pct=(d!=null&&b)?Math.round(d/b*100):null;
+      const note=d!=null?` <span style="color:var(--muted)">(+${d.toFixed(2)} ms, +${pct??'—'}%)</span>`:"";
+      const td=el("td",{html:fmt(m.pcts[p])+note});
+      if(d!=null){
+        td.style.cursor="help";
+        td.addEventListener("mousemove",e=>showTT(
+          `<b>${m.label} · ${p}</b>`
+          +`<div class="row"><i>baseline</i><b>${fmt(b)} ms</b></div>`
+          +`<div class="row"><i>with WAF</i><b>${fmt(m.pcts[p])} ms</b></div>`
+          +`<div class="row"><i>added</i><b>+${fmt(d)} ms</b></div>`
+          +`<div class="row"><i>${fmt(d)} / ${fmt(b)}</i><b>+${pct??'—'}%</b></div>`,
+          e.clientX,e.clientY));
+        td.addEventListener("mouseleave",hideTT);
+      }
+      tr.append(td);
+    });
+    tr.append(el("td",{},document.createTextNode(m.qps!=null?m.qps.toFixed(0):"—")));
+    tr.append(el("td",{},document.createTextNode(m.err!=null?m.err.toFixed(2):"—")));
+    tr.append(el("td",{},document.createTextNode(m.runs)));
+    tb.append(tr);
+  });
+  t.append(tb);
+  document.getElementById("table").append(t);
+})();
+
+// ---- SERVER-SIDE TABLE (collect.sh), only if present
+(function(){
+  if(!DATA.has_server) return;
+  document.getElementById("serverCard").style.display="";
+  const cols=[
+    ["rules", m=>m.server&&m.server.rule_count!=null?m.server.rule_count:"—"],
+    ["reloads Δ", m=>m.server&&m.server.plugin_loads_delta!=null?m.server.plugin_loads_delta:"—"],
+    ["RPS pass", m=>m.server&&m.server.rps?fmt(m.server.rps.pass):"—"],
+    ["RPS block", m=>m.server&&m.server.rps?fmt(m.server.rps.block):"—"],
+    ["anomaly p95", m=>m.server&&m.server.anomaly_p95!=null?fmt(m.server.anomaly_p95):"—"],
+    ["cache p99 ms", m=>m.server&&m.server.cache_p99_ms!=null?fmt(m.server.cache_p99_ms):"—"],
+    ["cache MB", m=>m.server&&m.server.cache_size_mb!=null?fmt(m.server.cache_size_mb):"—"],
+    ["workqueue", m=>m.server&&m.server.workqueue_max!=null?fmt(m.server.workqueue_max):"—"],
+  ];
+  const t=el("table");
+  const head=el("tr",{}, el("th",{},document.createTextNode("tag")));
+  cols.forEach(([h])=>head.append(el("th",{},document.createTextNode(h))));
+  t.append(el("thead",{},head));
+  const tb=el("tbody");
+  modes.forEach(m=>{
+    const tr=el("tr",{});
+    tr.append(el("td",{html:`<span class="dot" style="background:${COLOR[m.mode]}"></span>${m.label}`}));
+    cols.forEach(([,f])=>tr.append(el("td",{},document.createTextNode(String(f(m))))));
+    tb.append(tr);
+  });
+  t.append(tb);
+  document.getElementById("serverTable").append(t);
+})();
+
+// ---- SCENARIO + LOAD PROFILE (the configuration under test)
+(function(){
+  const dl=(rows)=>{const d=el("dl",{class:"cfg"});
+    rows.forEach(([k,v])=>{d.append(el("dt",{},k),el("dd",{html:v}));});return d;};
+  const code=v=>`<code>${String(v).replace(/&/g,"&amp;").replace(/</g,"&lt;")}</code>`;
+
+  // --- scenario
+  const s=DATA.scenario_cfg, sb=document.getElementById("scenarioBody");
+  if(sb && s){
+    sb.append(el("div",{class:"cfg-name"},s.name));
+    if(s.found){
+      // Observed QPS comes from fortio; a big gap from the target means the
+      // generator or the target could not keep up and the run is suspect.
+      const obs=modes.filter(m=>m.qps!=null).map(m=>m.qps);
+      const avg=obs.length?obs.reduce((a,b)=>a+b,0)/obs.length:null;
+      const target=parseFloat(s.qps);
+      const rows=[
+        ["Target rate", s.qps==="0"?"unthrottled (max throughput)":`${s.qps} qps`],
+        ["Duration", s.duration],
+        ["Connections", s.conns],
+      ];
+      if(avg!=null) rows.push(["Observed rate",
+        `${avg.toFixed(0)} qps`+(target>0&&Math.abs(avg-target)/target>0.05
+          ? ` <span class="cfg-warn">— ${((avg-target)/target*100).toFixed(0)}% off target</span>`:"")]);
+      sb.append(dl(rows));
+    } else {
+      sb.append(el("p",{class:"cfg-note"},
+        `Definition not found in scenarios/${s.name}.env — it may have been renamed or deleted since this run.`));
+    }
+  }
+
+  // --- load profile
+  const p=DATA.profile_cfg, pb=document.getElementById("profileBody");
+  if(pb){
+    if(!p){
+      pb.append(el("div",{class:"cfg-name"},"none"));
+      pb.append(el("p",{class:"cfg-note",html:
+        "No <code>LOAD_PROFILE</code> was set, so run.sh's built-in shape applied: "
+        +"<b>GET /</b> with no query arguments, no body and no extra headers.<br>"
+        +"That is the WAF's cheapest path — most CRS rules evaluate per-argument and see "
+        +"an empty collection — so these numbers are a <b>floor</b>, not representative traffic."}));
+    } else if(!p.found){
+      pb.append(el("div",{class:"cfg-name"},p.name));
+      pb.append(el("p",{class:"cfg-note"},
+        `Definition not found in manifests/load-profiles/${p.name}.env — it may have been renamed or deleted since this run.`));
+    } else {
+      pb.append(el("div",{class:"cfg-name"},p.name));
+      let body="none";
+      if(p.payload_file) body=`${code(p.payload_file)} (from the perf-payloads ConfigMap)`;
+      else if(p.payload_inline) body="inline literal";
+      else if(p.payload_size>0) body=`${p.payload_size.toLocaleString()} bytes of random data`;
+      const rows=[
+        ["Method", p.method+(p.method_implied?' <span style="color:var(--muted)">(implied by fortio)</span>':"")],
+        ["Path", code(p.path)],
+        ["Request body", body],
+      ];
+      if(p.content_type) rows.push(["Content-Type", code(p.content_type)]);
+      rows.push(["Extra headers", p.headers.length
+        ? p.headers.length+" — "+p.headers.map(h=>code(h.split(":")[0])).join(" ") : "none"]);
+      rows.push(["Expected status", code(p.expect_status)
+        +(p.expect_status!=="200"?' <span style="color:var(--muted)">(blocking profile — measures the deny path)</span>':"")]);
+      pb.append(dl(rows));
+      const argc=(p.path.split("?")[1]||"").split("&").filter(Boolean).length;
+      pb.append(el("p",{class:"cfg-note",html:
+        `Query arguments: <b>${argc}</b>. CRS evaluates most detection rules once per argument, `
+        +`so this count is a primary driver of its cost.`}));
+    }
+  }
+})();
+
+// ---- RULESETS
+(function(){
+  const rulesets = DATA.rulesets || [];
+  const grid = document.getElementById("rulesetsGrid");
+  if(!grid || !rulesets.length) return;
+
+  // modal helpers
+  let activeOverlay = null;
+  const closeModal = () => { if(activeOverlay){ activeOverlay.remove(); activeOverlay=null; } };
+  document.addEventListener("keydown", e => { if(e.key==="Escape") closeModal(); });
+
+  const openModal = (p, color) => {
+    closeModal();
+    const overlay = el("div",{class:"modal-overlay"});
+    const modal  = el("div",{class:"modal"});
+
+    // header
+    const closeBtn = el("button",{class:"modal-close","aria-label":"Close"},"×");
+    closeBtn.addEventListener("click", closeModal);
+    modal.append(el("div",{class:"modal-head"},
+      el("div",{class:"modal-title"},
+        el("i",{class:"sw",style:`background:${color}`}),
+        document.createTextNode(p.name)
+      ),
+      closeBtn
+    ));
+
+    // body: one collapsible row per source. CRS has 26 sources / 12k lines,
+    // so everything stays collapsed unless the profile has just a couple.
+    const body = el("div",{class:"modal-body"});
+    const openAll = p.sources.length <= 2;
+    p.sources.forEach((s,i) => {
+      const row  = el("div",{class:"msrc"});
+      const code = el("pre",{class:"modal-code"},s.rules||"");
+      const caret = el("span",{class:"msrc-caret"},"▸");
+      const head = el("div",{class:"msrc-head"},
+        caret,
+        el("span",{class:"msrc-name"},s.name),
+        el("span",{class:"msrc-count"},`${s.rule_count} rules`)
+      );
+      const setOpen = open => {
+        row.classList.toggle("open",open);
+        caret.textContent = open ? "▾" : "▸";
+      };
+      head.addEventListener("click",()=>setOpen(!row.classList.contains("open")));
+      row.append(head,code);
+      setOpen(openAll || i === 0);  // first source open so rules are visible on open
+      body.append(row);
+    });
+    modal.append(body);
+
+    overlay.append(modal);
+    overlay.addEventListener("click", e => { if(e.target===overlay) closeModal(); });
+    document.body.append(overlay);
+    activeOverlay = overlay;
+  };
+
+  // build cards
+  rulesets.forEach(p => {
+    const color = COLOR[p.name] || "var(--muted)";
+    const hasSources = p.sources && p.sources.length > 0;
+    const card = el("div",{class:"pcrd"});
+
+    card.append(el("div",{class:"pcrd-header"},
+      el("i",{class:"sw",style:`background:${color}`}),
+      el("span",{class:"pcrd-name"},p.name)
+    ));
+    card.append(el("div",{},
+      el("span",{class:"pcrd-count"},String(p.rule_count)),
+      el("span",{class:"pcrd-unit"}," rules")
+    ));
+
+    if(!hasSources){
+      card.append(el("p",{class:"pcrd-empty"},"No rules — WAF disabled (baseline)"));
+    } else {
+      const toggle = el("div",{class:"pcrd-toggle"},"▸ Show rules");
+      toggle.addEventListener("click", () => openModal(p, color));
+      card.append(toggle);
+    }
+    grid.append(card);
+  });
+})();
+
+// ---- sidenav: scroll-spy + click-to-scroll
+(function(){
+  const items=[...document.querySelectorAll('.nav-item[data-target]')];
+  const setActive=id=>{items.forEach(n=>{n.classList.toggle('active',n.dataset.target===id);});};
+  // IntersectionObserver: highlight item whose section is nearest the top
+  const io=new IntersectionObserver(entries=>{
+    entries.forEach(e=>{if(e.isIntersecting)setActive(e.target.id);});
+  },{rootMargin:'-10% 0px -80% 0px'});
+  items.forEach(n=>{
+    const sec=document.getElementById(n.dataset.target);
+    if(sec) io.observe(sec);
+    n.addEventListener('click',()=>{
+      const sec=document.getElementById(n.dataset.target);
+      if(sec) sec.scrollIntoView({behavior:'smooth',block:'start'});
+    });
+  });
+})();
+
+// ---- theme toggle
+document.getElementById("theme").addEventListener("click",()=>{
+  const cur=document.documentElement.getAttribute("data-theme");
+  const dark=cur? cur==="dark" : matchMedia("(prefers-color-scheme:dark)").matches;
+  document.documentElement.setAttribute("data-theme", dark?"light":"dark");
+});
+</script>
+</body>
+</html>
