@@ -23,7 +23,7 @@ require (
 	github.com/antchfx/htmlquery v1.3.4 // indirect
 	github.com/antchfx/xpath v1.3.6 // indirect
 	github.com/bgentry/go-netrc v0.0.0-20140422174119-9fd32a8b3d3d // indirect
-	github.com/corazawaf/coraza/v3 v3.8.0 // indirect
+	github.com/corazawaf/coraza/v3 v3.8.1 // indirect
 	github.com/corazawaf/libinjection-go v0.3.3 // indirect
 	github.com/coreruleset/ftw-tests-schema/v2 v2.3.0 // indirect
 	github.com/creativeprojects/go-selfupdate v1.5.2 // indirect

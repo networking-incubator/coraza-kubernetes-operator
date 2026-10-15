@@ -23,8 +23,8 @@ github.com/bmatcuk/doublestar/v4 v4.10.2 h1:eF7W7HWKg3z9NrWV9pTLnNeoXaqq3Tq9DNKX
 github.com/bmatcuk/doublestar/v4 v4.10.2/go.mod h1:xBQ8jztBU6kakFMg+8WGxn0c6z1fTSPVIjEY1Wr7jzc=
 github.com/corazawaf/coraza-coreruleset v0.0.0-20240226094324-415b1017abdc h1:OlJhrgI3I+FLUCTI3JJW8MoqyM78WbqJjecqMnqG+wc=
 github.com/corazawaf/coraza-coreruleset v0.0.0-20240226094324-415b1017abdc/go.mod h1:7rsocqNDkTCira5T0M7buoKR2ehh7YZiPkzxRuAgvVU=
-github.com/corazawaf/coraza/v3 v3.8.0 h1:3VZxU7JAN16BkhlHe2sZuZgE0r1qm8Aa1lI5sC/h7jI=
-github.com/corazawaf/coraza/v3 v3.8.0/go.mod h1:nPVk2JqADYBcKLYvo9cRsr+z4JhanU0WniGhZZBZD6c=
+github.com/corazawaf/coraza/v3 v3.8.1 h1:dMV55FbMR2vOks/acrT43RShR+VkzU6jwp+XPdxay8o=
+github.com/corazawaf/coraza/v3 v3.8.1/go.mod h1:nPVk2JqADYBcKLYvo9cRsr+z4JhanU0WniGhZZBZD6c=
 github.com/corazawaf/libinjection-go v0.3.3 h1:NhbXKRfRpqKzBMzv8zpCcnjyEw7BCVhBOv9IPuBl7Fc=
 github.com/corazawaf/libinjection-go v0.3.3/go.mod h1:Ik/+w3UmTWH9yn366RgS9D95K3y7Atb5m/H/gXzzPCk=
 github.com/coreruleset/ftw-tests-schema/v2 v2.3.0 h1:zs2US8z7sDba1O//qgaD1qj5R5B90m6FjHuRAuKK03g=
