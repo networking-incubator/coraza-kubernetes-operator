@@ -3,7 +3,7 @@ module github.com/networking-incubator/coraza-kubernetes-operator
 go 1.26.2
 
 require (
-	github.com/corazawaf/coraza/v3 v3.8.0
+	github.com/corazawaf/coraza/v3 v3.8.1
 	github.com/go-logr/logr v1.4.4
 	github.com/google/uuid v1.6.0
 	github.com/prometheus/client_golang v1.24.1
