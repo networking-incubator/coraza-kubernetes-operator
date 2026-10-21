@@ -709,16 +709,16 @@ OPERATOR_SDK ?= $(LOCALBIN)/operator-sdk
 KUBE_API_LINTER = $(LOCALBIN)/golangci-lint-kube-api-linter
 
 CONTROLLER_TOOLS_VERSION ?= v0.21.0
-GOLANGCI_LINT_VERSION ?= v2.12.2
+GOLANGCI_LINT_VERSION ?= v2.15.0
 OPERATOR_SDK_VERSION ?= v1.42.0
-KUBE_API_LINTER_VERSION ?= v0.0.0-20260206102632-39e3d06a2850
+KUBE_API_LINTER_VERSION ?= v0.0.0-20261012124120-79b557aa8c8d
 
 .PHONY: controller-gen
 controller-gen: $(CONTROLLER_GEN)
 $(CONTROLLER_GEN): $(LOCALBIN)
 	$(call go-install-tool,$(CONTROLLER_GEN),sigs.k8s.io/controller-tools/cmd/controller-gen,$(CONTROLLER_TOOLS_VERSION))
 
-.PHONY: golangci-lint
+.PHONY: golangci-lint $(GOLANGCI_LINT)
 golangci-lint: $(GOLANGCI_LINT)
 $(GOLANGCI_LINT): $(LOCALBIN)
 	$(call go-install-tool,$(GOLANGCI_LINT),github.com/golangci/golangci-lint/v2/cmd/golangci-lint,$(GOLANGCI_LINT_VERSION))
