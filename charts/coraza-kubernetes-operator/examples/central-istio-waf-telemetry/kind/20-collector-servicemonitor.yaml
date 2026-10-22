@@ -1,0 +1,19 @@
+# Scrape the Prometheus exporter on the platform-owned central ALS collector.
+# The release label matches the local kube-prometheus-stack installation.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: central-waf-als-collector
+  namespace: coraza-central-waf-telemetry
+  labels:
+    release: kube-prometheus-stack
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: central-waf-als-collector
+      operator.opentelemetry.io/collector-service-type: base
+  endpoints:
+    - port: prometheus
+      path: /metrics
+      interval: 30s
+      scrapeTimeout: 10s

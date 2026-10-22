@@ -1,0 +1,40 @@
+apiVersion: waf.k8s.coraza.io/v1alpha1
+kind: RuleSource
+metadata:
+  name: base-rules
+  namespace: openshift-ingress
+  labels:
+    app.kubernetes.io/part-of: coraza-central-istio-waf-telemetry
+spec:
+  rules: |
+    SecRuleEngine On
+    SecRequestBodyAccess On
+    SecResponseBodyAccess Off
+---
+apiVersion: waf.k8s.coraza.io/v1alpha1
+kind: RuleSource
+metadata:
+  name: block-attack
+  namespace: openshift-ingress
+  labels:
+    app.kubernetes.io/part-of: coraza-central-istio-waf-telemetry
+spec:
+  rules: |
+    SecRule ARGS "@contains attack" \
+      "id:1001,\
+      phase:2,\
+      deny,\
+      status:403,\
+      msg:'Blocked: attack keyword detected'"
+---
+apiVersion: waf.k8s.coraza.io/v1alpha1
+kind: RuleSet
+metadata:
+  name: waf-ruleset
+  namespace: openshift-ingress
+  labels:
+    app.kubernetes.io/part-of: coraza-central-istio-waf-telemetry
+spec:
+  sources:
+    - name: base-rules
+    - name: block-attack

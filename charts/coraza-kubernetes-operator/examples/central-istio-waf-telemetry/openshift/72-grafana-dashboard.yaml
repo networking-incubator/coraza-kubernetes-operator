@@ -1,0 +1,16 @@
+apiVersion: grafana.integreatly.org/v1beta1
+kind: GrafanaDashboard
+metadata:
+  name: central-waf-telemetry
+  namespace: coraza-central-waf-telemetry
+  labels:
+    app.kubernetes.io/part-of: coraza-central-istio-waf-telemetry
+spec:
+  # Reuse the dashboard maintained and JSON-validated by the chart.
+  uid: coraza-waf
+  # This demonstrator namespace owns a single Grafana instance. An empty
+  # selector avoids the Grafana Operator v5 selector regression on OpenShift.
+  instanceSelector: {}
+  configMapRef:
+    name: central-waf-grafana-dashboard
+    key: coraza-waf.json

@@ -1,0 +1,8 @@
+# openshift-default GatewayClass (OpenShift Ingress / CIO Sail path).
+# Apply before annotate-gatewayclass.sh. CIO does not create this object.
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: openshift-default
+spec:
+  controllerName: openshift.io/gateway-controller/v1
