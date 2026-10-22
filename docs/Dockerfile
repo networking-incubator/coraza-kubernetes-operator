@@ -1,4 +1,8 @@
-FROM hugomods/hugo:exts@sha256:dcbc5b53c4e53bb74a7c986caf58a3954395a1e9d8dc9bb492f2c610a7cf6eb0
+FROM hugomods/hugo:dart-sass-go-git-0.165.0@sha256:c2b698012fd3f246161bd4dbb8da4f4064cfd1ac92d8eedf7b926eb619c79899
+
+# The dart-sass-go-git image ships Hugo extended 0.165.0, Go, Dart Sass,
+# and Git. Node/npm are needed for PostCSS and are installed via apk.
+RUN apk add --no-cache nodejs npm
 
 # Install PostCSS dependencies. Installed outside /src so volume mounts
 # don't shadow them. Versions are declared in package.json and tracked
