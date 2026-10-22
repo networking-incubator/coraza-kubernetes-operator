@@ -6,12 +6,83 @@ Guide for developing the Coraza Kubernetes Operator (CKO).
 
 # Development Environment
 
-A Kubernetes In Docker (KIND) cluster setup is provided. This will deploy
-Istio (to provide a `Gateway`) and deploy the Coraza Kubernetes Operator.
-
-> **Note**: Development and testing can be done on any Kubernetes cluster.
+Development and testing should be done on an existing Kubernetes or OpenShift cluster with Istio installed.
 
 ## Setup
+
+### Prerequisites
+
+- Access to a Kubernetes or OpenShift cluster
+- Istio installed with Gateway API support
+- `kubectl` or `oc` CLI configured
+
+### Install Istio (if not already installed)
+
+#### OpenShift clusters (recommended: use Sail Operator)
+
+OpenShift includes the Sail Operator for managing Istio. This is the recommended approach for OpenShift:
+
+```bash
+# Create istio-system namespace
+kubectl create namespace istio-system
+
+# Install Sail Operator via OLM
+cat <<EOF | kubectl apply -f -
+apiVersion: operators.coreos.com/v1
+kind: OperatorGroup
+metadata:
+  name: sail-operator
+  namespace: istio-system
+spec:
+  targetNamespaces:
+  - istio-system
+---
+apiVersion: operators.coreos.com/v1alpha1
+kind: Subscription
+metadata:
+  name: sailoperator
+  namespace: istio-system
+spec:
+  channel: 3.0-nightly
+  name: sailoperator
+  source: community-operators
+  sourceNamespace: openshift-marketplace
+EOF
+
+# Wait for operator to be ready
+kubectl wait --for=condition=Ready pod -l name=sail-operator -n istio-system --timeout=300s
+
+# Create Istio control plane
+cat <<EOF | kubectl apply -f -
+apiVersion: sailoperator.io/v1alpha1
+kind: Istio
+metadata:
+  name: default
+spec:
+  version: v1.23.2
+  namespace: istio-system
+  updateStrategy:
+    type: InPlace
+EOF
+
+# Wait for Istio to be ready
+kubectl wait --for=condition=Ready istio/default -n istio-system --timeout=300s
+```
+
+#### Kubernetes clusters (upstream Istio)
+
+For vanilla Kubernetes clusters without Sail Operator:
+
+```bash
+# Download and install istioctl
+curl -L https://istio.io/downloadIstio | sh -
+export PATH="$PWD/istio-1.30.3/bin:$PATH"
+
+# Install Istio with demo profile
+istioctl install --set profile=demo -y
+```
+
+### Deploy the Operator
 
 Build your current changes:
 
@@ -19,41 +90,18 @@ Build your current changes:
 make all
 ```
 
-Create the cluster:
+Deploy the operator to your cluster:
 
 ```bash
-make cluster.kind
+make deploy
 ```
 
-> **Note**: On Linux systems using cgroup v2 (e.g. Fedora), `make cluster.kind`
-> may fail with Docker and the following error:
->
-> ```text
-> could not find a log line that matches "Reached target .*Multi-User System.*|detected cgroup v1"
-> ```
->
-> Use Podman instead by setting both `CONTAINER_TOOL` (for image build and load)
-> and `KIND_EXPERIMENTAL_PROVIDER` (for cluster creation):
->
-> ```bash
-> CONTAINER_TOOL=podman KIND_EXPERIMENTAL_PROVIDER=podman make cluster.kind
-> ```
+This will build the operator with your current changes and deploy it to the `coraza-system` namespace.
 
-This will have built the operator with your current changes and loaded the
-operator image into the cluster, and started the operator in the
-`coraza-system` namespace.
-
-When you make changes to the controllers and want to test them, you can just
-run it again and it will rebuild, load and deploy:
+When you make changes to the controllers and want to test them, rebuild and redeploy:
 
 ```bash
-make cluster.kind
-```
-
-When you're done, you can destroy the cluster with:
-
-```bash
-make clean.cluster.kind
+make all deploy
 ```
 
 # Testing
@@ -78,7 +126,7 @@ This generates a `coverage.out` file and displays per-package and total coverage
 
 ### Integration Tests
 
-Run integration tests (requires a KIND cluster - see [Setup](#setup)):
+Run integration tests (requires a Kubernetes/OpenShift cluster - see [Setup](#setup)):
 
 ```bash
 make test.integration
@@ -91,13 +139,12 @@ These tests validate the operator's behavior on a live cluster, including:
 - Live RuleSource mutations
 
 Environment variables:
-- `KIND_CLUSTER_NAME` - Name of the KIND cluster to use (default: `coraza-kubernetes-operator-integration`)
 - `ISTIO_VERSION` - Istio version for testing (default: from Makefile)
 - `GOMAXPROCS` - Maximum number of OS threads for Go's runtime; also sets the default for `-parallel` (concurrent `t.Parallel()` tests). (default: CPU core count)
 
 ### Conformance Tests
 
-Run CoreRuleSet conformance tests using the [go-ftw](https://github.com/coreruleset/go-ftw) framework (often run a KIND cluster - see [Setup](#setup)):
+Run CoreRuleSet conformance tests using the [go-ftw](https://github.com/coreruleset/go-ftw) framework (requires a Kubernetes/OpenShift cluster - see [Setup](#setup)):
 
 ```bash
 make test.conformance
@@ -136,7 +183,7 @@ CONFORMANCE_EXTRA_FLAGS='IGNORE_TEST_MANIFEST_ERRORS=true' make test.conformance
 
 ### E2E Tests
 
-Run end-to-end tests (requires a KIND cluster - see [Setup](#setup)):
+Run end-to-end tests (requires a Kubernetes/OpenShift cluster - see [Setup](#setup)):
 
 ```bash
 make test.e2e
@@ -534,9 +581,7 @@ make helm.sync
 | `VERSION` | Version tag for builds | `dev` |
 | `IMAGE_REGISTRY` | Registry and org prefix for all images | `ghcr.io/networking-incubator` |
 | `CONTROLLER_MANAGER_CONTAINER_IMAGE` | Full operator image reference | `$(IMAGE_REGISTRY)/coraza-kubernetes-operator:v0.0.0-dev` |
-| `KIND_CLUSTER_NAME` | KIND cluster name for tests | `coraza-kubernetes-operator-integration` |
 | `ISTIO_VERSION` | Istio version for deployment | `1.30.3` |
-| `METALLB_VERSION` | MetalLB version for KIND | `0.16.1` |
 | `CORERULESET_VERSION` | CoreRuleSet version | `v4.28.0` |
 | `CORAZA_WASM_IMAGE` | WASM plugin image for tests | (See `test/framework/resources.go`) |
 | `NAMESPACE` | Target namespace for deployments | `default` |

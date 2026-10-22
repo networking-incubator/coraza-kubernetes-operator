@@ -18,10 +18,8 @@ behavior (reconciliation, status updates).
 ## Running
 
 ```bash
-# Kind cluster
-make test.e2e \
-  KIND_CLUSTER_NAME=coraza-kubernetes-operator-integration \
-  ISTIO_VERSION=1.30.3
+# Kubernetes cluster with Istio
+make test.e2e ISTIO_VERSION=1.30.3
 
 # OpenShift (override default GatewayClass)
 GATEWAY_CLASS=openshift-default make test.e2e
@@ -31,12 +29,11 @@ GATEWAY_CLASS=openshift-default make test.e2e
 
 `TestCentralALSMetricsPipeline` validates the complete data-plane path:
 Coraza Engine, WasmPlugin, Istio ALS, central OpenTelemetry Collector, and
-the collector's Prometheus metrics endpoint. It requires a dedicated KIND
-cluster because it temporarily updates the Istio `MeshConfig` provider.
+the collector's Prometheus metrics endpoint. It requires a cluster with
+OpenTelemetry Operator installed because it temporarily updates the Istio
+`MeshConfig` provider.
 
 ```bash
-make cluster.kind.otel
-
 make test.e2e \
   TEST_ARGS='-run TestCentralALSMetricsPipeline -count=1 -v'
 ```

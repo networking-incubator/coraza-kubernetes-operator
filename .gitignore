@@ -54,6 +54,10 @@ docs/content/reference/api.md
 docs/public/
 docs/resources/
 
+# performance-testing docs + Claude skills
+!test/performance/**/*.md
+!.claude/skills/**/*.md
+
 # templates
 !.github/*.md
 !.github/**/*.md

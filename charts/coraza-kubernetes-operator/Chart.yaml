@@ -4,7 +4,7 @@ description: Web Application Firewall (WAF) support for Kubernetes Gateways
 type: application
 version: 0.5.0
 appVersion: "0.5.0"
-kubeVersion: ">=1.32.0-0"
+kubeVersion: ">=1.25.0-0"
 home: https://github.com/networking-incubator/coraza-kubernetes-operator
 sources:
   - https://github.com/networking-incubator/coraza-kubernetes-operator

@@ -1,0 +1,28 @@
+{
+  "orderId": "ord_8f21c9a4",
+  "customer": {
+    "id": "cus_41b7",
+    "email": "buyer@example.com",
+    "name": "Sam Rivera",
+    "tier": "gold",
+    "address": {
+      "line1": "48 Harbour Road",
+      "line2": "Unit 7",
+      "city": "Haifa",
+      "postcode": "3109601",
+      "country": "IL"
+    }
+  },
+  "items": [
+    {"sku": "SHOE-RUN-42-BLU", "name": "Trail Runner", "qty": 1, "unitPrice": 129.95, "currency": "USD"},
+    {"sku": "SOCK-MER-L-GRY", "name": "Merino Socks", "qty": 3, "unitPrice": 14.5, "currency": "USD"},
+    {"sku": "LACE-FLT-120-BLK", "name": "Flat Laces 120cm", "qty": 2, "unitPrice": 4.25, "currency": "USD"}
+  ],
+  "shipping": {"method": "express", "carrier": "DHL", "cost": 18.0, "eta": "2026-10-08"},
+  "payment": {"method": "card", "brand": "visa", "last4": "4242", "authorized": true},
+  "totals": {"subtotal": 181.45, "tax": 30.85, "shipping": 18.0, "grand": 230.3},
+  "notes": "Leave with reception if nobody answers. Ring the bell twice.",
+  "source": "web",
+  "locale": "en-US",
+  "createdAt": "2026-10-04T19:55:00Z"
+}

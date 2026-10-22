@@ -35,7 +35,7 @@ PROM_VERSION ?= 3.12.0
 PROM_SHA256_LINUX_AMD64 ?= 20da47f8e5303f74aecb78edd7f7e39041dac08ac4939dba75efd7a900ae8867
 METALLB_VERSION ?= 0.16.1
 METALLB_POOL_SIZE ?= 128 # Defines the size of MetalLB pool, when being used
-# OpenTelemetry Operator chart used by make cluster.kind.otel.
+# OpenTelemetry Operator chart version.
 OTEL_OPERATOR_VERSION ?= 0.114.0
 
 VERSION ?= v0.0.0-dev
@@ -253,25 +253,7 @@ lint.api: kube-api-linter
 # Test Cluster
 # ------------------------------------------------------------------------------
 
-.PHONY: cluster.kind
-cluster.kind:
-	ISTIO_VERSION=${ISTIO_VERSION} METALLB_VERSION=${METALLB_VERSION} METALLB_POOL_SIZE=${METALLB_POOL_SIZE} OTEL_OPERATOR_VERSION=${OTEL_OPERATOR_VERSION} CONTROLLER_MANAGER_CONTAINER_IMAGE_BASE=${CONTROLLER_MANAGER_CONTAINER_IMAGE_BASE} CONTROLLER_MANAGER_CONTAINER_IMAGE_TAG=${CONTROLLER_MANAGER_CONTAINER_IMAGE_TAG} python3 hack/kind_cluster.py setup
-
-# cluster.kind + OpenTelemetry Operator (central collector CRDs). Plain cluster.kind skips OTel.
-.PHONY: cluster.kind.otel
-cluster.kind.otel:
-	INSTALL_OTEL_OPERATOR=true $(MAKE) cluster.kind
-cluster.kind: ## Create the KIND test cluster
-	ISTIO_VERSION=${ISTIO_VERSION} METALLB_VERSION=${METALLB_VERSION} METALLB_POOL_SIZE=${METALLB_POOL_SIZE} CONTROLLER_MANAGER_CONTAINER_IMAGE_BASE=${CONTROLLER_MANAGER_CONTAINER_IMAGE_BASE} CONTROLLER_MANAGER_CONTAINER_IMAGE_TAG=${CONTROLLER_MANAGER_CONTAINER_IMAGE_TAG} python3 hack/kind_cluster.py setup --name ${KIND_CLUSTER_NAME}
-
-.PHONY: cluster.load-images
-cluster.load-images: ## Load the operator image into the KIND test cluster
-	@$(CONTAINER_TOOL) exec ${KIND_CLUSTER_NAME}-control-plane crictl rmi ${CONTROLLER_MANAGER_CONTAINER_IMAGE} 2>/dev/null || true
-	$(KIND) load docker-image ${CONTROLLER_MANAGER_CONTAINER_IMAGE} --name ${KIND_CLUSTER_NAME}
-
-.PHONY: clean.cluster.kind
-clean.cluster.kind: ## Delete the KIND test cluster
-	python3 hack/kind_cluster.py delete --name ${KIND_CLUSTER_NAME}
+# KIND cluster targets removed - use existing Kubernetes/OpenShift clusters for testing
 
 # -------------------------------------------------------------------------------
 # Testing
@@ -503,7 +485,7 @@ helm.validate: ## Validate Helm templates render correctly for key flag combinat
 	hack/test-helm-manifests.sh
 
 .PHONY: test.metrics
-test.metrics: ## Run metrics integration tests (requires KIND cluster)
+test.metrics: ## Run metrics integration tests (requires Kubernetes cluster)
 	go clean -testcache
 	KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) ISTIO_VERSION=${ISTIO_VERSION} go test -tags=integration -run TestCorazaControllerMetrics ./test/integration/... -v
 
@@ -530,7 +512,7 @@ observability.promtool.install: ## Install promtool (PROM_VERSION) to INSTALL_DI
 		hack/observability/install-promtool.sh
 
 .PHONY: observability.prometheus.deploy
-observability.prometheus.deploy: ## Install kube-prometheus-stack on the KIND cluster
+observability.prometheus.deploy: ## Install kube-prometheus-stack on the cluster
 	@set -e; \
 	ctx="kind-$(KIND_CLUSTER_NAME)"; \
 	cfg="$(CURDIR)/config/observability"; \
@@ -556,7 +538,7 @@ observability.prometheus.deploy: ## Install kube-prometheus-stack on the KIND cl
 		"$$cfg/prometheus-rbac.yaml" | kubectl --context "$$ctx" apply -f -
 
 .PHONY: observability.prometheus.undeploy
-observability.prometheus.undeploy: ## Remove kube-prometheus-stack from the KIND cluster
+observability.prometheus.undeploy: ## Remove kube-prometheus-stack from the cluster
 	@set -e; \
 	ctx="kind-$(KIND_CLUSTER_NAME)"; \
 	if kubectl --context "$$ctx" cluster-info >/dev/null 2>&1; then \
@@ -618,7 +600,7 @@ observability.demo.workload: ## Apply demo CRs and seed traffic for dashboard me
 		hack/observability/seed-traffic.sh
 
 .PHONY: observability.demo
-observability.demo: observability.prometheus.deploy observability.operator.monitoring observability.demo.workload observability.grafana.url ## Full observability demo on existing KIND cluster
+observability.demo: observability.prometheus.deploy observability.operator.monitoring observability.demo.workload observability.grafana.url ## Full observability demo on existing cluster
 
 .PHONY: observability.grafana.port-forward
 observability.grafana.port-forward: ## Port-forward Grafana to http://localhost:3000
