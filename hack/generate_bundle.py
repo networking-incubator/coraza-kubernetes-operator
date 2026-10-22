@@ -40,7 +40,8 @@ BUNDLE_RESOURCE_KINDS = {"Service"}
 
 # Kinds rendered by Helm that are NOT included in the bundle.
 EXCLUDED_KINDS = {"Namespace", "PodDisruptionBudget", "ServiceMonitor",
-                  "ServiceAccount", "ClusterRole", "ClusterRoleBinding"}
+                  "ServiceAccount", "ClusterRole", "ClusterRoleBinding",
+                  "Role", "RoleBinding"}
 
 # Default when --min-kube-version is omitted. Keep in sync with KUBE_VERSION in the Makefile.
 DEFAULT_MIN_KUBE_VERSION = "1.32.0"
@@ -143,7 +144,7 @@ def build_csv(template_path: str, deployment: dict, cluster_role: dict,
               sa_name: str, version: str, image: str,
               replaces: str, channels: str, default_channel: str,
               package_name: str, min_kube_version: str,
-              alm_examples: list) -> dict:
+              alm_examples: list, roles: list | None = None) -> dict:
     """Build the CSV by injecting Helm-rendered resources into the template."""
     with open(template_path) as f:
         csv = yaml.safe_load(f)
@@ -168,6 +169,15 @@ def build_csv(template_path: str, deployment: dict, cluster_role: dict,
     csv["spec"]["install"]["spec"]["clusterPermissions"] = [
         {"serviceAccountName": sa_name, "rules": rules},
     ]
+
+    if roles:
+        permissions = []
+        for role in roles:
+            permissions.append({
+                "serviceAccountName": sa_name,
+                "rules": copy.deepcopy(role.get("rules", [])),
+            })
+        csv["spec"]["install"]["spec"]["permissions"] = permissions
 
     return csv
 
@@ -332,6 +342,7 @@ def main():
     deployment = find_by_kind(docs, "Deployment")
     cluster_role = find_by_kind(docs, "ClusterRole")
     service_account = find_by_kind(docs, "ServiceAccount")
+    roles = find_all_by_kind(docs, "Role")
 
     if not deployment:
         die("No Deployment found in Helm output")
@@ -363,6 +374,7 @@ def main():
         package_name=args.package_name,
         min_kube_version=min_kube_version,
         alm_examples=alm_examples,
+        roles=roles,
     )
     csv = strip_helm_labels(csv)
 
