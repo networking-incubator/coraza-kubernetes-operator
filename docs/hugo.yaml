@@ -11,9 +11,9 @@ languages:
 module:
   hugoVersion:
     extended: true
-    min: "0.145.0"
+    min: "0.160.1"
   imports:
-    - path: "github.com/google/docsy"
+    - path: "github.com/docsy/docsy/theme"
       disable: false
 
 markup:
