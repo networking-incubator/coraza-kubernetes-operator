@@ -26,7 +26,7 @@ ENV NODE_PATH=/deps/node_modules
 
 # Pre-fetch Hugo modules for faster builds.
 WORKDIR /src
-COPY go.mod go.sum hugo.yaml ./
+COPY --chown=hugo:hugo go.mod go.sum hugo.yaml ./
 RUN hugo mod get
 
 RUN go install github.com/elastic/crd-ref-docs@v0.3.0

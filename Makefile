@@ -657,7 +657,7 @@ docs.serve: docs.image ## Serve documentation locally with live reload
 
 .PHONY: docs.api
 docs.api: docs.image ## Generate CRD API reference from Go types
-	$(CONTAINER_TOOL) run --rm \
+	$(CONTAINER_TOOL) run --rm --user 0:0 \
 		-v $(CURDIR):/repo:z -w /repo $(DOCS_IMG) \
 		sh -c 'crd-ref-docs \
 			--source-path=api \
@@ -683,7 +683,7 @@ CHROMA_DARK_STYLE  ?= dracula
 
 .PHONY: docs.chroma
 docs.chroma: docs.image ## Regenerate Chroma syntax highlighting CSS for light and dark modes
-	$(CONTAINER_TOOL) run --rm -v $(CURDIR)/$(DOCS_DIR):/src:z $(DOCS_IMG) \
+	$(CONTAINER_TOOL) run --rm --user 0:0 -v $(CURDIR)/$(DOCS_DIR):/src:z $(DOCS_IMG) \
 		sh -c 'hugo gen chromastyles --style=$(CHROMA_LIGHT_STYLE) > /src/assets/scss/_chroma_light.css \
 		&& hugo gen chromastyles --style=$(CHROMA_DARK_STYLE) > /src/assets/scss/_chroma_dark.css \
 		&& chown $(shell id -u):$(shell id -g) /src/assets/scss/_chroma_light.css /src/assets/scss/_chroma_dark.css'
