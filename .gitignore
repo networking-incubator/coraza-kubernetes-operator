@@ -45,6 +45,7 @@ dist/
 !SECURITY.md
 !RELEASE.md
 !LIMITATIONS.md
+!design/*.md
 
 # documentation site (Hugo)
 !docs/*.md
