@@ -191,6 +191,47 @@ type EngineStatus struct {
 	// +kubebuilder:validation:MaxItems=16
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty" patchStrategy:"merge" patchMergeKey:"type" protobuf:"bytes,1,rep,name=conditions"`
+
+	// acceptedConfiguration records the last accepted complete Engine
+	// configuration. It survives desired-input degradation and is not a payload
+	// store.
+	//
+	// +optional
+	AcceptedConfiguration *EngineAcceptedConfiguration `json:"acceptedConfiguration,omitempty"`
+}
+
+// EngineAcceptedConfiguration records the Engine configuration accepted by the
+// leader and the inputs its content hash was derived from.
+type EngineAcceptedConfiguration struct {
+	// observedGeneration is the Engine generation whose configuration was
+	// accepted.
+	ObservedGeneration int64 `json:"observedGeneration"`
+
+	// renderingSchemaVersion is the schema version of the rendered runtime
+	// configuration.
+	RenderingSchemaVersion int32 `json:"renderingSchemaVersion"`
+
+	// version is the content-addressed version of the accepted configuration,
+	// in the form sha256:<64 lowercase hexadecimal characters>.
+	Version string `json:"version"`
+
+	// ruleSetUID is the UID of the RuleSet used for the accepted configuration.
+	RuleSetUID string `json:"ruleSetUID"`
+
+	// ruleSetContentHash is the accepted RuleSet content hash, in the form
+	// sha256:<64 lowercase hexadecimal characters>.
+	RuleSetContentHash string `json:"ruleSetContentHash"`
+
+	// binaryURL is the URL of the raw WASM binary used by the accepted
+	// configuration.
+	BinaryURL string `json:"binaryURL"`
+
+	// wasmSHA256 is the lowercase hexadecimal SHA-256 of the WASM binary used
+	// by the accepted configuration.
+	WasmSHA256 string `json:"wasmSHA256"`
+
+	// failurePolicy is the failure policy of the accepted configuration.
+	FailurePolicy FailurePolicy `json:"failurePolicy"`
 }
 
 // -----------------------------------------------------------------------------

@@ -82,22 +82,47 @@ spec:
                     properties:
                       image:
                         description: |-
+                          Deprecated: removed. Retained only to reject legacy manifests with a clear
+                          error and to let the startup preflight detect stored legacy objects.
+
                           image is the OCI image reference for the Coraza WASM plugin.
-                          If omitted the operator uses its configured default WASM OCI reference
-                          (--default-wasm-image / CORAZA_DEFAULT_WASM_IMAGE).
                         maxLength: 1024
                         minLength: 1
                         type: string
                       imagePullSecret:
                         description: |-
+                          Deprecated: removed. See Image.
+
                           imagePullSecret is the name of a Kubernetes Secret in the same namespace
                           as the Engine that contains Docker registry credentials for pulling the
                           WASM OCI image.
                         maxLength: 253
                         minLength: 1
                         type: string
+                      sha256:
+                        description: |-
+                          sha256 is the lowercase hexadecimal SHA-256 of the raw WASM bytes
+                          served at url. It must be set together with url.
+                        type: string
+                      url:
+                        description: |-
+                          url is an HTTPS URL serving raw WASM bytes. It must be set together
+                          with sha256. When both url and sha256 are omitted, the operator uses its
+                          bundled module.
+                        maxLength: 2048
+                        type: string
                     type: object
                     x-kubernetes-validations:
+                    - message: url and sha256 must be set together; omit both to use
+                        the bundled module
+                      rule: (has(self.url) && has(self.sha256)) || (!has(self.url)
+                        && !has(self.sha256))
+                    - message: url must be an https URL without query or fragment;
+                        userinfo is rejected by Go URL parsing
+                      rule: '!has(self.url) || (self.url.matches(''^https://'') &&
+                        !self.url.contains(''?'') && !self.url.contains(''#''))'
+                    - message: sha256 must be 64 lowercase hexadecimal characters
+                      rule: '!has(self.sha256) || self.sha256.matches(''^[0-9a-f]{64}$'')'
                     - message: image must start with oci:// when set
                       rule: '!has(self.image) || self.image.matches(''^oci://'')'
                     - message: image must be at most 1024 characters when set
@@ -265,6 +290,65 @@ spec:
             description: status defines the observed state of Engine.
             minProperties: 0
             properties:
+              acceptedConfiguration:
+                description: |-
+                  acceptedConfiguration records the last accepted complete Engine
+                  configuration. It survives desired-input degradation and is not a payload
+                  store.
+                properties:
+                  binaryURL:
+                    description: |-
+                      binaryURL is the URL of the raw WASM binary used by the accepted
+                      configuration.
+                    type: string
+                  failurePolicy:
+                    description: failurePolicy is the failure policy of the accepted
+                      configuration.
+                    enum:
+                    - fail
+                    - allow
+                    type: string
+                  observedGeneration:
+                    description: |-
+                      observedGeneration is the Engine generation whose configuration was
+                      accepted.
+                    format: int64
+                    type: integer
+                  renderingSchemaVersion:
+                    description: |-
+                      renderingSchemaVersion is the schema version of the rendered runtime
+                      configuration.
+                    format: int32
+                    type: integer
+                  ruleSetContentHash:
+                    description: |-
+                      ruleSetContentHash is the accepted RuleSet content hash, in the form
+                      sha256:<64 lowercase hexadecimal characters>.
+                    type: string
+                  ruleSetUID:
+                    description: ruleSetUID is the UID of the RuleSet used for the
+                      accepted configuration.
+                    type: string
+                  version:
+                    description: |-
+                      version is the content-addressed version of the accepted configuration,
+                      in the form sha256:<64 lowercase hexadecimal characters>.
+                    type: string
+                  wasmSHA256:
+                    description: |-
+                      wasmSHA256 is the lowercase hexadecimal SHA-256 of the WASM binary used
+                      by the accepted configuration.
+                    type: string
+                required:
+                - binaryURL
+                - failurePolicy
+                - observedGeneration
+                - renderingSchemaVersion
+                - ruleSetContentHash
+                - ruleSetUID
+                - version
+                - wasmSHA256
+                type: object
               conditions:
                 description: |-
                   conditions represent the current state of the Engine resource.

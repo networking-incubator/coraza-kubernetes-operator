@@ -69,6 +69,16 @@ spec:
                 minItems: 1
                 type: array
                 x-kubernetes-list-type: atomic
+              emptyRulesPolicy:
+                default: Reject
+                description: |-
+                  emptyRulesPolicy controls how an assembled RuleSet with no rules is
+                  treated. Reject fails acceptance; Allow accepts and renders an explicit
+                  no-op payload. Empty rules are never treated as missing.
+                enum:
+                - Reject
+                - Allow
+                type: string
               sources:
                 description: |-
                   sources is an ordered list of references to RuleSource objects in the
@@ -99,6 +109,25 @@ spec:
             description: status defines the observed state of RuleSet.
             minProperties: 1
             properties:
+              acceptedContent:
+                description: |-
+                  acceptedContent records the last accepted assembled content. It survives
+                  desired-input degradation.
+                properties:
+                  contentHash:
+                    description: |-
+                      contentHash is the deterministic hash of the accepted assembled content,
+                      in the form sha256:<64 lowercase hexadecimal characters>.
+                    type: string
+                  observedGeneration:
+                    description: observedGeneration is the RuleSet generation whose
+                      content was accepted.
+                    format: int64
+                    type: integer
+                required:
+                - contentHash
+                - observedGeneration
+                type: object
               conditions:
                 description: |-
                   conditions represent the current state of the RuleSet resource.
