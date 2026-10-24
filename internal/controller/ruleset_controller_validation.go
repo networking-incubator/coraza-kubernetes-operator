@@ -21,7 +21,7 @@ import (
 
 const (
 	ruleSetDegradedReasonInvalidRuleSet = "InvalidRuleSet"
-	ruleSetReadyReasonRulesCached       = "RulesCached"
+	ruleSetReadyReasonRulesAccepted     = "RulesAccepted"
 )
 
 // errRuleSetRulesInvalid indicates aggregate Coraza validation failed and the

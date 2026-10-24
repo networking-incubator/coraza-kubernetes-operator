@@ -13,6 +13,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 
 	wafv1alpha1 "github.com/networking-incubator/coraza-kubernetes-operator/api/v1alpha1"
+	"github.com/networking-incubator/coraza-kubernetes-operator/internal/rulesets/assemble"
 )
 
 // -----------------------------------------------------------------------------
@@ -57,21 +58,21 @@ func findDuplicateNames[T any](items []T, name func(T) string) []string {
 // RuleSetReconciler - Data Loading
 // -----------------------------------------------------------------------------
 
-// loadData fetches all RuleData objects referenced by the RuleSet and merges
-// their file maps. Last-listed wins on duplicate keys.
+// loadData fetches all RuleData objects referenced by the RuleSet and returns
+// them in spec order. merge/validation is performed by assemble.Assemble.
 func (r *RuleSetReconciler) loadData(
 	ctx context.Context,
 	log logr.Logger,
 	req ctrl.Request,
 	ruleset *wafv1alpha1.RuleSet,
-) (map[string][]byte, bool, error) {
+) ([]assemble.DataInput, bool, error) {
 	if len(ruleset.Spec.Data) == 0 {
 		return nil, false, nil
 	}
 
 	logInfo(log, req, "RuleSet", "Loading data", "dataCount", len(ruleset.Spec.Data))
 
-	dataFiles := make(map[string][]byte)
+	dataInputs := make([]assemble.DataInput, 0, len(ruleset.Spec.Data))
 	for _, ref := range ruleset.Spec.Data {
 		var rd wafv1alpha1.RuleData
 		if err := r.Get(ctx, types.NamespacedName{
@@ -103,12 +104,15 @@ func (r *RuleSetReconciler) loadData(
 		}
 		r.Metrics.RecordRuleData(&rd)
 
-		for k, v := range rd.Spec.Files {
-			dataFiles[k] = []byte(v)
-		}
+		dataInputs = append(dataInputs, assemble.DataInput{
+			Name:       rd.Name,
+			UID:        rd.UID,
+			Generation: rd.Generation,
+			Files:      rd.Spec.Files,
+		})
 	}
 
-	return dataFiles, false, nil
+	return dataInputs, false, nil
 }
 
 // -----------------------------------------------------------------------------
@@ -116,22 +120,18 @@ func (r *RuleSetReconciler) loadData(
 // -----------------------------------------------------------------------------
 
 // loadSources fetches all RuleSource objects referenced by the RuleSet and
-// concatenates their rules in order. Per-source Coraza validation and
-// RuleSource status are owned by RuleSourceReconciler; this function gates on
-// RuleSource status and returns a requeue interval while sources are not ready.
+// returns them in spec order. Per-source Coraza validation and RuleSource
+// status are owned by RuleSourceReconciler; this function gates on RuleSource
+// status and returns a requeue interval while sources are not ready.
 func (r *RuleSetReconciler) loadSources(
 	ctx context.Context,
 	log logr.Logger,
 	req ctrl.Request,
 	ruleset *wafv1alpha1.RuleSet,
-) (aggregatedRules string, done bool, requeueAfter time.Duration, err error) {
+) (sources []assemble.SourceInput, done bool, requeueAfter time.Duration, err error) {
 	logInfo(log, req, "RuleSet", "Loading sources", "sourceCount", len(ruleset.Spec.Sources))
 
-	type ruleFragment struct {
-		name  string
-		rules string
-	}
-	ruleFragments := make([]ruleFragment, 0, len(ruleset.Spec.Sources))
+	sources = make([]assemble.SourceInput, 0, len(ruleset.Spec.Sources))
 	var pendingSources []string
 
 	for _, src := range ruleset.Spec.Sources {
@@ -144,16 +144,16 @@ func (r *RuleSetReconciler) loadSources(
 				logInfo(log, req, "RuleSet", "Referenced RuleSource not found; waiting for it to appear", "ruleSourceName", src.Name)
 				msg := fmt.Sprintf("Referenced RuleSource %s does not exist", src.Name)
 				if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "RuleSet", ruleset, &ruleset.Status.Conditions, ruleset.Generation, "RuleSourceNotFound", msg); patchErr != nil {
-					return "", true, 0, patchErr
+					return nil, true, 0, patchErr
 				}
-				return "", true, 0, nil
+				return nil, true, 0, nil
 			}
 			logError(log, req, "RuleSet", err, "Failed to get RuleSource", "ruleSourceName", src.Name)
 			msg := fmt.Sprintf("Failed to access RuleSource %s: %v", src.Name, err)
 			if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "RuleSet", ruleset, &ruleset.Status.Conditions, ruleset.Generation, "RuleSourceAccessError", msg); patchErr != nil {
-				return "", true, 0, patchErr
+				return nil, true, 0, patchErr
 			}
-			return "", true, 0, err
+			return nil, true, 0, err
 		}
 
 		skipFragmentValidation := rs.Annotations[wafv1alpha1.AnnotationSkipValidation] == "false"
@@ -161,36 +161,30 @@ func (r *RuleSetReconciler) loadSources(
 		if ruleSourceInvalidForGeneration(rs.Status.Conditions, rs.Generation) {
 			msg := fmt.Sprintf("Referenced RuleSource %s has invalid rules (see RuleSource status for details)", rs.Name)
 			if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "RuleSet", ruleset, &ruleset.Status.Conditions, ruleset.Generation, "ReferencedRuleSourceInvalid", msg); patchErr != nil {
-				return "", true, 0, patchErr
+				return nil, true, 0, patchErr
 			}
-			return "", true, 0, nil
+			return nil, true, 0, nil
 		}
 
 		if !ruleSourceValidatedForGeneration(rs.Status.Conditions, rs.Generation, skipFragmentValidation) {
 			pendingSources = append(pendingSources, src.Name)
 		}
 
-		ruleFragments = append(ruleFragments, ruleFragment{
-			name:  src.Name,
-			rules: rs.Spec.Rules,
+		sources = append(sources, assemble.SourceInput{
+			Name:       rs.Name,
+			UID:        rs.UID,
+			Generation: rs.Generation,
+			Rules:      rs.Spec.Rules,
 		})
 	}
 
 	if len(pendingSources) > 0 {
 		msg := fmt.Sprintf("Waiting for RuleSource validation: %s", strings.Join(pendingSources, ", "))
 		if patchErr := r.patchRuleSetAwaitingRuleSources(ctx, log, req, ruleset, msg); patchErr != nil {
-			return "", true, 0, patchErr
+			return nil, true, 0, patchErr
 		}
-		return "", true, ruleSourceValidationRequeue, nil
+		return nil, true, ruleSourceValidationRequeue, nil
 	}
 
-	var aggregated strings.Builder
-	for i, frag := range ruleFragments {
-		aggregated.WriteString(frag.rules)
-		if i < len(ruleFragments)-1 {
-			aggregated.WriteString("\n")
-		}
-	}
-
-	return aggregated.String(), false, 0, nil
+	return sources, false, 0, nil
 }

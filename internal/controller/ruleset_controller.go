@@ -38,8 +38,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	wafv1alpha1 "github.com/networking-incubator/coraza-kubernetes-operator/api/v1alpha1"
+	"github.com/networking-incubator/coraza-kubernetes-operator/internal/ecds/render"
+	"github.com/networking-incubator/coraza-kubernetes-operator/internal/rulesets/assemble"
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/rulesets/cache"
-	"github.com/networking-incubator/coraza-kubernetes-operator/internal/rulesets/validation"
 )
 
 // -----------------------------------------------------------------------------
@@ -166,13 +167,13 @@ func (r *RuleSetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	}
 
 	logDebug(log, req, "RuleSet", "Loading RuleData objects")
-	dataFiles, done, err := r.loadData(ctx, log, req, &ruleset)
+	dataInputs, done, err := r.loadData(ctx, log, req, &ruleset)
 	if done || err != nil {
 		return ctrl.Result{}, err
 	}
 
 	logDebug(log, req, "RuleSet", "Loading RuleSource objects")
-	aggregatedRules, done, requeueAfter, err := r.loadSources(ctx, log, req, &ruleset)
+	sourceInputs, done, requeueAfter, err := r.loadSources(ctx, log, req, &ruleset)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -180,14 +181,46 @@ func (r *RuleSetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{RequeueAfter: requeueAfter}, nil
 	}
 
+	inputs := assemble.Inputs{
+		RuleSetUID:       ruleset.UID,
+		RuleSetName:      ruleset.Name,
+		Namespace:        ruleset.Namespace,
+		EmptyRulesPolicy: assemble.EmptyRulesPolicy(ruleset.Spec.EmptyRulesPolicy),
+		Sources:          sourceInputs,
+		Data:             dataInputs,
+	}
+
 	alreadyInvalid := isConditionCurrent(ruleset.Status.Conditions, conditionDegraded, ruleSetDegradedReasonInvalidRuleSet, ruleset.Generation)
-	alreadyCached := isConditionCurrent(ruleset.Status.Conditions, conditionReady, ruleSetReadyReasonRulesCached, ruleset.Generation)
-	cacheKey := fmt.Sprintf("%s/%s", ruleset.Namespace, ruleset.Name)
-	if alreadyCached && r.Cache.EntryMatches(cacheKey, aggregatedRules, dataFiles) {
+
+	logInfo(log, req, "RuleSet", "Assembling rules")
+	assembleStart := time.Now()
+	content, err := assemble.Assemble(inputs)
+	if err != nil {
+		if !alreadyInvalid {
+			assembleDur := time.Since(assembleStart)
+			msg := fmt.Sprintf("Ruleset is invalid\n%v", err)
+			if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "RuleSet", &ruleset, &ruleset.Status.Conditions, ruleset.Generation, ruleSetDegradedReasonInvalidRuleSet, msg); patchErr != nil {
+				return ctrl.Result{}, patchErr
+			}
+			r.Metrics.IncRuleSetValidation(req.Namespace, "invalid")
+			r.Metrics.ObserveRuleSetValidation(req.Namespace, "invalid", assembleDur)
+		}
+		return ctrl.Result{}, nil
+	}
+	assembleDur := time.Since(assembleStart)
+
+	contentHash, err := render.RuleSetContentHash(content)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+
+	alreadyAccepted := isConditionCurrent(ruleset.Status.Conditions, conditionReady, ruleSetReadyReasonRulesAccepted, ruleset.Generation) &&
+		isRuleSetContentAccepted(&ruleset, contentHash)
+	if alreadyAccepted {
 		// Annotation-only reconciles (e.g. removing skip-unsupported-rules-check) do not
 		// bump generation; still re-run unsupported-rule policy before skipping work.
 		if ruleset.Annotations[wafv1alpha1.AnnotationSkipUnsupportedRulesCheck] != "true" {
-			foundUnsupportedRules, _, err := r.rejectUnsupportedRules(ctx, log, req, &ruleset, aggregatedRules)
+			foundUnsupportedRules, _, err := r.rejectUnsupportedRules(ctx, log, req, &ruleset, content.Rules)
 			if err != nil {
 				return ctrl.Result{}, err
 			}
@@ -200,23 +233,8 @@ func (r *RuleSetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 
 	logInfo(log, req, "RuleSet", "Validating aggregated rules")
 
-	pmStart := time.Now()
-	if err := validation.ValidatePMFromFileData(aggregatedRules, dataFiles); err != nil {
-		pmDur := time.Since(pmStart)
-		if !alreadyInvalid {
-			msg := fmt.Sprintf("Ruleset is invalid\n%v", err)
-			if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "RuleSet", &ruleset, &ruleset.Status.Conditions, ruleset.Generation, ruleSetDegradedReasonInvalidRuleSet, msg); patchErr != nil {
-				return ctrl.Result{}, patchErr
-			}
-			r.Metrics.IncRuleSetValidation(req.Namespace, "invalid")
-			r.Metrics.ObserveRuleSetValidation(req.Namespace, "invalid", pmDur)
-		}
-		return ctrl.Result{}, nil
-	}
-	pmDur := time.Since(pmStart)
-
-	fsRules := getDataFilesystem(dataFiles)
-	conf := coraza.NewWAFConfig().WithDirectives(aggregatedRules)
+	fsRules := getDataFilesystem(content.DataFiles)
+	conf := coraza.NewWAFConfig().WithDirectives(content.Rules)
 	if fsRules != nil {
 		conf = conf.WithRootFS(fsRules)
 	}
@@ -225,16 +243,16 @@ func (r *RuleSetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		if errors.Is(err, errRuleSetRulesInvalid) {
 			if !alreadyInvalid {
 				r.Metrics.IncRuleSetValidation(req.Namespace, "invalid")
-				r.Metrics.ObserveRuleSetValidation(req.Namespace, "invalid", pmDur+corazaDur)
+				r.Metrics.ObserveRuleSetValidation(req.Namespace, "invalid", assembleDur+corazaDur)
 			}
 			return ctrl.Result{}, nil
 		}
 		return ctrl.Result{}, err
 	}
-	validationDur := pmDur + corazaDur
+	validationDur := assembleDur + corazaDur
 
 	logDebug(log, req, "RuleSet", "Checking for unsupported rules")
-	foundUnsupportedRules, unsupportedMsg, err := r.rejectUnsupportedRules(ctx, log, req, &ruleset, aggregatedRules)
+	foundUnsupportedRules, unsupportedMsg, err := r.rejectUnsupportedRules(ctx, log, req, &ruleset, content.Rules)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -242,15 +260,16 @@ func (r *RuleSetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, nil
 	}
 
-	logInfo(log, req, "RuleSet", "Caching rules")
-	if err := r.cacheRules(ctx, log, req, &ruleset, aggregatedRules, dataFiles, unsupportedMsg); err != nil {
+	logInfo(log, req, "RuleSet", "Accepting rules")
+	result, err := r.acceptRules(ctx, log, req, &ruleset, content, inputs, unsupportedMsg)
+	if err != nil {
 		return ctrl.Result{}, err
 	}
-	if !alreadyCached {
+	if !result.Requeue && result.RequeueAfter == 0 && !alreadyAccepted {
 		r.Metrics.IncRuleSetValidation(req.Namespace, "valid")
 		r.Metrics.ObserveRuleSetValidation(req.Namespace, "valid", validationDur)
 	}
-	return ctrl.Result{}, nil
+	return result, nil
 }
 
 // -----------------------------------------------------------------------------

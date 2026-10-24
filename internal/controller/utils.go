@@ -405,11 +405,12 @@ func serverSideApply(ctx context.Context, c client.Client, desired *unstructured
 	return nil
 }
 
-// buildCacheReadyMessage constructs the Ready condition message after successful
-// caching. When unsupportedMsg is non-empty (annotation override active), the
-// detected unsupported rules are appended so they remain visible in the status.
-func buildCacheReadyMessage(namespace, name, unsupportedMsg string) string {
-	msg := fmt.Sprintf("Successfully cached rules for %s/%s", namespace, name)
+// buildAcceptReadyMessage constructs the Ready condition message after a
+// successful acceptance. When unsupportedMsg is non-empty (annotation override
+// active), the detected unsupported rules are appended so they remain visible
+// in the status.
+func buildAcceptReadyMessage(namespace, name, unsupportedMsg string) string {
+	msg := fmt.Sprintf("Successfully accepted rules for %s/%s", namespace, name)
 	if unsupportedMsg != "" {
 		msg += "\n[annotation override] " + unsupportedMsg
 	}
