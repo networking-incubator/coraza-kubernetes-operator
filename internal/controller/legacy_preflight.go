@@ -113,6 +113,19 @@ func (p *LegacyEnginePreflight) Start(ctx context.Context) error {
 	return nil
 }
 
+// hasLegacyWasmFields reads the raw stored Engine and reports whether it sets
+// either removed Wasm image field. The object is read as unstructured so typed
+// decoding cannot hide fields that the current CRD no longer accepts.
+func hasLegacyWasmFields(ctx context.Context, reader client.Reader, key client.ObjectKey) (bool, error) {
+	engine := &unstructured.Unstructured{}
+	engine.SetGroupVersionKind(wafv1alpha1.GroupVersion.WithKind("Engine"))
+	if err := reader.Get(ctx, key, engine); err != nil {
+		return false, err
+	}
+	imageSet, imagePullSecretSet := legacyWasmFields(engine)
+	return imageSet || imagePullSecretSet, nil
+}
+
 // legacyWasmFields reports whether the unstructured Engine sets the removed
 // image and imagePullSecret fields. Fields are detected by presence so that
 // objects stored with the old schema are not hidden by typed decoding.

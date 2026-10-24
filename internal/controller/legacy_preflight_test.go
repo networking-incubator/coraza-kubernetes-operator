@@ -18,19 +18,23 @@ package controller
 
 import (
 	"context"
+	"fmt"
 	"strings"
-	"sync"
 	"testing"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/events"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	wafv1alpha1 "github.com/networking-incubator/coraza-kubernetes-operator/api/v1alpha1"
+	"github.com/networking-incubator/coraza-kubernetes-operator/test/utils"
 )
 
 func TestLegacyWasmFields(t *testing.T) {
@@ -86,28 +90,40 @@ func TestLegacyWasmFields(t *testing.T) {
 	}
 }
 
+// legacyListReader returns a synthetic Engine list for unstructured reads. It
+// simulates objects stored under the old CRD, which the API server rejects once
+// the tombstone validation is active.
+type legacyListReader struct {
+	client.Reader
+	engines []unstructured.Unstructured
+}
+
+func (r *legacyListReader) List(_ context.Context, list client.ObjectList, _ ...client.ListOption) error {
+	u, ok := list.(*unstructured.UnstructuredList)
+	if !ok {
+		return fmt.Errorf("unexpected list type %T", list)
+	}
+	u.Items = append([]unstructured.Unstructured(nil), r.engines...)
+	return nil
+}
+
 func TestLegacyEnginePreflight(t *testing.T) {
 	ctx := context.Background()
-	name := "legacy-engine"
-	t.Cleanup(func() {
-		engine := &wafv1alpha1.Engine{ObjectMeta: metav1.ObjectMeta{Namespace: testNamespace, Name: name}}
-		if err := k8sClient.Delete(ctx, engine); err != nil && !apierrors.IsNotFound(err) {
-			t.Logf("Failed to delete Engine: %v", err)
-		}
-	})
 
-	engine := newEngineWithWasm(testNamespace, name, &wafv1alpha1.WasmDriverConfig{
-		Image: "oci://example.com/plugin:1",
-	})
-	if err := k8sClient.Create(ctx, engine); err != nil {
-		t.Fatalf("Create() error = %v", err)
-	}
-
-	// Use an uncached, direct client like the manager's APIReader.
-	apiReader, err := client.New(cfg, client.Options{Scheme: scheme})
-	if err != nil {
-		t.Fatalf("Failed to create API reader: %v", err)
-	}
+	legacy := unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": wafv1alpha1.GroupVersion.String(),
+		"kind":       "Engine",
+		"metadata": map[string]any{
+			"namespace": testNamespace,
+			"name":      "legacy-engine",
+		},
+		"spec": map[string]any{
+			"driver": map[string]any{
+				"wasm": map[string]any{"image": "oci://example.com/plugin:1"},
+			},
+		},
+	}}
+	reader := &legacyListReader{engines: []unstructured.Unstructured{legacy}}
 
 	metrics, err := NewCorazaMetrics(prometheus.NewRegistry())
 	if err != nil {
@@ -115,45 +131,25 @@ func TestLegacyEnginePreflight(t *testing.T) {
 	}
 	recorder := events.NewFakeRecorder(10)
 
-	// FakeRecorder.Eventf blocks once its channel is full. The preflight lists
-	// Engines cluster-wide, so other tests' Engines can fill it; drain
-	// concurrently instead of assuming only this test's Engine exists.
-	var (
-		eventsMu sync.Mutex
-		recorded []string
-	)
-	go func() {
-		for event := range recorder.Events {
-			eventsMu.Lock()
-			recorded = append(recorded, event)
-			eventsMu.Unlock()
-		}
-	}()
-
 	preflight := &LegacyEnginePreflight{
-		Reader:   apiReader,
+		Reader:   reader,
 		Recorder: recorder,
 		Metrics:  metrics,
 	}
 	if err := preflight.Start(ctx); err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
-	if got := testutil.ToFloat64(metrics.legacyWasmEngines); got < 1 {
-		t.Fatalf("coraza_legacy_wasm_engines = %v, want at least 1", got)
+	if got := testutil.ToFloat64(metrics.legacyWasmEngines); got != 1 {
+		t.Fatalf("coraza_legacy_wasm_engines = %v, want 1", got)
 	}
 
-	var found bool
-	eventsMu.Lock()
-	for _, event := range recorded {
-		if strings.Contains(event, ReasonLegacyWasmImageFields) {
-			found = true
-			break
+	select {
+	case event := <-recorder.Events:
+		if !strings.Contains(event, ReasonLegacyWasmImageFields) {
+			t.Fatalf("event = %q, want reason %q", event, ReasonLegacyWasmImageFields)
 		}
-	}
-	foundEvents := append([]string(nil), recorded...)
-	eventsMu.Unlock()
-	if !found {
-		t.Fatalf("events = %v, want reason %q", foundEvents, ReasonLegacyWasmImageFields)
+	default:
+		t.Fatal("no event emitted for the legacy Engine")
 	}
 
 	preflight.FailOnLegacy = true
@@ -166,3 +162,96 @@ func TestLegacyEnginePreflight(t *testing.T) {
 	}
 }
 
+// legacyEngineReader returns a synthetic raw Engine for unstructured reads and
+// delegates everything else. It simulates an object stored under the old CRD,
+// which the API server would reject once the tombstone validation is active.
+type legacyEngineReader struct {
+	client.Reader
+	object *unstructured.Unstructured
+}
+
+func (r *legacyEngineReader) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+	if u, ok := obj.(*unstructured.Unstructured); ok {
+		u.Object = r.object.DeepCopy().Object
+		return nil
+	}
+	return r.Reader.Get(ctx, key, obj, opts...)
+}
+
+// TestEngineReconciler_RejectsLegacyWasmFields verifies that a stored legacy
+// Engine is marked Degraded before provisioning and never falls back to the
+// bundled module.
+func TestEngineReconciler_RejectsLegacyWasmFields(t *testing.T) {
+	ctx := context.Background()
+	name := "legacy-reconcile-engine"
+	key := types.NamespacedName{Namespace: testNamespace, Name: name}
+	t.Cleanup(func() {
+		engine := &wafv1alpha1.Engine{ObjectMeta: metav1.ObjectMeta{Namespace: testNamespace, Name: name}}
+		if err := k8sClient.Delete(ctx, engine); err != nil && !apierrors.IsNotFound(err) {
+			t.Logf("Failed to delete Engine: %v", err)
+		}
+	})
+
+	engine := newEngineWithWasm(testNamespace, name, &wafv1alpha1.WasmDriverConfig{
+		URL:    "https://assets.example.com/plugin.wasm",
+		SHA256: testSHA256,
+	})
+	if err := k8sClient.Create(ctx, engine); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	raw := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": wafv1alpha1.GroupVersion.String(),
+		"kind":       "Engine",
+		"metadata": map[string]any{
+			"namespace": testNamespace,
+			"name":      name,
+		},
+		"spec": map[string]any{
+			"driver": map[string]any{
+				"wasm": map[string]any{"image": "oci://example.com/plugin:1"},
+			},
+		},
+	}}
+
+	reconciler := &EngineReconciler{
+		Client:    k8sClient,
+		APIReader: &legacyEngineReader{Reader: k8sClient, object: raw},
+		Scheme:    scheme,
+		Recorder:  utils.NewTestRecorder(),
+	}
+	req := ctrl.Request{NamespacedName: key}
+
+	// First reconcile adds the finalizer and requeues.
+	result, err := reconciler.Reconcile(ctx, req)
+	if err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+	if result.RequeueAfter == 0 {
+		t.Fatal("first reconcile should requeue after adding the finalizer")
+	}
+
+	// Second reconcile applies the legacy field rejection.
+	if _, err := reconciler.Reconcile(ctx, req); err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+
+	var updated wafv1alpha1.Engine
+	if err := k8sClient.Get(ctx, key, &updated); err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	degraded := apimeta.FindStatusCondition(updated.Status.Conditions, conditionDegraded)
+	if degraded == nil || degraded.Status != metav1.ConditionTrue || degraded.Reason != ReasonLegacyWasmImageFields {
+		t.Fatalf("Degraded = %+v, want %s=True with reason %s", degraded, conditionDegraded, ReasonLegacyWasmImageFields)
+	}
+	if !strings.Contains(degraded.Message, "set url and sha256") {
+		t.Fatalf("Degraded message = %q, want migration guidance", degraded.Message)
+	}
+
+	var envoyFilter unstructured.Unstructured
+	envoyFilter.SetGroupVersionKind(envoyFilterGVK)
+	err = k8sClient.Get(ctx, types.NamespacedName{Namespace: testNamespace, Name: envoyFilterName(name)}, &envoyFilter)
+	if !apierrors.IsNotFound(err) {
+		t.Fatalf("EnvoyFilter Get() error = %v, want NotFound", err)
+	}
+}

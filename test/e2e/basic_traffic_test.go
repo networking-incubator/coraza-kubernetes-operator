@@ -71,7 +71,7 @@ func TestE2E_BasicTraffic(t *testing.T) {
 
 	s.Step("wait for engine ready")
 	s.ExpectEngineReady(ns, "engine")
-	s.ExpectWasmPluginExists(ns, "coraza-engine-engine")
+	s.ExpectEnvoyFilterExists(ns, "coraza-engine-engine")
 
 	// -------------------------------------------------------------------------
 	// Step 4: Deploy backend and verify WAF enforcement

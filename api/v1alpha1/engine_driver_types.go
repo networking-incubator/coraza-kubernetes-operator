@@ -68,8 +68,7 @@ const (
 // +kubebuilder:validation:XValidation:rule="(has(self.url) && has(self.sha256)) || (!has(self.url) && !has(self.sha256))",message="url and sha256 must be set together; omit both to use the bundled module"
 // +kubebuilder:validation:XValidation:rule="!has(self.url) || (self.url.matches('^https://') && !self.url.contains('?') && !self.url.contains('#'))",message="url must be an https URL without query or fragment; userinfo is rejected by Go URL parsing"
 // +kubebuilder:validation:XValidation:rule="!has(self.sha256) || self.sha256.matches('^[0-9a-f]{64}$')",message="sha256 must be 64 lowercase hexadecimal characters"
-// +kubebuilder:validation:XValidation:rule="!has(self.image) || self.image.matches('^oci://')",message="image must start with oci:// when set"
-// +kubebuilder:validation:XValidation:rule="!has(self.image) || size(self.image) <= 1024",message="image must be at most 1024 characters when set"
+// +kubebuilder:validation:XValidation:rule="!has(self.image) && !has(self.imagePullSecret)",message="spec.driver.wasm.image and imagePullSecret are removed; set url and sha256, or omit both to use the bundled module"
 type WasmDriverConfig struct {
 	// url is an HTTPS URL serving raw WASM bytes. It must be set together
 	// with sha256. When both url and sha256 are omitted, the operator uses its
@@ -106,6 +105,3 @@ type WasmDriverConfig struct {
 	// +kubebuilder:validation:MaxLength=253
 	ImagePullSecret string `json:"imagePullSecret,omitempty"`
 }
-
-// MaxImageLen must match the CEL size constraint on WasmDriverConfig.Image.
-const MaxImageLen = 1024

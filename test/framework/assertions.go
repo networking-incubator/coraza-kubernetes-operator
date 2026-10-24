@@ -128,6 +128,22 @@ func (s *Scenario) ExpectWasmPluginExists(namespace, name string) *unstructured.
 	return output
 }
 
+// ExpectEnvoyFilterExists polls until an EnvoyFilter with the given name
+// exists in the namespace.
+func (s *Scenario) ExpectEnvoyFilterExists(namespace, name string) *unstructured.Unstructured {
+	s.T.Helper()
+	s.T.Logf("Waiting for EnvoyFilter %s/%s to exist", namespace, name)
+	var err error
+	output := &unstructured.Unstructured{}
+	require.Eventually(s.T, func() bool {
+		output, err = s.F.DynamicClient.Resource(EnvoyFilterGVR).Namespace(namespace).Get(
+			s.T.Context(), name, metav1.GetOptions{},
+		)
+		return err == nil
+	}, DefaultTimeout, DefaultInterval, "EnvoyFilter %s/%s should exist", namespace, name)
+	return output
+}
+
 // ExpectServiceAccountExists polls until a ServiceAccount with the given name exists
 // in the namespace
 func (s *Scenario) ExpectServiceAccountExists(namespace, name string) {

@@ -24,7 +24,6 @@ import (
 	"net"
 	"os"
 	"strconv"
-	"strings"
 	"time"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
@@ -48,7 +47,6 @@ import (
 
 	wafv1alpha1 "github.com/networking-incubator/coraza-kubernetes-operator/api/v1alpha1"
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/controller"
-	"github.com/networking-incubator/coraza-kubernetes-operator/internal/defaults"
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/rulesets/cache"
 	// +kubebuilder:scaffold:imports
 )
@@ -81,7 +79,8 @@ func main() {
 	cfg := parseFlags()
 	setupLog = ctrl.Log.WithName("setup")
 	logFlags()
-	validateFlags(cfg)
+	setupLog.Info("Deprecated flags are accepted but ignored",
+		"flags", "--default-wasm-image, --envoy-cluster-name")
 
 	tlsOpts := buildTLSOpts()
 
@@ -113,7 +112,7 @@ func main() {
 	rulesetCache := setupRuleSetCache(cfg)
 
 	ecdsConfig, assetBaseURL := buildECDSConfig(cfg, podNamespace)
-	if err := controller.SetupControllers(mgr, rulesetCache, cfg.envoyClusterName, cfg.istioRevision, cfg.defaultWasmImage, podNamespace, kubeClient, cfg.failOnLegacyEngines, ecdsConfig, assetBaseURL); err != nil {
+	if err := controller.SetupControllers(mgr, rulesetCache, cfg.istioRevision, podNamespace, kubeClient, cfg.failOnLegacyEngines, ecdsConfig, assetBaseURL); err != nil {
 		setupLog.Error(err, "unable to setup controllers")
 		os.Exit(1)
 	}
@@ -144,10 +143,14 @@ type config struct {
 	cacheMaxAge       time.Duration
 	cacheMaxSize      int
 	cacheServerPort   int
-	envoyClusterName  string
-	istioRevision     string
-	defaultWasmImage  string
-	operatorName      string
+
+	// Deprecated and ignored: kept so the chart can keep passing them until
+	// Phase 7 removes the flags and the chart arguments together.
+	envoyClusterName string
+	defaultWasmImage string
+
+	istioRevision string
+	operatorName  string
 
 	// failOnLegacyEngines makes the startup preflight stop the manager when a
 	// stored Engine still sets spec.driver.wasm.image or imagePullSecret.
@@ -178,10 +181,11 @@ func parseFlags() config {
 	flag.DurationVar(&cfg.cacheMaxAge, "cache-max-age", cache.CacheMaxAge, "Maximum age of a cache entry before it's considered stale in the RuleSet cache")
 	flag.IntVar(&cfg.cacheMaxSize, "cache-max-size", cache.CacheMaxSize, fmt.Sprintf("Maximum total size of all cached rules in the RuleSet cache in bytes (default %dMB)", cache.CacheMaxSize/(1024*1024)))
 	flag.IntVar(&cfg.cacheServerPort, "cache-server-port", controller.DefaultRuleSetCacheServerPort, fmt.Sprintf("Port number for the RuleSet cache server to listen on (default %d)", controller.DefaultRuleSetCacheServerPort))
-	flag.StringVar(&cfg.envoyClusterName, "envoy-cluster-name", "", "The Envoy cluster name pointing to the RuleSet cache server (required)")
+	// Deprecated: accepted for chart compatibility until Phase 7 removes both
+	// the flags and the chart arguments. Neither value is used.
+	flag.StringVar(&cfg.envoyClusterName, "envoy-cluster-name", "", "Deprecated and ignored")
 	flag.StringVar(&cfg.istioRevision, "istio-revision", "", "The Istio revision label value for managed Istio resources")
-	flag.StringVar(&cfg.defaultWasmImage, "default-wasm-image", resolveDefaultWasmImage(),
-		"Default OCI reference for the Coraza WASM plugin when an Engine omits spec.driver.wasm.image")
+	flag.StringVar(&cfg.defaultWasmImage, "default-wasm-image", "", "Deprecated and ignored")
 	flag.StringVar(&cfg.operatorName, "operator-name", "", "The operator release name used to derive managed resource names (when unset, Istio prerequisites are skipped)")
 	flag.BoolVar(&cfg.failOnLegacyEngines, "fail-on-legacy-engines", false,
 		"Stop the manager when a stored Engine still sets the removed spec.driver.wasm.image or imagePullSecret fields")
@@ -204,13 +208,6 @@ func parseFlags() config {
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
 
 	return cfg
-}
-
-func resolveDefaultWasmImage() string {
-	if v := os.Getenv("CORAZA_DEFAULT_WASM_IMAGE"); v != "" {
-		return v
-	}
-	return defaults.DefaultCorazaWasmOCIReference
 }
 
 // buildECDSConfig derives the ECDS endpoint and asset base URL from the flags,
@@ -334,34 +331,6 @@ func setupHealthChecks(mgr ctrl.Manager) {
 	}
 	if err := mgr.AddReadyzCheck("readyz", healthz.Ping); err != nil {
 		setupLog.Error(err, "unable to set up ready check")
-		os.Exit(1)
-	}
-}
-
-// -----------------------------------------------------------------------------
-// Validation
-// -----------------------------------------------------------------------------
-
-func validateDefaultWasmImage(ref string) error {
-	if ref == "" {
-		return errors.New("must be non-empty")
-	}
-	if len(ref) > wafv1alpha1.MaxImageLen {
-		return fmt.Errorf("must be at most %d characters (got %d)", wafv1alpha1.MaxImageLen, len(ref))
-	}
-	if !strings.HasPrefix(ref, "oci://") {
-		return errors.New("must be an OCI reference starting with oci://")
-	}
-	return nil
-}
-
-func validateFlags(cfg config) {
-	if cfg.envoyClusterName == "" {
-		setupLog.Error(errors.New("missing required flag"), "envoy-cluster-name is required")
-		os.Exit(1)
-	}
-	if err := validateDefaultWasmImage(cfg.defaultWasmImage); err != nil {
-		setupLog.Error(err, "invalid default-wasm-image")
 		os.Exit(1)
 	}
 }

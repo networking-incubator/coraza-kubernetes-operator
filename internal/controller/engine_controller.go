@@ -71,6 +71,9 @@ type EngineReconciler struct {
 	Metrics  *CorazaMetrics
 
 	client.Client
+	// APIReader reads raw objects without the cache. It is used for the legacy
+	// Wasm field check so stored objects are never masked by typed decoding.
+	APIReader     client.Reader
 	kubeClient    kubernetes.Interface
 	istioRevision string
 	// xdsConfig carries the ECDS endpoint and CA material injected into the
@@ -239,6 +242,15 @@ func (r *EngineReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		logConditionTransitions(log, req, "Engine", before, engine.Status.Conditions)
 	}
 
+	// Check the raw stored object before any target check: a legacy Engine may
+	// have no valid target or RuleSet, so a later position would be unreachable.
+	logDebug(log, req, "Engine", "Checking for removed Wasm image fields")
+	if rejected, err := r.rejectLegacyWasmFields(ctx, log, req, &engine); err != nil {
+		return ctrl.Result{}, err
+	} else if rejected {
+		return ctrl.Result{}, nil
+	}
+
 	logDebug(log, req, "Engine", "Checking target availability")
 	if notFound, err := r.isTargetNotFound(ctx, log, req, &engine); err != nil {
 		return ctrl.Result{}, err
@@ -313,6 +325,36 @@ func (r *EngineReconciler) handleInvalidDriverConfiguration(ctx context.Context,
 // -----------------------------------------------------------------------------
 // EngineReconciler - Driver Provisioning
 // -----------------------------------------------------------------------------
+
+// rejectLegacyWasmFields marks an Engine that still sets the removed
+// spec.driver.wasm.image or imagePullSecret fields as Degraded before any
+// provisioning happens. The check reads the raw stored object, so an Engine
+// created under the old CRD is detected even after the API schema changes.
+// It never falls back to the bundled module.
+func (r *EngineReconciler) rejectLegacyWasmFields(ctx context.Context, log logr.Logger, req ctrl.Request, engine *wafv1alpha1.Engine) (bool, error) {
+	reader := r.APIReader
+	if reader == nil {
+		reader = r.Client
+	}
+
+	legacy, err := hasLegacyWasmFields(ctx, reader, req.NamespacedName)
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return false, nil
+		}
+		logAPIError(log, req, "Engine", err, "Failed to read raw Engine for legacy field check", engine)
+		return false, err
+	}
+	if !legacy {
+		return false, nil
+	}
+
+	logInfo(log, req, "Engine", "Engine uses removed Wasm image fields; refusing to provision")
+	if err := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "Engine", engine, &engine.Status.Conditions, engine.Generation, ReasonLegacyWasmImageFields, legacyWasmImageFieldsMessage); err != nil {
+		return false, err
+	}
+	return true, nil
+}
 
 func (r *EngineReconciler) selectDriver(ctx context.Context, log logr.Logger, req ctrl.Request, engine *wafv1alpha1.Engine) (ctrl.Result, error) {
 	driverType := engine.Spec.Driver.Type

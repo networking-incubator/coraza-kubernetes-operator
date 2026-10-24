@@ -470,22 +470,13 @@ func TestEngineReconciler_ValidationRejection(t *testing.T) {
 			expectedError: "spec.ruleSet: Required value",
 		},
 		{
-			name: "image doesn't start with oci://",
+			name: "removed image field rejected",
 			engineFunc: func() *wafv1alpha1.Engine {
 				engine := utils.NewTestEngine(utils.EngineOptions{})
-				engine.Spec.Driver.Wasm.Image = "docker://invalid-image"
+				engine.Spec.Driver.Wasm.Image = "oci://example.com/plugin:1"
 				return engine
 			},
-			expectedError: "image must start with oci:// when set",
-		},
-		{
-			name: "image too long",
-			engineFunc: func() *wafv1alpha1.Engine {
-				engine := utils.NewTestEngine(utils.EngineOptions{})
-				engine.Spec.Driver.Wasm.Image = "oci://" + string(make([]byte, 1100))
-				return engine
-			},
-			expectedError: "Too long: may not be more than 1024 bytes",
+			expectedError: "spec.driver.wasm.image and imagePullSecret are removed",
 		},
 		{
 			name: "targetRef missing",
@@ -719,7 +710,6 @@ func TestEngineReconciler_ValidationAllowsOmittedWasmImage(t *testing.T) {
 		Name:      "omit-wasm-image",
 		Namespace: testNamespace,
 	})
-	engine.Spec.Driver.Wasm.Image = ""
 
 	err := k8sClient.Create(ctx, engine)
 	require.NoError(t, err)

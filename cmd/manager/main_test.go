@@ -18,71 +18,11 @@ package main
 
 import (
 	"crypto/tls"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	wafv1alpha1 "github.com/networking-incubator/coraza-kubernetes-operator/api/v1alpha1"
-	"github.com/networking-incubator/coraza-kubernetes-operator/internal/defaults"
 )
-
-// -----------------------------------------------------------------------------
-// validateDefaultWasmImage Tests
-// -----------------------------------------------------------------------------
-
-func TestValidateDefaultWasmImage(t *testing.T) {
-	t.Parallel()
-
-	t.Run("empty", func(t *testing.T) {
-		t.Parallel()
-		assert.Error(t, validateDefaultWasmImage(""))
-	})
-
-	t.Run("not_oci", func(t *testing.T) {
-		t.Parallel()
-		assert.Error(t, validateDefaultWasmImage("docker.io/foo:latest"))
-		assert.Error(t, validateDefaultWasmImage("http://example/wasm"))
-	})
-
-	t.Run("too_long", func(t *testing.T) {
-		t.Parallel()
-		long := "oci://" + strings.Repeat("a", wafv1alpha1.MaxImageLen+1-len("oci://"))
-		require.Len(t, long, wafv1alpha1.MaxImageLen+1)
-		assert.Error(t, validateDefaultWasmImage(long))
-	})
-
-	t.Run("max_len_ok", func(t *testing.T) {
-		t.Parallel()
-		s := "oci://" + strings.Repeat("a", wafv1alpha1.MaxImageLen-len("oci://"))
-		require.Len(t, s, wafv1alpha1.MaxImageLen)
-		assert.NoError(t, validateDefaultWasmImage(s))
-	})
-
-	t.Run("valid", func(t *testing.T) {
-		t.Parallel()
-		assert.NoError(t, validateDefaultWasmImage("oci://ghcr.io/org/coraza-proxy-wasm:tag"))
-	})
-}
-
-// -----------------------------------------------------------------------------
-// resolveDefaultWasmImage Tests
-// -----------------------------------------------------------------------------
-
-func TestResolveDefaultWasmImage(t *testing.T) {
-	t.Run("env var overrides hardcoded default", func(t *testing.T) {
-		t.Setenv("CORAZA_DEFAULT_WASM_IMAGE", "oci://custom/img:v1")
-		assert.Equal(t, "oci://custom/img:v1", resolveDefaultWasmImage())
-	})
-
-	t.Run("falls back to hardcoded default when env var unset", func(t *testing.T) {
-		const defaultWasmImage = "oci://ghcr.io/networking-incubator/coraza-proxy-wasm@sha256:4ceac8465dc94dbb9c7bf0e2a79a1c6ad9eb27bd80bcfe44843f362b6cb8c329"
-		assert.Equal(t, defaultWasmImage, defaults.DefaultCorazaWasmOCIReference)
-		assert.Equal(t, defaultWasmImage, resolveDefaultWasmImage())
-		assert.NoError(t, validateDefaultWasmImage(defaultWasmImage))
-	})
-}
 
 // -----------------------------------------------------------------------------
 // buildTLSOpts Tests

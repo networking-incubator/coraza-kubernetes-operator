@@ -123,10 +123,9 @@ spec:
                         !self.url.contains(''?'') && !self.url.contains(''#''))'
                     - message: sha256 must be 64 lowercase hexadecimal characters
                       rule: '!has(self.sha256) || self.sha256.matches(''^[0-9a-f]{64}$'')'
-                    - message: image must start with oci:// when set
-                      rule: '!has(self.image) || self.image.matches(''^oci://'')'
-                    - message: image must be at most 1024 characters when set
-                      rule: '!has(self.image) || size(self.image) <= 1024'
+                    - message: spec.driver.wasm.image and imagePullSecret are removed;
+                        set url and sha256, or omit both to use the bundled module
+                      rule: '!has(self.image) && !has(self.imagePullSecret)'
                 required:
                 - type
                 type: object

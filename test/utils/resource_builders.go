@@ -22,7 +22,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	wafv1alpha1 "github.com/networking-incubator/coraza-kubernetes-operator/api/v1alpha1"
-	"github.com/networking-incubator/coraza-kubernetes-operator/internal/defaults"
 )
 
 // Test WASM binary reference used when an Engine option does not override it.
@@ -114,10 +113,8 @@ type EngineOptions struct {
 	Name                string
 	Namespace           string
 	RuleSetName         string
-	WasmImage           string
 	WasmURL             string
 	WasmSHA256          string
-	ImagePullSecret     string
 	PollIntervalSeconds int32
 	GatewayName         string
 	FailurePolicy       wafv1alpha1.FailurePolicy
@@ -144,17 +141,10 @@ func NewTestEngine(opts EngineOptions) *wafv1alpha1.Engine {
 		opts.FailurePolicy = wafv1alpha1.FailurePolicyFail
 	}
 
-	wasm := &wafv1alpha1.WasmDriverConfig{}
-	switch {
-	case opts.WasmImage != "":
-		// Legacy configuration, used by preflight tests.
-		wasm.Image = opts.WasmImage
-	case opts.WasmURL != "" || opts.WasmSHA256 != "":
-		wasm.URL = opts.WasmURL
-		wasm.SHA256 = opts.WasmSHA256
-	default:
-		// Keep the legacy OCI default until Phase 3 removes the WasmPlugin path.
-		wasm.Image = defaults.DefaultCorazaWasmOCIReference
+	// Omitting both url and sha256 selects the bundled module.
+	wasm := &wafv1alpha1.WasmDriverConfig{
+		URL:    opts.WasmURL,
+		SHA256: opts.WasmSHA256,
 	}
 
 	engine := &wafv1alpha1.Engine{
@@ -180,10 +170,6 @@ func NewTestEngine(opts EngineOptions) *wafv1alpha1.Engine {
 			},
 			FailurePolicy: opts.FailurePolicy,
 		},
-	}
-
-	if opts.ImagePullSecret != "" {
-		engine.Spec.Driver.Wasm.ImagePullSecret = opts.ImagePullSecret
 	}
 
 	return engine

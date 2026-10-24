@@ -84,7 +84,7 @@ func TestBlockByStatusCode(t *testing.T) {
 }
 
 // TestDegradedEngineDoesNotBlockTraffic verifies that an Engine referencing a
-// non-existent RuleSet becomes Degraded (no WasmPlugin is created) and traffic
+// non-existent RuleSet becomes Degraded (no EnvoyFilter is created) and traffic
 // continues to flow through the Gateway without being blocked when failure
 // mode is set to "allow".
 func TestDegradedEngineDoesNotBlockTraffic(t *testing.T) {

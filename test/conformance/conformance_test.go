@@ -148,14 +148,14 @@ func TestCoreRuleSetConformance(t *testing.T) {
 
 	s.Step("wait for engine ready")
 	s.ExpectEngineReady(ns, "conformance-engine")
-	s.ExpectWasmPluginExists(ns, "coraza-engine-conformance-engine")
+	s.ExpectEnvoyFilterExists(ns, "coraza-engine-conformance-engine")
 
 	s.Step("wait for gateway pod rollout to complete")
 	s.WaitForGatewayPodStable(ns, gwName)
 
 	s.Step("verify operator emitted expected events")
-	s.ExpectEvent(ns, framework.EventMatch{Type: "Normal", Reason: "RulesCached"})
-	s.ExpectEvent(ns, framework.EventMatch{Type: "Normal", Reason: "WasmPluginCreated"})
+	s.ExpectEvent(ns, framework.EventMatch{Type: "Normal", Reason: "RulesAccepted"})
+	s.ExpectEvent(ns, framework.EventMatch{Type: "Normal", Reason: "ConfigurationAccepted"})
 
 	s.Step("wait for WASM plugin to load rules")
 	gw := s.ProxyToGateway(ns, gwName)
