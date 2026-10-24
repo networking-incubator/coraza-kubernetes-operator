@@ -53,10 +53,19 @@ const DefaultRuleSetCacheServerPort = 18080
 // -----------------------------------------------------------------------------
 
 // SetupControllers initializes all controllers
-func SetupControllers(mgr ctrl.Manager, rulesetCache *cache.RuleSetCache, envoyClusterName, istioRevision string, defaultWasmImage, operatorNamespace string, kubeClient kubernetes.Interface) error {
+func SetupControllers(mgr ctrl.Manager, rulesetCache *cache.RuleSetCache, envoyClusterName, istioRevision string, defaultWasmImage, operatorNamespace string, kubeClient kubernetes.Interface, failOnLegacyEngines bool) error {
 	corazaMetrics, err := NewCorazaMetrics(metrics.Registry)
 	if err != nil {
 		return fmt.Errorf("register coraza metrics: %w", err)
+	}
+
+	if err := mgr.Add(&LegacyEnginePreflight{
+		Reader:       mgr.GetAPIReader(),
+		Recorder:     mgr.GetEventRecorder("legacy-preflight"),
+		Metrics:      corazaMetrics,
+		FailOnLegacy: failOnLegacyEngines,
+	}); err != nil {
+		return fmt.Errorf("add legacy Engine preflight: %w", err)
 	}
 
 	if err := (&RuleSetReconciler{

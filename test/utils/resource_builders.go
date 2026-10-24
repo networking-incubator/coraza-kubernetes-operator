@@ -25,6 +25,12 @@ import (
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/defaults"
 )
 
+// Test WASM binary reference used when an Engine option does not override it.
+const (
+	DefaultTestWasmURL    = "https://assets.example.com/wasm/plugin.wasm"
+	DefaultTestWasmSHA256 = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+)
+
 // -----------------------------------------------------------------------------
 // Test Resource Builders - RuleSource
 // -----------------------------------------------------------------------------
@@ -109,6 +115,8 @@ type EngineOptions struct {
 	Namespace           string
 	RuleSetName         string
 	WasmImage           string
+	WasmURL             string
+	WasmSHA256          string
 	ImagePullSecret     string
 	PollIntervalSeconds int32
 	GatewayName         string
@@ -126,9 +134,6 @@ func NewTestEngine(opts EngineOptions) *wafv1alpha1.Engine {
 	if opts.RuleSetName == "" {
 		opts.RuleSetName = "test-ruleset"
 	}
-	if opts.WasmImage == "" {
-		opts.WasmImage = defaults.DefaultCorazaWasmOCIReference
-	}
 	if opts.PollIntervalSeconds == 0 {
 		opts.PollIntervalSeconds = 5
 	}
@@ -137,6 +142,19 @@ func NewTestEngine(opts EngineOptions) *wafv1alpha1.Engine {
 	}
 	if opts.FailurePolicy == "" {
 		opts.FailurePolicy = wafv1alpha1.FailurePolicyFail
+	}
+
+	wasm := &wafv1alpha1.WasmDriverConfig{}
+	switch {
+	case opts.WasmImage != "":
+		// Legacy configuration, used by preflight tests.
+		wasm.Image = opts.WasmImage
+	case opts.WasmURL != "" || opts.WasmSHA256 != "":
+		wasm.URL = opts.WasmURL
+		wasm.SHA256 = opts.WasmSHA256
+	default:
+		// Keep the legacy OCI default until Phase 3 removes the WasmPlugin path.
+		wasm.Image = defaults.DefaultCorazaWasmOCIReference
 	}
 
 	engine := &wafv1alpha1.Engine{
@@ -158,9 +176,7 @@ func NewTestEngine(opts EngineOptions) *wafv1alpha1.Engine {
 			},
 			Driver: wafv1alpha1.DriverConfig{
 				Type: wafv1alpha1.DriverTypeWasm,
-				Wasm: &wafv1alpha1.WasmDriverConfig{
-					Image: opts.WasmImage,
-				},
+				Wasm: wasm,
 			},
 			FailurePolicy: opts.FailurePolicy,
 		},

@@ -55,6 +55,10 @@ type CorazaMetrics struct {
 	engineCondition *prometheus.GaugeVec
 	engines         *prometheus.GaugeVec
 
+	// legacyWasmEngines is the number of Engines found at startup that still
+	// set the removed spec.driver.wasm.image/imagePullSecret fields.
+	legacyWasmEngines prometheus.Gauge
+
 	rulesetInfo      *prometheus.GaugeVec
 	rulesetCondition *prometheus.GaugeVec
 	rulesets         *prometheus.GaugeVec
@@ -94,6 +98,11 @@ func NewCorazaMetrics(reg prometheus.Registerer) (*CorazaMetrics, error) {
 			Name: "coraza_engines",
 			Help: "Total number of Engine resources per namespace.",
 		}, []string{"namespace"}),
+
+		legacyWasmEngines: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "coraza_legacy_wasm_engines",
+			Help: "Number of Engine resources that still set the removed spec.driver.wasm.image/imagePullSecret fields.",
+		}),
 
 		rulesetInfo: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "coraza_ruleset_info",
@@ -180,7 +189,7 @@ func NewCorazaMetrics(reg prometheus.Registerer) (*CorazaMetrics, error) {
 	}
 
 	for _, c := range []prometheus.Collector{
-		m.engineInfo, m.engineCondition, m.engines,
+		m.engineInfo, m.engineCondition, m.engines, m.legacyWasmEngines,
 		m.rulesetInfo, m.rulesetCondition, m.rulesets, m.rulesetSources, m.rulesetDataFiles,
 		m.rulesourceInfo, m.rulesourceCondition, m.rulesources,
 		m.ruledataInfo, m.ruledataCondition, m.ruledatas,
@@ -278,6 +287,15 @@ func (m *CorazaMetrics) SetEnginesTotal(ns string, count int) {
 		return
 	}
 	m.engines.WithLabelValues(ns).Set(float64(count))
+}
+
+// SetLegacyWasmEngines sets the number of Engines found at startup that still
+// use the removed Wasm image fields.
+func (m *CorazaMetrics) SetLegacyWasmEngines(count int) {
+	if m == nil {
+		return
+	}
+	m.legacyWasmEngines.Set(float64(count))
 }
 
 // -----------------------------------------------------------------------------

@@ -122,6 +122,11 @@ istio:
 # When empty, the operator's built-in default (internal/defaults.DefaultCorazaWasmOCIReference) is used.
 defaultWasmImage: ""
 
+# Refuse to start when a stored Engine still sets the removed
+# spec.driver.wasm.image/imagePullSecret fields. Default false: the operator
+# lists and blocks only those Engines.
+failOnLegacyEngines: false
+
 openshift:
   enabled: false
 

@@ -111,7 +111,7 @@ func main() {
 	rulesetCache := setupCacheServer(mgr, cfg, kubeClient)
 	setupIstioPrerequisites(mgr, cfg, podNamespace)
 
-	if err := controller.SetupControllers(mgr, rulesetCache, cfg.envoyClusterName, cfg.istioRevision, cfg.defaultWasmImage, podNamespace, kubeClient); err != nil {
+	if err := controller.SetupControllers(mgr, rulesetCache, cfg.envoyClusterName, cfg.istioRevision, cfg.defaultWasmImage, podNamespace, kubeClient, cfg.failOnLegacyEngines); err != nil {
 		setupLog.Error(err, "unable to setup controllers")
 		os.Exit(1)
 	}
@@ -146,6 +146,10 @@ type config struct {
 	istioRevision     string
 	defaultWasmImage  string
 	operatorName      string
+
+	// failOnLegacyEngines makes the startup preflight stop the manager when a
+	// stored Engine still sets spec.driver.wasm.image or imagePullSecret.
+	failOnLegacyEngines bool
 }
 
 func parseFlags() config {
@@ -168,6 +172,8 @@ func parseFlags() config {
 	flag.StringVar(&cfg.defaultWasmImage, "default-wasm-image", resolveDefaultWasmImage(),
 		"Default OCI reference for the Coraza WASM plugin when an Engine omits spec.driver.wasm.image")
 	flag.StringVar(&cfg.operatorName, "operator-name", "", "The operator release name used to derive managed resource names (when unset, Istio prerequisites are skipped)")
+	flag.BoolVar(&cfg.failOnLegacyEngines, "fail-on-legacy-engines", false,
+		"Stop the manager when a stored Engine still sets the removed spec.driver.wasm.image or imagePullSecret fields")
 
 	opts := zap.Options{Development: false}
 	opts.BindFlags(flag.CommandLine)
