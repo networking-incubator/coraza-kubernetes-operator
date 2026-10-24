@@ -35,8 +35,14 @@ const (
 // never run with the weaker default before its WAF is live. Unknown values
 // fail closed.
 func bootstrapPolicy(previous, desired string, acceptedActive bool) string {
-	if desired == bootstrapPolicyAllow && (previous == bootstrapPolicyAllow || acceptedActive) {
-		return bootstrapPolicyAllow
+	if desired == bootstrapPolicyAllow {
+		// Weakening requires either an already-weakened filter or an existing
+		// filter plus an active accepted configuration. With no previous filter
+		// the first attachment must be fail-closed, even if the Engine status
+		// already records the accepted configuration.
+		if previous == bootstrapPolicyAllow || (previous != "" && acceptedActive) {
+			return bootstrapPolicyAllow
+		}
 	}
 	return bootstrapPolicyFail
 }

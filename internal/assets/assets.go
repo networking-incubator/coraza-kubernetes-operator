@@ -30,6 +30,7 @@ import (
 	"fmt"
 	"io/fs"
 	"strings"
+	"sync"
 
 	"gopkg.in/yaml.v3"
 )
@@ -142,17 +143,33 @@ func VerifyAll(fsys fs.FS, manifest *Manifest) error {
 
 // ResolveDefault returns the embedded manifest and the verified bytes of the
 // default bundled module.
+//
+// The embedded bundle is immutable, so the manifest metadata and digest are
+// computed once. Callers must not mutate the returned manifest or bytes.
 func ResolveDefault() (*Manifest, []byte, error) {
-	manifest, err := Load(embedded)
+	bundle, err := resolveDefault()
 	if err != nil {
 		return nil, nil, err
 	}
+	return bundle.manifest, bundle.data, nil
+}
+
+type defaultBundle struct {
+	manifest *Manifest
+	data     []byte
+}
+
+var resolveDefault = sync.OnceValues(func() (defaultBundle, error) {
+	manifest, err := Load(embedded)
+	if err != nil {
+		return defaultBundle{}, err
+	}
 	if err := VerifyAll(embedded, manifest); err != nil {
-		return nil, nil, err
+		return defaultBundle{}, err
 	}
 	data, err := fs.ReadFile(embedded, manifest.File)
 	if err != nil {
-		return nil, nil, fmt.Errorf("read bundled module %q: %w", manifest.File, err)
+		return defaultBundle{}, fmt.Errorf("read bundled module %q: %w", manifest.File, err)
 	}
-	return manifest, data, nil
-}
+	return defaultBundle{manifest: manifest, data: data}, nil
+})

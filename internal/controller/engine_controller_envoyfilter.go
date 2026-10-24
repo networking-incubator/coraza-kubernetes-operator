@@ -255,8 +255,8 @@ func buildEnvoyFilter(
 								},
 							},
 						},
+						"resource_api_version": "V3",
 					},
-					"resource_api_version": "V3",
 					"type_urls": []any{
 						wasmFilterTypeURL,
 						rbacFilterTypeURL,

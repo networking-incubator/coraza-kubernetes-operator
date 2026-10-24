@@ -116,11 +116,9 @@ type EngineSpec struct {
 	// +default="fail"
 	FailurePolicy FailurePolicy `json:"failurePolicy,omitempty"`
 
-	// ruleSetCacheServer contains configuration for the ruleset cache server.
-	//
-	// When omitted, no cache server will be used and no rulesets will be
-	// dynamically loaded. This implies that your Engine will be deployed with
-	// all rules statically embedded.
+	// ruleSetCacheServer is deprecated and ignored. The operator distributes
+	// rules through ECDS and does not start the legacy HTTP rule server, so
+	// this field has no effect.
 	//
 	// +optional
 	RuleSetCacheServer *RuleSetCacheServerConfig `json:"ruleSetCacheServer,omitempty"`

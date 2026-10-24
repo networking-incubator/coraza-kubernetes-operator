@@ -39,7 +39,7 @@ func TestBootstrapPolicy(t *testing.T) {
 		{name: "allow stays allow", previous: "allow", desired: "allow", acceptedActive: false, want: "allow"},
 		{name: "allow stays allow when accepted", previous: "allow", desired: "allow", acceptedActive: true, want: "allow"},
 		{name: "unknown previous fails closed", previous: "", desired: "allow", acceptedActive: false, want: "fail"},
-		{name: "unknown previous weakens after acceptance", previous: "", desired: "allow", acceptedActive: true, want: "allow"},
+		{name: "missing previous stays fail-closed when accepted", previous: "", desired: "allow", acceptedActive: true, want: "fail"},
 		{name: "unknown desired fails closed", previous: "allow", desired: "", acceptedActive: true, want: "fail"},
 	}
 

@@ -289,6 +289,7 @@ func (s *Scenario) dumpNamespace(ns string) {
 		{"engines", []string{"get", "engines.waf.k8s.coraza.io", "-o", "yaml"}},
 		{"rulesets", []string{"get", "rulesets.waf.k8s.coraza.io", "-o", "yaml"}},
 		{"wasmplugins", []string{"get", "wasmplugins.extensions.istio.io", "-o", "yaml"}},
+		{"envoyfilters", []string{"get", "envoyfilters.networking.istio.io", "-o", "yaml"}},
 		{"events", []string{"get", "events", "--sort-by=.lastTimestamp"}},
 		{"pods", []string{"get", "pods", "-o", "wide"}},
 	}
@@ -346,6 +347,7 @@ func (s *Scenario) writeArtifacts(ns string) {
 		{"engines.yaml", []string{"get", "engines.waf.k8s.coraza.io", "-o", "yaml"}},
 		{"rulesets.yaml", []string{"get", "rulesets.waf.k8s.coraza.io", "-o", "yaml"}},
 		{"wasmplugins.yaml", []string{"get", "wasmplugins.extensions.istio.io", "-o", "yaml"}},
+		{"envoyfilters.yaml", []string{"get", "envoyfilters.networking.istio.io", "-o", "yaml"}},
 		{"events.txt", []string{"get", "events", "--sort-by=.lastTimestamp"}},
 		{"pods.txt", []string{"describe", "pods"}},
 	}

@@ -121,7 +121,11 @@ func (r *EngineReconciler) SetupWithManager(mgr ctrl.Manager) error {
 
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&wafv1alpha1.Engine{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
-		Owns(envoyFilter).
+		Owns(envoyFilter, builder.WithPredicates(predicate.Funcs{
+			// The operator writes this object itself; reacting to its updates
+			// would re-enqueue the Engine on every apply.
+			UpdateFunc: func(event.UpdateEvent) bool { return false },
+		})).
 		Owns(telemetry, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		// GenerationChanged only: status/managedFields updates must not requeue Engines.
 		Watches(&gatewayv1.Gateway{}, handler.EnqueueRequestsFromMapFunc(r.findEnginesForGateway),

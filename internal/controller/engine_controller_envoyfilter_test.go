@@ -209,7 +209,7 @@ func TestBuildEnvoyFilterShape(t *testing.T) {
 				"type.googleapis.com/envoy.extensions.filters.http.rbac.v3.RBAC",
 			}, typeURLs)
 
-			assert.Equal(t, "V3", nestedString(t, discovery, "resource_api_version"))
+			assert.Equal(t, "V3", nestedString(t, discovery, "config_source", "resource_api_version"))
 			assert.True(t, nestedBool(t, discovery, "apply_default_config_without_warming"))
 			assert.Equal(t, "type.googleapis.com/envoy.extensions.filters.http.rbac.v3.RBAC",
 				nestedString(t, discovery, "default_config", "@type"))
