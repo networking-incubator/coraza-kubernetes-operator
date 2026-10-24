@@ -21,7 +21,9 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"net"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -108,10 +110,10 @@ func main() {
 		os.Exit(1)
 	}
 
-	rulesetCache := setupCacheServer(mgr, cfg, kubeClient)
-	setupIstioPrerequisites(mgr, cfg, podNamespace)
+	rulesetCache := setupRuleSetCache(cfg)
 
-	if err := controller.SetupControllers(mgr, rulesetCache, cfg.envoyClusterName, cfg.istioRevision, cfg.defaultWasmImage, podNamespace, kubeClient, cfg.failOnLegacyEngines); err != nil {
+	ecdsConfig, assetBaseURL := buildECDSConfig(cfg, podNamespace)
+	if err := controller.SetupControllers(mgr, rulesetCache, cfg.envoyClusterName, cfg.istioRevision, cfg.defaultWasmImage, podNamespace, kubeClient, cfg.failOnLegacyEngines, ecdsConfig, assetBaseURL); err != nil {
 		setupLog.Error(err, "unable to setup controllers")
 		os.Exit(1)
 	}
@@ -150,6 +152,15 @@ type config struct {
 	// failOnLegacyEngines makes the startup preflight stop the manager when a
 	// stored Engine still sets spec.driver.wasm.image or imagePullSecret.
 	failOnLegacyEngines bool
+
+	// ECDS settings: the address Gateways dial for config discovery, the port
+	// appended when the address has none, the base URL of the WASM asset, and
+	// the CA used to verify the operator certificate.
+	xdsAdvertiseAddress string
+	xdsPort             int
+	assetBaseURL        string
+	xdsCAPath           string
+	operatorServiceName string
 }
 
 func parseFlags() config {
@@ -174,6 +185,16 @@ func parseFlags() config {
 	flag.StringVar(&cfg.operatorName, "operator-name", "", "The operator release name used to derive managed resource names (when unset, Istio prerequisites are skipped)")
 	flag.BoolVar(&cfg.failOnLegacyEngines, "fail-on-legacy-engines", false,
 		"Stop the manager when a stored Engine still sets the removed spec.driver.wasm.image or imagePullSecret fields")
+	flag.StringVar(&cfg.xdsAdvertiseAddress, "xds-advertise-address", "",
+		"The operator address Gateways dial for ECDS; defaults to <operator-service-name>.<POD_NAMESPACE>.svc.cluster.local")
+	flag.IntVar(&cfg.xdsPort, "xds-port", controller.DefaultRuleSetCacheServerPort,
+		"The operator ECDS port appended to the advertise address when it has no port")
+	flag.StringVar(&cfg.assetBaseURL, "asset-base-url", "",
+		"The base URL Envoy fetches the WASM asset from; defaults to https://<advertise-address>")
+	flag.StringVar(&cfg.xdsCAPath, "xds-ca-path", "/etc/coraza-tls/ca.crt",
+		"The CA bundle Gateways use to verify the operator certificate")
+	flag.StringVar(&cfg.operatorServiceName, "operator-service-name", "",
+		"The operator Service name used to derive the default xDS advertise address")
 
 	opts := zap.Options{Development: false}
 	opts.BindFlags(flag.CommandLine)
@@ -190,6 +211,46 @@ func resolveDefaultWasmImage() string {
 		return v
 	}
 	return defaults.DefaultCorazaWasmOCIReference
+}
+
+// buildECDSConfig derives the ECDS endpoint and asset base URL from the flags,
+// and loads the CA bundle. A missing CA is not fatal: Engine reconciliation
+// reports TLSNotConfigured instead of rendering an unverified chain.
+func buildECDSConfig(cfg config, podNamespace string) (controller.ECDSConfig, string) {
+	advertise := cfg.xdsAdvertiseAddress
+	if advertise == "" {
+		serviceName := cfg.operatorServiceName
+		if serviceName == "" {
+			// The chart passes the release fullname as --operator-name, which is
+			// also the Service name.
+			serviceName = cfg.operatorName
+		}
+		if serviceName != "" {
+			advertise = fmt.Sprintf("%s.%s.svc.cluster.local", serviceName, podNamespace)
+		}
+	}
+	if advertise != "" {
+		if _, _, err := net.SplitHostPort(advertise); err != nil {
+			advertise = net.JoinHostPort(advertise, strconv.Itoa(cfg.xdsPort))
+		}
+	}
+
+	assetBaseURL := cfg.assetBaseURL
+	if assetBaseURL == "" && advertise != "" {
+		assetBaseURL = "https://" + advertise
+	}
+
+	caPEM, err := os.ReadFile(cfg.xdsCAPath)
+	if err != nil {
+		setupLog.Info("xDS CA bundle unavailable; Engine reconciliation will report TLSNotConfigured",
+			"path", cfg.xdsCAPath, "error", err.Error())
+		caPEM = nil
+	}
+
+	return controller.ECDSConfig{
+		AdvertiseAddress: advertise,
+		CAPEM:            caPEM,
+	}, assetBaseURL
 }
 
 func logFlags() {
@@ -247,7 +308,7 @@ func buildCacheOptions(operatorNamespace string) ctrlcache.Options {
 	}
 }
 
-func setupCacheServer(mgr ctrl.Manager, cfg config, kubeClient *kubernetes.Clientset) *cache.RuleSetCache {
+func setupRuleSetCache(cfg config) *cache.RuleSetCache {
 	rulesetCache := cache.NewRuleSetCache()
 	rulesetCache.SetLogger(ctrl.Log.WithName("ruleset-cache"))
 	gcConfig := &cache.GarbageCollectionConfig{
@@ -261,26 +322,9 @@ func setupCacheServer(mgr ctrl.Manager, cfg config, kubeClient *kubernetes.Clien
 		os.Exit(1)
 	}
 
-	tokenReview := kubeClient.AuthenticationV1().TokenReviews()
-	cacheServer := cache.NewServer(rulesetCache, fmt.Sprintf(":%d", cfg.cacheServerPort), ctrl.Log, gcConfig, tokenReview)
-	if err := mgr.Add(cacheServer); err != nil {
-		setupLog.Error(err, "unable to add cache server to manager")
-		os.Exit(1)
-	}
+	// The legacy HTTP rule server is intentionally not registered: ECDS is the
+	// only delivery path. The package and its tests are retained.
 	return rulesetCache
-}
-
-func setupIstioPrerequisites(mgr ctrl.Manager, cfg config, podNamespace string) {
-	if cfg.operatorName == "" {
-		setupLog.Info("Skipping Istio prerequisites: --operator-name not set")
-		return
-	}
-
-	istioPrereqs := controller.NewIstioPrerequisites(mgr.GetClient(), mgr.GetAPIReader(), cfg.operatorName, podNamespace, cfg.istioRevision)
-	if err := mgr.Add(istioPrereqs); err != nil {
-		setupLog.Error(err, "unable to add Istio prerequisites runnable to manager")
-		os.Exit(1)
-	}
 }
 
 func setupHealthChecks(mgr ctrl.Manager) {

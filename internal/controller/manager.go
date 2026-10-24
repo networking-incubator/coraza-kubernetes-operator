@@ -53,7 +53,7 @@ const DefaultRuleSetCacheServerPort = 18080
 // -----------------------------------------------------------------------------
 
 // SetupControllers initializes all controllers
-func SetupControllers(mgr ctrl.Manager, rulesetCache *cache.RuleSetCache, envoyClusterName, istioRevision string, defaultWasmImage, operatorNamespace string, kubeClient kubernetes.Interface, failOnLegacyEngines bool) error {
+func SetupControllers(mgr ctrl.Manager, rulesetCache *cache.RuleSetCache, envoyClusterName, istioRevision string, defaultWasmImage, operatorNamespace string, kubeClient kubernetes.Interface, failOnLegacyEngines bool, ecdsConfig ECDSConfig, assetBaseURL string) error {
 	corazaMetrics, err := NewCorazaMetrics(metrics.Registry)
 	if err != nil {
 		return fmt.Errorf("register coraza metrics: %w", err)
@@ -87,15 +87,15 @@ func SetupControllers(mgr ctrl.Manager, rulesetCache *cache.RuleSetCache, envoyC
 	}
 
 	if err := (&EngineReconciler{
-		Client:                    mgr.GetClient(),
-		Scheme:                    mgr.GetScheme(),
-		Recorder:                  mgr.GetEventRecorder("engine-controller"),
-		Metrics:                   corazaMetrics,
-		kubeClient:                kubeClient,
-		ruleSetCacheServerCluster: envoyClusterName,
-		istioRevision:             istioRevision,
-		defaultWasmImage:          defaultWasmImage,
-		operatorNamespace:         operatorNamespace,
+		Client:            mgr.GetClient(),
+		Scheme:            mgr.GetScheme(),
+		Recorder:          mgr.GetEventRecorder("engine-controller"),
+		Metrics:           corazaMetrics,
+		kubeClient:        kubeClient,
+		istioRevision:     istioRevision,
+		xdsConfig:         ecdsConfig,
+		assetBaseURL:      assetBaseURL,
+		operatorNamespace: operatorNamespace,
 	}).SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("unable to create controller Engine: %w", err)
 	}

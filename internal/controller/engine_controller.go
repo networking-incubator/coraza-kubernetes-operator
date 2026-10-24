@@ -30,7 +30,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/events"
@@ -72,12 +71,14 @@ type EngineReconciler struct {
 	Metrics  *CorazaMetrics
 
 	client.Client
-	kubeClient                kubernetes.Interface
-	ruleSetCacheServerCluster string
-	istioRevision             string
-	// defaultWasmImage is the OCI URL used for Istio WasmPlugin spec.url when the
-	// Engine omits spec.driver.wasm.image.
-	defaultWasmImage  string
+	kubeClient    kubernetes.Interface
+	istioRevision string
+	// xdsConfig carries the ECDS endpoint and CA material injected into the
+	// EnvoyFilter.
+	xdsConfig ECDSConfig
+	// assetBaseURL is the base URL Envoy fetches the WASM asset from. The
+	// bundled module is served at <assetBaseURL>/wasm/<sha256>.wasm.
+	assetBaseURL      string
 	operatorNamespace string
 
 	// tokenStore is a thread-safe store for cache client tokens, keyed by
@@ -110,18 +111,14 @@ func (r *EngineReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		return fmt.Errorf("index %s: %w", engineTargetIndex, err)
 	}
 
-	wasmPlugin := &unstructured.Unstructured{}
-	wasmPlugin.SetGroupVersionKind(schema.GroupVersionKind{
-		Group:   "extensions.istio.io",
-		Version: "v1alpha1",
-		Kind:    "WasmPlugin",
-	})
+	envoyFilter := &unstructured.Unstructured{}
+	envoyFilter.SetGroupVersionKind(envoyFilterGVK)
 	telemetry := &unstructured.Unstructured{}
 	telemetry.SetGroupVersionKind(telemetryGVK)
 
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&wafv1alpha1.Engine{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
-		Owns(wasmPlugin).
+		Owns(envoyFilter).
 		Owns(telemetry, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		// GenerationChanged only: status/managedFields updates must not requeue Engines.
 		Watches(&gatewayv1.Gateway{}, handler.EnqueueRequestsFromMapFunc(r.findEnginesForGateway),
@@ -364,7 +361,7 @@ func (r *EngineReconciler) isRuleSetDegraded(ctx context.Context, log logr.Logge
 	}
 
 	degradedCond := apimeta.FindStatusCondition(ruleSet.Status.Conditions, conditionDegraded)
-	if degradedCond == nil || degradedCond.Status != metav1.ConditionTrue {
+	if degradedCond == nil || degradedCond.Status != metav1.ConditionTrue || degradedCond.ObservedGeneration != ruleSet.Generation {
 		return false, nil
 	}
 

@@ -10,7 +10,6 @@ import (
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/validation"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -83,8 +82,8 @@ func (r *EngineReconciler) rejectTarget(ctx context.Context, log logr.Logger, re
 }
 
 // cleanupNotAccepted removes child resources that were created when the Engine
-// was previously accepted (WasmPlugin, Telemetry, NetworkPolicy, cached token). This
-// prevents stale WasmPlugins from enforcing rules for an Engine that is no
+// was previously accepted (EnvoyFilter, Telemetry, NetworkPolicy). This
+// prevents a stale EnvoyFilter from enforcing rules for an Engine that is no
 // longer accepted due to TargetNotFound or TargetConflict.
 func (r *EngineReconciler) cleanupNotAccepted(ctx context.Context, log logr.Logger, req ctrl.Request, engine *wafv1alpha1.Engine) error {
 	telemetry := &unstructured.Unstructured{}
@@ -95,31 +94,24 @@ func (r *EngineReconciler) cleanupNotAccepted(ctx context.Context, log logr.Logg
 		return err
 	}
 
-	wasmPlugin := &unstructured.Unstructured{}
-	wasmPlugin.SetGroupVersionKind(schema.GroupVersionKind{
-		Group:   "extensions.istio.io",
-		Version: "v1alpha1",
-		Kind:    "WasmPlugin",
-	})
-	wpName := wasmPluginName(engine.Name)
-	err := r.Get(ctx, types.NamespacedName{Name: wpName, Namespace: engine.Namespace}, wasmPlugin)
+	envoyFilter := &unstructured.Unstructured{}
+	envoyFilter.SetGroupVersionKind(envoyFilterGVK)
+	efName := envoyFilterName(engine.Name)
+	err := r.Get(ctx, types.NamespacedName{Name: efName, Namespace: engine.Namespace}, envoyFilter)
 	if err == nil {
-		if delErr := r.Delete(ctx, wasmPlugin); client.IgnoreNotFound(delErr) != nil {
-			logAPIError(log, req, "Engine", delErr, "Failed to delete WasmPlugin for not-accepted Engine", wasmPlugin)
+		if delErr := r.Delete(ctx, envoyFilter); client.IgnoreNotFound(delErr) != nil {
+			logAPIError(log, req, "Engine", delErr, "Failed to delete EnvoyFilter for not-accepted Engine", envoyFilter)
 			return delErr
 		}
-		logInfo(log, req, "Engine", "Deleted WasmPlugin for not-accepted Engine", "wasmPlugin", wpName)
+		logInfo(log, req, "Engine", "Deleted EnvoyFilter for not-accepted Engine", "envoyFilter", efName)
 	} else if !apierrors.IsNotFound(err) {
-		logAPIError(log, req, "Engine", err, "Failed to get WasmPlugin for cleanup", nil)
+		logAPIError(log, req, "Engine", err, "Failed to get EnvoyFilter for cleanup", nil)
 		return err
 	}
 
 	if err := r.cleanupNetworkPolicy(ctx, log, req); err != nil {
 		return err
 	}
-
-	tokenKey := fmt.Sprintf("%s/%s/%s", engine.Namespace, engine.Name, engine.Spec.RuleSet.Name)
-	r.tokenStore.Delete(tokenKey)
 
 	return nil
 }

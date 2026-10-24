@@ -20,27 +20,21 @@ import (
 	"context"
 	"fmt"
 	"testing"
-	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	wafv1alpha1 "github.com/networking-incubator/coraza-kubernetes-operator/api/v1alpha1"
-	"github.com/networking-incubator/coraza-kubernetes-operator/internal/defaults"
-	rcache "github.com/networking-incubator/coraza-kubernetes-operator/internal/rulesets/cache"
 	"github.com/networking-incubator/coraza-kubernetes-operator/test/utils"
 )
 
@@ -78,12 +72,12 @@ func TestEngineReconciler_ReconcileNotFound(t *testing.T) {
 
 	t.Log("Creating reconciler for non-existent engine test")
 	reconciler := &EngineReconciler{
-		Client:                    k8sClient,
-		Scheme:                    scheme,
-		Recorder:                  utils.NewTestRecorder(),
-		ruleSetCacheServerCluster: "test-cluster",
-		defaultWasmImage:          defaults.DefaultCorazaWasmOCIReference,
-		operatorNamespace:         testNamespace,
+		Client:            k8sClient,
+		Scheme:            scheme,
+		xdsConfig:         testXDSConfig(),
+		assetBaseURL:      testAssetBaseURL,
+		Recorder:          utils.NewTestRecorder(),
+		operatorNamespace: testNamespace,
 	}
 
 	t.Log("Reconciling non-existent engine - should not error")
@@ -96,111 +90,6 @@ func TestEngineReconciler_ReconcileNotFound(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Zero(t, result.RequeueAfter)
-}
-
-func TestEngineReconciler_BuildWasmPlugin_IstioRevisionLabel(t *testing.T) {
-	engine := utils.NewTestEngine(utils.EngineOptions{
-		Name:      "rev-label-engine",
-		Namespace: testNamespace,
-	})
-
-	const testWasmOCI = "oci://test.example/wasm:latest"
-	withRev := &EngineReconciler{
-		ruleSetCacheServerCluster: "test-cluster",
-		istioRevision:             "canary",
-	}
-	w := withRev.buildWasmPlugin(engine, testWasmOCI, "test-token")
-	assert.Equal(t, "canary", w.GetLabels()["istio.io/rev"])
-
-	noRev := &EngineReconciler{
-		ruleSetCacheServerCluster: "test-cluster",
-		operatorNamespace:         testNamespace,
-	}
-	w2 := noRev.buildWasmPlugin(engine, testWasmOCI, "test-token")
-	_, has := w2.GetLabels()["istio.io/rev"]
-	assert.False(t, has, "istio.io/rev should not be set when revision is empty")
-}
-
-func TestEngineReconciler_BuildWasmPlugin_CacheToken(t *testing.T) {
-	engine := utils.NewTestEngine(utils.EngineOptions{
-		Name:      "token-test-engine",
-		Namespace: testNamespace,
-	})
-
-	reconciler := &EngineReconciler{
-		ruleSetCacheServerCluster: "test-cluster",
-	}
-
-	t.Run("cache_token is set in pluginConfig", func(t *testing.T) {
-		w := reconciler.buildWasmPlugin(engine, "oci://test.example/wasm:latest", "my-jwt-token")
-
-		spec, found, err := getNestedMap(w.Object, "spec")
-		require.NoError(t, err)
-		require.True(t, found)
-
-		pluginConfig, found, err := getNestedMap(spec, "pluginConfig")
-		require.NoError(t, err)
-		require.True(t, found)
-
-		token, found, err := getNestedString(pluginConfig, "cache_token")
-		require.NoError(t, err)
-		require.True(t, found, "cache_token should be present in pluginConfig")
-		assert.Equal(t, "my-jwt-token", token)
-	})
-
-	t.Run("empty token is still set", func(t *testing.T) {
-		w := reconciler.buildWasmPlugin(engine, "oci://test.example/wasm:latest", "")
-
-		spec, found, err := getNestedMap(w.Object, "spec")
-		require.NoError(t, err)
-		require.True(t, found)
-
-		pluginConfig, found, err := getNestedMap(spec, "pluginConfig")
-		require.NoError(t, err)
-		require.True(t, found)
-
-		token, found, err := getNestedString(pluginConfig, "cache_token")
-		require.NoError(t, err)
-		require.True(t, found, "cache_token key should exist even when empty")
-		assert.Empty(t, token)
-	})
-
-	t.Run("enable_filter_state_logs defaults to false", func(t *testing.T) {
-		w := reconciler.buildWasmPlugin(engine, "oci://test.example/wasm:latest", "tok")
-
-		spec, found, err := getNestedMap(w.Object, "spec")
-		require.NoError(t, err)
-		require.True(t, found)
-
-		pluginConfig, found, err := getNestedMap(spec, "pluginConfig")
-		require.NoError(t, err)
-		require.True(t, found)
-
-		got, ok := pluginConfig["enable_filter_state_logs"].(bool)
-		require.True(t, ok, "enable_filter_state_logs must be a bool in pluginConfig")
-		assert.False(t, got, "omitted spec.observability must disable Istio ALS filter state")
-	})
-
-	t.Run("observability enables filter-state logs", func(t *testing.T) {
-		enabled := engine.DeepCopy()
-		enabled.Spec.Observability = wafv1alpha1.ObservabilityConfig{
-			Mode: wafv1alpha1.ObservabilityModeEnabled,
-		}
-
-		w := reconciler.buildWasmPlugin(enabled, "oci://test.example/wasm:latest", "tok")
-
-		spec, found, err := getNestedMap(w.Object, "spec")
-		require.NoError(t, err)
-		require.True(t, found)
-
-		pluginConfig, found, err := getNestedMap(spec, "pluginConfig")
-		require.NoError(t, err)
-		require.True(t, found)
-
-		got, ok := pluginConfig["enable_filter_state_logs"].(bool)
-		require.True(t, ok, "enable_filter_state_logs must be a bool in pluginConfig")
-		assert.True(t, got, "spec.observability.mode=Enabled must enable filter state for the WASM driver")
-	})
 }
 
 func TestEngineReconciler_ReconcileMissingRuleSet(t *testing.T) {
@@ -224,12 +113,12 @@ func TestEngineReconciler_ReconcileMissingRuleSet(t *testing.T) {
 
 	t.Log("Reconciling Engine with missing RuleSet")
 	reconciler := &EngineReconciler{
-		Client:                    k8sClient,
-		Scheme:                    scheme,
-		Recorder:                  utils.NewTestRecorder(),
-		ruleSetCacheServerCluster: "test-cluster",
-		defaultWasmImage:          defaults.DefaultCorazaWasmOCIReference,
-		operatorNamespace:         testNamespace,
+		Client:            k8sClient,
+		Scheme:            scheme,
+		xdsConfig:         testXDSConfig(),
+		assetBaseURL:      testAssetBaseURL,
+		Recorder:          utils.NewTestRecorder(),
+		operatorNamespace: testNamespace,
 	}
 	req := ctrl.Request{
 		NamespacedName: types.NamespacedName{
@@ -255,7 +144,7 @@ func TestEngineReconciler_ReconcileMissingRuleSet(t *testing.T) {
 
 func TestEngineReconciler_ReconcileIstioDriver(t *testing.T) {
 	ctx := context.Background()
-	ns := utils.NewTestEngine(utils.EngineOptions{}).Namespace
+	ns := setupTestNamespace(t, ctx)
 
 	createTestGateway(t, ctx, k8sClient, "test-gw", ns)
 
@@ -270,6 +159,7 @@ func TestEngineReconciler_ReconcileIstioDriver(t *testing.T) {
 			t.Logf("Failed to delete ruleset: %v", err)
 		}
 	}()
+	acceptTestRuleSet(t, ctx, ruleset, testAcceptRuleText)
 
 	t.Log("Creating test engine with Istio driver")
 	engine := utils.NewTestEngine(utils.EngineOptions{
@@ -287,13 +177,13 @@ func TestEngineReconciler_ReconcileIstioDriver(t *testing.T) {
 	t.Log("Reconciling Istio Engine")
 	recorder := utils.NewFakeRecorder()
 	reconciler := &EngineReconciler{
-		Client:                    k8sClient,
-		Scheme:                    scheme,
-		Recorder:                  recorder,
-		kubeClient:                testKubeClient,
-		ruleSetCacheServerCluster: "test-cluster",
-		defaultWasmImage:          defaults.DefaultCorazaWasmOCIReference,
-		operatorNamespace:         testNamespace,
+		Client:            k8sClient,
+		Scheme:            scheme,
+		xdsConfig:         testXDSConfig(),
+		assetBaseURL:      testAssetBaseURL,
+		Recorder:          recorder,
+		kubeClient:        testKubeClient,
+		operatorNamespace: testNamespace,
 	}
 	engineReq := ctrl.Request{
 		NamespacedName: types.NamespacedName{
@@ -307,10 +197,10 @@ func TestEngineReconciler_ReconcileIstioDriver(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotZero(t, result.RequeueAfter)
 
-	// Second reconcile proceeds with provisioning and schedules token renewal.
+	// Second reconcile provisions the configuration and attachment.
 	result, err = reconciler.Reconcile(ctx, engineReq)
 	require.NoError(t, err)
-	assert.NotZero(t, result.RequeueAfter, "should schedule token renewal requeue")
+	assert.Zero(t, result.RequeueAfter, "a fail-closed Engine needs no deferred bootstrap requeue")
 
 	t.Log("Verifying engine status")
 	var updated wafv1alpha1.Engine
@@ -319,17 +209,21 @@ func TestEngineReconciler_ReconcileIstioDriver(t *testing.T) {
 		Namespace: engine.Namespace,
 	}, &updated)
 	require.NoError(t, err)
-	assert.Len(t, updated.Status.Conditions, 2, "should have Ready and Accepted conditions")
+	require.NotNil(t, updated.Status)
+	require.NotNil(t, updated.Status.AcceptedConfiguration, "acceptedConfiguration should be recorded")
 	readyCond := apimeta.FindStatusCondition(updated.Status.Conditions, "Ready")
 	require.NotNil(t, readyCond)
 	assert.Equal(t, metav1.ConditionTrue, readyCond.Status)
-	assert.Equal(t, "Configured", readyCond.Reason)
+	assert.Equal(t, reasonConfigurationAccepted, readyCond.Reason)
 	acceptedCond := apimeta.FindStatusCondition(updated.Status.Conditions, "Accepted")
 	require.NotNil(t, acceptedCond)
 	assert.Equal(t, metav1.ConditionTrue, acceptedCond.Status)
 
-	assert.True(t, recorder.HasEvent("Normal", "WasmPluginCreated"),
-		"expected Normal/WasmPluginCreated event; got: %v", recorder.Events)
+	requireEnvoyFilterExists(t, ctx, engine.Name, engine.Namespace)
+	requireNoLegacyWasmPlugin(t, ctx, engine.Name, engine.Namespace)
+
+	assert.True(t, recorder.HasEvent("Normal", reasonConfigurationAccepted),
+		"expected Normal/%s event; got: %v", reasonConfigurationAccepted, recorder.Events)
 }
 
 func TestEngineReconciler_StatusUpdateHandling(t *testing.T) {
@@ -351,12 +245,12 @@ func TestEngineReconciler_StatusUpdateHandling(t *testing.T) {
 
 	t.Log("Reconciling engine to verify status update")
 	reconciler := &EngineReconciler{
-		Client:                    k8sClient,
-		Scheme:                    scheme,
-		Recorder:                  utils.NewTestRecorder(),
-		ruleSetCacheServerCluster: "test-cluster",
-		defaultWasmImage:          defaults.DefaultCorazaWasmOCIReference,
-		operatorNamespace:         testNamespace,
+		Client:            k8sClient,
+		Scheme:            scheme,
+		xdsConfig:         testXDSConfig(),
+		assetBaseURL:      testAssetBaseURL,
+		Recorder:          utils.NewTestRecorder(),
+		operatorNamespace: testNamespace,
 	}
 	engineReq := ctrl.Request{
 		NamespacedName: types.NamespacedName{
@@ -390,115 +284,6 @@ func TestEngineReconciler_StatusUpdateHandling(t *testing.T) {
 	}
 }
 
-func TestEngineReconciler_FailurePolicyInWasmPluginConfig(t *testing.T) {
-	ctx := context.Background()
-
-	createTestGateway(t, ctx, k8sClient, "test-gw", testNamespace)
-
-	ruleset := utils.NewTestRuleSet(utils.RuleSetOptions{
-		Name:      "test-ruleset",
-		Namespace: testNamespace,
-	})
-	err := k8sClient.Create(ctx, ruleset)
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		if err := k8sClient.Delete(ctx, ruleset); err != nil {
-			t.Logf("Failed to delete ruleset: %v", err)
-		}
-	})
-
-	tests := []struct {
-		name                  string
-		failurePolicy         wafv1alpha1.FailurePolicy
-		expectedFailurePolicy string
-	}{
-		{
-			name:                  "failure policy fail",
-			failurePolicy:         wafv1alpha1.FailurePolicyFail,
-			expectedFailurePolicy: "fail",
-		},
-		{
-			name:                  "failure policy allow",
-			failurePolicy:         wafv1alpha1.FailurePolicyAllow,
-			expectedFailurePolicy: "allow",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-
-			t.Logf("Creating test engine with failure policy: %s", tt.failurePolicy)
-			engine := utils.NewTestEngine(utils.EngineOptions{
-				Name:          "test-engine-" + string(tt.failurePolicy),
-				Namespace:     testNamespace,
-				FailurePolicy: tt.failurePolicy,
-			})
-			err := k8sClient.Create(ctx, engine)
-			require.NoError(t, err)
-			defer func() {
-				if err := k8sClient.Delete(ctx, engine); err != nil {
-					t.Logf("Failed to delete engine: %v", err)
-				}
-			}()
-
-			t.Log("Reconciling engine")
-			reconciler := &EngineReconciler{
-				Client:                    k8sClient,
-				Scheme:                    scheme,
-				Recorder:                  utils.NewTestRecorder(),
-				kubeClient:                testKubeClient,
-				ruleSetCacheServerCluster: "test-cluster",
-				defaultWasmImage:          defaults.DefaultCorazaWasmOCIReference,
-				operatorNamespace:         testNamespace,
-			}
-			req := ctrl.Request{
-				NamespacedName: types.NamespacedName{
-					Name:      engine.Name,
-					Namespace: engine.Namespace,
-				},
-			}
-
-			// First reconcile adds the finalizer and requeues after a short delay.
-			result, err := reconciler.Reconcile(ctx, req)
-			require.NoError(t, err)
-			assert.NotZero(t, result.RequeueAfter)
-
-			// Second reconcile provisions the WasmPlugin and schedules token renewal.
-			result, err = reconciler.Reconcile(ctx, req)
-			require.NoError(t, err)
-			assert.NotZero(t, result.RequeueAfter, "should schedule token renewal requeue")
-
-			t.Log("Fetching created WasmPlugin")
-			wasmURL, _ := reconciler.wasmPluginOCIURLSource(engine)
-			wasmPlugin := reconciler.buildWasmPlugin(engine, wasmURL, "test-token")
-			err = k8sClient.Get(ctx, types.NamespacedName{
-				Name:      wasmPlugin.GetName(),
-				Namespace: wasmPlugin.GetNamespace(),
-			}, wasmPlugin)
-			require.NoError(t, err)
-
-			t.Log("Verifying pluginConfig contains failure_policy")
-			spec, found, err := getNestedMap(wasmPlugin.Object, "spec")
-			require.NoError(t, err)
-			require.True(t, found, "spec not found in WasmPlugin")
-
-			pluginConfig, found, err := getNestedMap(spec, "pluginConfig")
-			require.NoError(t, err)
-			require.True(t, found, "pluginConfig not found in WasmPlugin spec")
-
-			failurePolicy, found, err := getNestedString(pluginConfig, "failure_policy")
-			require.NoError(t, err)
-			require.True(t, found, "failure_policy not found in pluginConfig")
-			assert.Equal(t, tt.expectedFailurePolicy, failurePolicy)
-
-			cacheToken, found, err := getNestedString(pluginConfig, "cache_token")
-			require.NoError(t, err)
-			require.True(t, found, "cache_token not found in pluginConfig")
-			assert.NotEmpty(t, cacheToken, "cache_token should be a non-empty JWT token")
-		})
-	}
-}
-
 // getNestedMap retrieves a nested map from an unstructured object
 func getNestedMap(obj map[string]any, key string) (map[string]any, bool, error) {
 	val, found := obj[key]
@@ -510,231 +295,6 @@ func getNestedMap(obj map[string]any, key string) (map[string]any, bool, error) 
 		return nil, false, assert.AnError
 	}
 	return mapVal, true, nil
-}
-
-// getNestedString retrieves a nested string from an unstructured object
-func getNestedString(obj map[string]any, key string) (string, bool, error) {
-	val, found := obj[key]
-	if !found {
-		return "", false, nil
-	}
-	strVal, ok := val.(string)
-	if !ok {
-		return "", false, assert.AnError
-	}
-	return strVal, true, nil
-}
-
-func assertWasmPluginCacheToken(t *testing.T, ctx context.Context, name, namespace, expectedToken string) {
-	t.Helper()
-	wasmPlugin := &unstructured.Unstructured{}
-	wasmPlugin.SetGroupVersionKind(schema.GroupVersionKind{
-		Group:   "extensions.istio.io",
-		Version: "v1alpha1",
-		Kind:    "WasmPlugin",
-	})
-	err := k8sClient.Get(ctx, types.NamespacedName{
-		Name:      wasmPluginName(name),
-		Namespace: namespace,
-	}, wasmPlugin)
-	require.NoError(t, err)
-
-	cacheToken, found, err := unstructured.NestedString(wasmPlugin.Object, "spec", "pluginConfig", "cache_token")
-	require.NoError(t, err)
-	require.True(t, found)
-	assert.Equal(t, expectedToken, cacheToken,
-		"WasmPlugin cache_token must match expected token")
-}
-
-//nolint:unparam // expectedStatus is intentionally parameterized for reuse with ConditionFalse
-func assertEngineCondition(t *testing.T, ctx context.Context, name, namespace, conditionType string, expectedStatus metav1.ConditionStatus) {
-	t.Helper()
-	var engine wafv1alpha1.Engine
-	err := k8sClient.Get(ctx, types.NamespacedName{
-		Name:      name,
-		Namespace: namespace,
-	}, &engine)
-	require.NoError(t, err)
-
-	assert.True(t, apimeta.IsStatusConditionPresentAndEqual(engine.Status.Conditions, conditionType, expectedStatus),
-		"Engine Condition %s expected %s", conditionType, expectedStatus)
-}
-
-func TestEngineReconciler_ImagePullSecretInWasmPlugin(t *testing.T) {
-	reconciler := &EngineReconciler{
-		Client:                    k8sClient,
-		Scheme:                    scheme,
-		Recorder:                  utils.NewTestRecorder(),
-		ruleSetCacheServerCluster: "test-cluster",
-		operatorNamespace:         testNamespace,
-	}
-
-	t.Run("imagePullSecret is set when specified", func(t *testing.T) {
-		engine := utils.NewTestEngine(utils.EngineOptions{
-			Name:            "engine-with-pull-secret",
-			Namespace:       testNamespace,
-			ImagePullSecret: "my-registry-secret",
-		})
-
-		wasmPlugin := reconciler.buildWasmPlugin(engine, "", "")
-
-		spec, found, err := getNestedMap(wasmPlugin.Object, "spec")
-		require.NoError(t, err)
-		require.True(t, found)
-
-		secret, found, err := getNestedString(spec, "imagePullSecret")
-		require.NoError(t, err)
-		require.True(t, found, "imagePullSecret should be present in WasmPlugin spec")
-		assert.Equal(t, "my-registry-secret", secret)
-	})
-
-	t.Run("imagePullSecret is omitted when empty", func(t *testing.T) {
-		engine := utils.NewTestEngine(utils.EngineOptions{
-			Name:      "engine-without-pull-secret",
-			Namespace: testNamespace,
-		})
-
-		wasmPlugin := reconciler.buildWasmPlugin(engine, "", "")
-
-		spec, found, err := getNestedMap(wasmPlugin.Object, "spec")
-		require.NoError(t, err)
-		require.True(t, found)
-
-		_, found = spec["imagePullSecret"]
-		assert.False(t, found, "imagePullSecret should not be present in WasmPlugin spec when empty")
-	})
-}
-
-func TestEngineReconciler_ImagePullSecretEnvtest(t *testing.T) {
-	ctx := context.Background()
-
-	createTestGateway(t, ctx, k8sClient, "test-gw", testNamespace)
-
-	t.Log("Creating RuleSet for imagePullSecret envtest")
-	ruleset := utils.NewTestRuleSet(utils.RuleSetOptions{
-		Name:      "pull-secret-ruleset",
-		Namespace: testNamespace,
-	})
-	require.NoError(t, k8sClient.Create(ctx, ruleset))
-	t.Cleanup(func() {
-		if err := k8sClient.Delete(ctx, ruleset); err != nil {
-			t.Logf("Failed to delete ruleset: %v", err)
-		}
-	})
-
-	reconciler := &EngineReconciler{
-		Client:                    k8sClient,
-		Scheme:                    scheme,
-		Recorder:                  utils.NewTestRecorder(),
-		ruleSetCacheServerCluster: "test-cluster",
-		operatorNamespace:         testNamespace,
-		kubeClient:                testKubeClient,
-	}
-
-	t.Run("imagePullSecret persisted in WasmPlugin via server-side apply", func(t *testing.T) {
-		engine := utils.NewTestEngine(utils.EngineOptions{
-			Name:            "engine-pullsecret-envtest",
-			Namespace:       testNamespace,
-			RuleSetName:     ruleset.Name,
-			ImagePullSecret: "my-registry-secret",
-		})
-		require.NoError(t, k8sClient.Create(ctx, engine))
-		t.Cleanup(func() {
-			if err := k8sClient.Delete(ctx, engine); err != nil {
-				t.Logf("Failed to delete engine: %v", err)
-			}
-		})
-
-		req := ctrl.Request{
-			NamespacedName: types.NamespacedName{
-				Name:      engine.Name,
-				Namespace: engine.Namespace,
-			},
-		}
-
-		// First reconcile adds the finalizer and requeues after a short delay.
-		result, err := reconciler.Reconcile(ctx, req)
-		require.NoError(t, err)
-		assert.NotZero(t, result.RequeueAfter)
-
-		// Second reconcile provisions the WasmPlugin and schedules token renewal.
-		result, err = reconciler.Reconcile(ctx, req)
-		require.NoError(t, err)
-		assert.NotZero(t, result.RequeueAfter, "should schedule token renewal requeue")
-
-		t.Log("Fetching WasmPlugin from API server")
-		wasmPlugin := &unstructured.Unstructured{}
-		wasmPlugin.SetGroupVersionKind(schema.GroupVersionKind{
-			Group:   "extensions.istio.io",
-			Version: "v1alpha1",
-			Kind:    "WasmPlugin",
-		})
-		err = k8sClient.Get(ctx, types.NamespacedName{
-			Name:      wasmPluginName(engine.Name),
-			Namespace: engine.Namespace,
-		}, wasmPlugin)
-		require.NoError(t, err)
-
-		spec, found, err := getNestedMap(wasmPlugin.Object, "spec")
-		require.NoError(t, err)
-		require.True(t, found, "spec not found in WasmPlugin")
-
-		secret, found, err := getNestedString(spec, "imagePullSecret")
-		require.NoError(t, err)
-		require.True(t, found, "imagePullSecret should be persisted in WasmPlugin spec after server-side apply")
-		assert.Equal(t, "my-registry-secret", secret)
-	})
-
-	t.Run("imagePullSecret omitted in WasmPlugin when not set", func(t *testing.T) {
-		engine := utils.NewTestEngine(utils.EngineOptions{
-			Name:        "engine-no-pullsecret-envtest",
-			Namespace:   testNamespace,
-			RuleSetName: ruleset.Name,
-		})
-		require.NoError(t, k8sClient.Create(ctx, engine))
-		t.Cleanup(func() {
-			if err := k8sClient.Delete(ctx, engine); err != nil {
-				t.Logf("Failed to delete engine: %v", err)
-			}
-		})
-
-		req := ctrl.Request{
-			NamespacedName: types.NamespacedName{
-				Name:      engine.Name,
-				Namespace: engine.Namespace,
-			},
-		}
-
-		// First reconcile adds the finalizer and requeues after a short delay.
-		result, err := reconciler.Reconcile(ctx, req)
-		require.NoError(t, err)
-		assert.NotZero(t, result.RequeueAfter)
-
-		// Second reconcile provisions the WasmPlugin and schedules token renewal.
-		result, err = reconciler.Reconcile(ctx, req)
-		require.NoError(t, err)
-		assert.NotZero(t, result.RequeueAfter, "should schedule token renewal requeue")
-
-		t.Log("Fetching WasmPlugin from API server")
-		wasmPlugin := &unstructured.Unstructured{}
-		wasmPlugin.SetGroupVersionKind(schema.GroupVersionKind{
-			Group:   "extensions.istio.io",
-			Version: "v1alpha1",
-			Kind:    "WasmPlugin",
-		})
-		err = k8sClient.Get(ctx, types.NamespacedName{
-			Name:      wasmPluginName(engine.Name),
-			Namespace: engine.Namespace,
-		}, wasmPlugin)
-		require.NoError(t, err)
-
-		spec, found, err := getNestedMap(wasmPlugin.Object, "spec")
-		require.NoError(t, err)
-		require.True(t, found, "spec not found in WasmPlugin")
-
-		_, found = spec["imagePullSecret"]
-		assert.False(t, found, "imagePullSecret should not be present in WasmPlugin spec when not set")
-	})
 }
 
 func TestEngineReconciler_HandleInvalidDriverConfiguration_NilStatus(t *testing.T) {
@@ -753,12 +313,12 @@ func TestEngineReconciler_HandleInvalidDriverConfiguration_NilStatus(t *testing.
 	require.Nil(t, engine.Status, "precondition: Status must be nil")
 
 	reconciler := &EngineReconciler{
-		Client:                    k8sClient,
-		Scheme:                    scheme,
-		Recorder:                  utils.NewTestRecorder(),
-		ruleSetCacheServerCluster: "test-cluster",
-		defaultWasmImage:          defaults.DefaultCorazaWasmOCIReference,
-		operatorNamespace:         testNamespace,
+		Client:            k8sClient,
+		Scheme:            scheme,
+		xdsConfig:         testXDSConfig(),
+		assetBaseURL:      testAssetBaseURL,
+		Recorder:          utils.NewTestRecorder(),
+		operatorNamespace: testNamespace,
 	}
 
 	// handleInvalidDriverConfiguration must not panic when engine.Status is nil.
@@ -811,13 +371,13 @@ func TestEngineReconciler_SelectDriver_NilDriverDefaultsToWasm(t *testing.T) {
 	}
 
 	reconciler := &EngineReconciler{
-		Client:                    k8sClient,
-		Scheme:                    scheme,
-		Recorder:                  utils.NewTestRecorder(),
-		kubeClient:                testKubeClient,
-		ruleSetCacheServerCluster: "test-cluster",
-		defaultWasmImage:          defaults.DefaultCorazaWasmOCIReference,
-		operatorNamespace:         testNamespace,
+		Client:            k8sClient,
+		Scheme:            scheme,
+		xdsConfig:         testXDSConfig(),
+		assetBaseURL:      testAssetBaseURL,
+		Recorder:          utils.NewTestRecorder(),
+		kubeClient:        testKubeClient,
+		operatorNamespace: testNamespace,
 	}
 
 	// selectDriver with nil driver should default to wasm and not panic.
@@ -848,12 +408,12 @@ func TestEngineReconciler_NilTargetRef_MarksDegraded(t *testing.T) {
 	})
 
 	reconciler := &EngineReconciler{
-		Client:                    k8sClient,
-		Scheme:                    scheme,
-		Recorder:                  utils.NewTestRecorder(),
-		ruleSetCacheServerCluster: "test-cluster",
-		defaultWasmImage:          defaults.DefaultCorazaWasmOCIReference,
-		operatorNamespace:         testNamespace,
+		Client:            k8sClient,
+		Scheme:            scheme,
+		xdsConfig:         testXDSConfig(),
+		assetBaseURL:      testAssetBaseURL,
+		Recorder:          utils.NewTestRecorder(),
+		operatorNamespace: testNamespace,
 	}
 	engineReq := ctrl.Request{
 		NamespacedName: types.NamespacedName{
@@ -1069,6 +629,7 @@ func TestEngineReconciler_DegradedWhenRuleSetDegraded(t *testing.T) {
 	apimeta.SetStatusCondition(&ruleSet.Status.Conditions, metav1.Condition{
 		Type:               "Degraded",
 		Status:             metav1.ConditionTrue,
+		ObservedGeneration: ruleSet.Generation,
 		Reason:             "UnsupportedRules",
 		Message:            "rule 950150: response body inspection is unsupported",
 		LastTransitionTime: metav1.Now(),
@@ -1076,6 +637,7 @@ func TestEngineReconciler_DegradedWhenRuleSetDegraded(t *testing.T) {
 	apimeta.SetStatusCondition(&ruleSet.Status.Conditions, metav1.Condition{
 		Type:               "Ready",
 		Status:             metav1.ConditionFalse,
+		ObservedGeneration: ruleSet.Generation,
 		Reason:             "UnsupportedRules",
 		Message:            "rule 950150: response body inspection is unsupported",
 		LastTransitionTime: metav1.Now(),
@@ -1101,12 +663,12 @@ func TestEngineReconciler_DegradedWhenRuleSetDegraded(t *testing.T) {
 	t.Log("Reconciling Engine")
 	recorder := utils.NewFakeRecorder()
 	reconciler := &EngineReconciler{
-		Client:                    k8sClient,
-		Scheme:                    scheme,
-		Recorder:                  recorder,
-		ruleSetCacheServerCluster: "test-cluster",
-		defaultWasmImage:          "oci://test.example/wasm:latest",
-		operatorNamespace:         testNamespace,
+		Client:            k8sClient,
+		Scheme:            scheme,
+		xdsConfig:         testXDSConfig(),
+		assetBaseURL:      testAssetBaseURL,
+		Recorder:          recorder,
+		operatorNamespace: testNamespace,
 	}
 	engineReq := ctrl.Request{
 		NamespacedName: types.NamespacedName{
@@ -1168,212 +730,16 @@ func TestEngineReconciler_ValidationAllowsOmittedWasmImage(t *testing.T) {
 	})
 }
 
-func TestEngineReconciler_BuildWasmPlugin_WasmImageResolution(t *testing.T) {
-	const operatorDefault = "oci://operator-default.example/wasm@digest"
-
-	t.Run("nil image uses operator default", func(t *testing.T) {
-		engine := utils.NewTestEngine(utils.EngineOptions{})
-		engine.Spec.Driver.Wasm.Image = ""
-		r := &EngineReconciler{defaultWasmImage: operatorDefault}
-		wasmURL, _ := r.wasmPluginOCIURLSource(engine)
-		wp := r.buildWasmPlugin(engine, wasmURL, "")
-		spec, found, err := getNestedMap(wp.Object, "spec")
-		require.NoError(t, err)
-		require.True(t, found)
-		url, found, err := getNestedString(spec, "url")
-		require.NoError(t, err)
-		require.True(t, found)
-		assert.Equal(t, operatorDefault, url)
-	})
-
-	t.Run("nil wasm uses operator default", func(t *testing.T) {
-		engine := utils.NewTestEngine(utils.EngineOptions{})
-		engine.Spec.Driver.Wasm = nil
-		r := &EngineReconciler{defaultWasmImage: operatorDefault}
-		wasmURL, _ := r.wasmPluginOCIURLSource(engine)
-		assert.Equal(t, operatorDefault, wasmURL)
-	})
-
-	t.Run("explicit image wins over operator default", func(t *testing.T) {
-		custom := "oci://custom.example/wasm:v2"
-		engine := utils.NewTestEngine(utils.EngineOptions{})
-		engine.Spec.Driver.Wasm.Image = custom
-		r := &EngineReconciler{defaultWasmImage: operatorDefault}
-		wasmURL, _ := r.wasmPluginOCIURLSource(engine)
-		wp := r.buildWasmPlugin(engine, wasmURL, "")
-		spec, found, err := getNestedMap(wp.Object, "spec")
-		require.NoError(t, err)
-		require.True(t, found)
-		url, found, err := getNestedString(spec, "url")
-		require.NoError(t, err)
-		require.True(t, found)
-		assert.Equal(t, custom, url)
-	})
-}
-
-func TestEngineReconciler_TokenStoreIntegration(t *testing.T) {
-	ctx := context.Background()
-
-	createTestGateway(t, ctx, k8sClient, "test-gw", testNamespace)
-
-	ruleset := utils.NewTestRuleSet(utils.RuleSetOptions{
-		Name:      "tokenstore-ruleset",
-		Namespace: testNamespace,
-	})
-	require.NoError(t, k8sClient.Create(ctx, ruleset))
-	t.Cleanup(func() {
-		if err := k8sClient.Delete(ctx, ruleset); err != nil {
-			t.Logf("Failed to delete ruleset: %v", err)
-		}
-	})
-
-	engine := utils.NewTestEngine(utils.EngineOptions{
-		Name:        "tokenstore-engine",
-		Namespace:   testNamespace,
-		RuleSetName: ruleset.Name,
-	})
-	require.NoError(t, k8sClient.Create(ctx, engine))
-	t.Cleanup(func() {
-		if err := k8sClient.Delete(ctx, engine); err != nil {
-			t.Logf("Failed to delete engine: %v", err)
-		}
-	})
-
-	reconciler := &EngineReconciler{
-		Client:                    k8sClient,
-		Scheme:                    scheme,
-		Recorder:                  utils.NewTestRecorder(),
-		kubeClient:                testKubeClient,
-		ruleSetCacheServerCluster: "test-cluster",
-		defaultWasmImage:          defaults.DefaultCorazaWasmOCIReference,
-		operatorNamespace:         testNamespace,
-	}
-	req := ctrl.Request{
-		NamespacedName: types.NamespacedName{
-			Name:      engine.Name,
-			Namespace: engine.Namespace,
-		},
-	}
-
-	// First reconcile: adds finalizer, no token yet.
-	result, err := reconciler.Reconcile(ctx, req)
-	require.NoError(t, err)
-	assert.NotZero(t, result.RequeueAfter)
-
-	tokenKey := fmt.Sprintf("%s/%s/%s", engine.Namespace, engine.Name, ruleset.Name)
-	_, found := reconciler.tokenStore.Load(tokenKey)
-	assert.False(t, found, "tokenStore should be empty after finalizer-only reconcile")
-
-	// Second reconcile: provisions SA, token, and WasmPlugin.
-	result, err = reconciler.Reconcile(ctx, req)
-	require.NoError(t, err)
-	assert.NotZero(t, result.RequeueAfter, "should schedule token renewal requeue")
-
-	t.Run("token is stored with correct key", func(t *testing.T) {
-		val, found := reconciler.tokenStore.Load(tokenKey)
-		require.True(t, found, "tokenStore should have entry for %s", tokenKey)
-
-		entry := val.(*TokenEntry)
-		assert.NotEmpty(t, entry.Token, "stored token should not be empty")
-		assert.False(t, entry.IssuedAt.IsZero(), "IssuedAt should be set")
-		assert.True(t, entry.ExpiresAt.After(time.Now()), "token should not be expired")
-		assert.False(t, entry.NeedsRenewal(), "freshly issued token should not need renewal")
-	})
-
-	t.Run("ServiceAccount created with correct labels", func(t *testing.T) {
-		var saList corev1.ServiceAccountList
-		err := k8sClient.List(ctx, &saList,
-			client.InNamespace(testNamespace),
-			client.MatchingLabels(cacheClientSALabels(engine.Name)),
-		)
-		require.NoError(t, err)
-		require.Len(t, saList.Items, 1, "exactly one SA should exist for the engine")
-
-		sa := saList.Items[0]
-		assert.True(t, len(sa.Name) > len(rcache.CacheEngineSAPrefix),
-			"SA name should be server-generated via GenerateName")
-		assert.Equal(t, "cache-client", sa.Labels["app.kubernetes.io/component"])
-		assert.Equal(t, engine.Name, sa.Labels["app.kubernetes.io/instance"])
-
-		require.Len(t, sa.OwnerReferences, 1, "SA should have an owner reference")
-		assert.Equal(t, engine.Name, sa.OwnerReferences[0].Name)
-		assert.Equal(t, "Engine", sa.OwnerReferences[0].Kind)
-	})
-
-	t.Run("token in WasmPlugin matches tokenStore", func(t *testing.T) {
-		val, _ := reconciler.tokenStore.Load(tokenKey)
-		storedToken := val.(*TokenEntry).Token
-
-		wasmPlugin := &unstructured.Unstructured{}
-		wasmPlugin.SetGroupVersionKind(schema.GroupVersionKind{
-			Group:   "extensions.istio.io",
-			Version: "v1alpha1",
-			Kind:    "WasmPlugin",
-		})
-		err := k8sClient.Get(ctx, types.NamespacedName{
-			Name:      wasmPluginName(engine.Name),
-			Namespace: engine.Namespace,
-		}, wasmPlugin)
-		require.NoError(t, err)
-
-		spec, found, err := getNestedMap(wasmPlugin.Object, "spec")
-		require.NoError(t, err)
-		require.True(t, found)
-		pluginConfig, found, err := getNestedMap(spec, "pluginConfig")
-		require.NoError(t, err)
-		require.True(t, found)
-		cacheToken, found, err := getNestedString(pluginConfig, "cache_token")
-		require.NoError(t, err)
-		require.True(t, found)
-		assert.Equal(t, storedToken, cacheToken, "WasmPlugin cache_token should match tokenStore entry")
-	})
-
-	t.Run("second reconcile reuses cached token", func(t *testing.T) {
-		val, _ := reconciler.tokenStore.Load(tokenKey)
-		firstToken := val.(*TokenEntry).Token
-
-		result, err := reconciler.Reconcile(ctx, req)
-		require.NoError(t, err)
-		assert.NotZero(t, result.RequeueAfter)
-
-		val, _ = reconciler.tokenStore.Load(tokenKey)
-		secondToken := val.(*TokenEntry).Token
-		assert.Equal(t, firstToken, secondToken, "token should be reused from cache on subsequent reconcile")
-	})
-
-	t.Run("expired token is renewed on reconcile", func(t *testing.T) {
-		val, _ := reconciler.tokenStore.Load(tokenKey)
-		oldToken := val.(*TokenEntry).Token
-
-		// Simulate an expired token by overwriting the entry.
-		reconciler.tokenStore.Store(tokenKey, &TokenEntry{
-			Token:     "expired-token",
-			IssuedAt:  time.Now().Add(-2 * time.Hour),
-			ExpiresAt: time.Now().Add(-1 * time.Hour),
-		})
-
-		result, err := reconciler.Reconcile(ctx, req)
-		require.NoError(t, err)
-		assert.NotZero(t, result.RequeueAfter)
-
-		val, found := reconciler.tokenStore.Load(tokenKey)
-		require.True(t, found)
-		newEntry := val.(*TokenEntry)
-		assert.NotEqual(t, "expired-token", newEntry.Token, "expired token should be replaced")
-		assert.NotEqual(t, oldToken, newEntry.Token, "a fresh token should be generated")
-		assert.True(t, newEntry.ExpiresAt.After(time.Now()), "new token should not be expired")
-	})
-}
-
 func TestEngineReconciler_NetworkPolicyCreated(t *testing.T) {
 	ctx := context.Background()
+	ns := setupTestNamespace(t, ctx)
 
-	createTestGateway(t, ctx, k8sClient, "test-gw", testNamespace)
+	createTestGateway(t, ctx, k8sClient, "test-gw", ns)
 
 	t.Log("Creating RuleSet for NetworkPolicy test")
 	ruleset := utils.NewTestRuleSet(utils.RuleSetOptions{
 		Name:      "netpol-test-ruleset",
-		Namespace: testNamespace,
+		Namespace: ns,
 	})
 	require.NoError(t, k8sClient.Create(ctx, ruleset))
 	t.Cleanup(func() {
@@ -1381,11 +747,12 @@ func TestEngineReconciler_NetworkPolicyCreated(t *testing.T) {
 			t.Logf("Failed to delete ruleset: %v", err)
 		}
 	})
+	acceptTestRuleSet(t, ctx, ruleset, testAcceptRuleText)
 
 	t.Log("Creating test engine with gateway workload selector")
 	engine := utils.NewTestEngine(utils.EngineOptions{
 		Name:        "netpol-test-engine",
-		Namespace:   testNamespace,
+		Namespace:   ns,
 		RuleSetName: ruleset.Name,
 		GatewayName: "test-gw",
 	})
@@ -1398,13 +765,13 @@ func TestEngineReconciler_NetworkPolicyCreated(t *testing.T) {
 
 	t.Log("Reconciling engine with operator namespace set")
 	reconciler := &EngineReconciler{
-		Client:                    k8sClient,
-		Scheme:                    scheme,
-		Recorder:                  utils.NewTestRecorder(),
-		kubeClient:                testKubeClient,
-		ruleSetCacheServerCluster: "test-cluster",
-		defaultWasmImage:          defaults.DefaultCorazaWasmOCIReference,
-		operatorNamespace:         testNamespace,
+		Client:            k8sClient,
+		Scheme:            scheme,
+		xdsConfig:         testXDSConfig(),
+		assetBaseURL:      testAssetBaseURL,
+		Recorder:          utils.NewTestRecorder(),
+		kubeClient:        testKubeClient,
+		operatorNamespace: ns,
 	}
 	engineReq := ctrl.Request{
 		NamespacedName: types.NamespacedName{
@@ -1426,15 +793,15 @@ func TestEngineReconciler_NetworkPolicyCreated(t *testing.T) {
 	assert.Contains(t, updatedEngine.Finalizers, "waf.k8s.coraza.io/network-policy-cleanup",
 		"Engine should have the NetworkPolicy cleanup finalizer")
 
-	// Second reconcile proceeds with provisioning and schedules token renewal.
+	// Second reconcile proceeds with provisioning.
 	result, err = reconciler.Reconcile(ctx, engineReq)
 	require.NoError(t, err)
-	assert.NotZero(t, result.RequeueAfter, "should schedule token renewal requeue")
+	assert.Zero(t, result.RequeueAfter)
 
 	t.Log("Verifying NetworkPolicy was created")
 	var npList networkingv1.NetworkPolicyList
 	err = k8sClient.List(ctx, &npList,
-		client.InNamespace(testNamespace),
+		client.InNamespace(ns),
 		engineNetworkPolicyLabels(engine.Namespace, engine.Name),
 	)
 	require.NoError(t, err)
@@ -1480,7 +847,7 @@ func TestEngineReconciler_NetworkPolicyCreated(t *testing.T) {
 	require.NoError(t, err)
 
 	err = k8sClient.List(ctx, &npList,
-		client.InNamespace(testNamespace),
+		client.InNamespace(ns),
 		engineNetworkPolicyLabels(engine.Namespace, engine.Name),
 	)
 	require.NoError(t, err)
@@ -1509,12 +876,12 @@ func TestEngineReconciler_TargetNotFound(t *testing.T) {
 
 	recorder := utils.NewFakeRecorder()
 	reconciler := &EngineReconciler{
-		Client:                    k8sClient,
-		Scheme:                    scheme,
-		Recorder:                  recorder,
-		ruleSetCacheServerCluster: "test-cluster",
-		defaultWasmImage:          defaults.DefaultCorazaWasmOCIReference,
-		operatorNamespace:         testNamespace,
+		Client:            k8sClient,
+		Scheme:            scheme,
+		xdsConfig:         testXDSConfig(),
+		assetBaseURL:      testAssetBaseURL,
+		Recorder:          recorder,
+		operatorNamespace: testNamespace,
 	}
 	req := ctrl.Request{
 		NamespacedName: types.NamespacedName{
@@ -1548,18 +915,9 @@ func TestEngineReconciler_TargetNotFound(t *testing.T) {
 	require.NotNil(t, readyCond, "Engine should have Ready condition")
 	assert.Equal(t, metav1.ConditionFalse, readyCond.Status)
 
-	t.Log("Verifying no WasmPlugin was created")
-	wasmPlugin := &unstructured.Unstructured{}
-	wasmPlugin.SetGroupVersionKind(schema.GroupVersionKind{
-		Group:   "extensions.istio.io",
-		Version: "v1alpha1",
-		Kind:    "WasmPlugin",
-	})
-	err = k8sClient.Get(ctx, types.NamespacedName{
-		Name:      wasmPluginName(engine.Name),
-		Namespace: engine.Namespace,
-	}, wasmPlugin)
-	assert.True(t, apierrors.IsNotFound(err), "WasmPlugin should not exist when target is not found")
+	t.Log("Verifying no WAF attachment was created")
+	requireNoEnvoyFilter(t, ctx, engine.Name, engine.Namespace)
+	requireNoLegacyWasmPlugin(t, ctx, engine.Name, engine.Namespace)
 
 	assert.True(t, recorder.HasEvent("Warning", "TargetNotFound"),
 		"expected Warning/TargetNotFound event; got: %v", recorder.Events)
@@ -1582,12 +940,12 @@ func TestEngineReconciler_TargetNotFound_Resolves(t *testing.T) {
 	})
 
 	reconciler := &EngineReconciler{
-		Client:                    k8sClient,
-		Scheme:                    scheme,
-		Recorder:                  utils.NewTestRecorder(),
-		ruleSetCacheServerCluster: "test-cluster",
-		defaultWasmImage:          defaults.DefaultCorazaWasmOCIReference,
-		operatorNamespace:         testNamespace,
+		Client:            k8sClient,
+		Scheme:            scheme,
+		xdsConfig:         testXDSConfig(),
+		assetBaseURL:      testAssetBaseURL,
+		Recorder:          utils.NewTestRecorder(),
+		operatorNamespace: testNamespace,
 	}
 	req := ctrl.Request{
 		NamespacedName: types.NamespacedName{
@@ -1672,13 +1030,13 @@ func TestEngineReconciler_TargetConflict(t *testing.T) {
 
 	recorderA := utils.NewFakeRecorder()
 	reconciler := &EngineReconciler{
-		Client:                    k8sClient,
-		Scheme:                    scheme,
-		Recorder:                  recorderA,
-		kubeClient:                testKubeClient,
-		ruleSetCacheServerCluster: "test-cluster",
-		defaultWasmImage:          defaults.DefaultCorazaWasmOCIReference,
-		operatorNamespace:         testNamespace,
+		Client:            k8sClient,
+		Scheme:            scheme,
+		xdsConfig:         testXDSConfig(),
+		assetBaseURL:      testAssetBaseURL,
+		Recorder:          recorderA,
+		kubeClient:        testKubeClient,
+		operatorNamespace: testNamespace,
 	}
 	reqA := ctrl.Request{
 		NamespacedName: types.NamespacedName{
@@ -1719,12 +1077,12 @@ func TestEngineReconciler_TargetConflict(t *testing.T) {
 
 	recorderB := utils.NewFakeRecorder()
 	reconcilerB := &EngineReconciler{
-		Client:                    k8sClient,
-		Scheme:                    scheme,
-		Recorder:                  recorderB,
-		ruleSetCacheServerCluster: "test-cluster",
-		defaultWasmImage:          defaults.DefaultCorazaWasmOCIReference,
-		operatorNamespace:         testNamespace,
+		Client:            k8sClient,
+		Scheme:            scheme,
+		xdsConfig:         testXDSConfig(),
+		assetBaseURL:      testAssetBaseURL,
+		Recorder:          recorderB,
+		operatorNamespace: testNamespace,
 	}
 	reqB := ctrl.Request{
 		NamespacedName: types.NamespacedName{
@@ -1820,13 +1178,13 @@ func TestEngineReconciler_TargetConflict_NameTiebreak(t *testing.T) {
 		"Both engines should have the same creationTimestamp to exercise the name tiebreak")
 
 	reconciler := &EngineReconciler{
-		Client:                    k8sClient,
-		Scheme:                    scheme,
-		Recorder:                  utils.NewTestRecorder(),
-		kubeClient:                testKubeClient,
-		ruleSetCacheServerCluster: "test-cluster",
-		defaultWasmImage:          defaults.DefaultCorazaWasmOCIReference,
-		operatorNamespace:         testNamespace,
+		Client:            k8sClient,
+		Scheme:            scheme,
+		xdsConfig:         testXDSConfig(),
+		assetBaseURL:      testAssetBaseURL,
+		Recorder:          utils.NewTestRecorder(),
+		kubeClient:        testKubeClient,
+		operatorNamespace: testNamespace,
 	}
 
 	// Reconcile "zzz" — should lose because "aaa" wins the tiebreak.
@@ -1893,13 +1251,13 @@ func TestEngineReconciler_TargetConflict_Resolves(t *testing.T) {
 	require.NoError(t, k8sClient.Create(ctx, engineA))
 
 	reconciler := &EngineReconciler{
-		Client:                    k8sClient,
-		Scheme:                    scheme,
-		Recorder:                  utils.NewTestRecorder(),
-		kubeClient:                testKubeClient,
-		ruleSetCacheServerCluster: "test-cluster",
-		defaultWasmImage:          defaults.DefaultCorazaWasmOCIReference,
-		operatorNamespace:         testNamespace,
+		Client:            k8sClient,
+		Scheme:            scheme,
+		xdsConfig:         testXDSConfig(),
+		assetBaseURL:      testAssetBaseURL,
+		Recorder:          utils.NewTestRecorder(),
+		kubeClient:        testKubeClient,
+		operatorNamespace: testNamespace,
 	}
 	reqA := ctrl.Request{
 		NamespacedName: types.NamespacedName{
@@ -1930,13 +1288,13 @@ func TestEngineReconciler_TargetConflict_Resolves(t *testing.T) {
 	})
 
 	reconcilerB := &EngineReconciler{
-		Client:                    k8sClient,
-		Scheme:                    scheme,
-		Recorder:                  utils.NewTestRecorder(),
-		kubeClient:                testKubeClient,
-		ruleSetCacheServerCluster: "test-cluster",
-		defaultWasmImage:          defaults.DefaultCorazaWasmOCIReference,
-		operatorNamespace:         testNamespace,
+		Client:            k8sClient,
+		Scheme:            scheme,
+		xdsConfig:         testXDSConfig(),
+		assetBaseURL:      testAssetBaseURL,
+		Recorder:          utils.NewTestRecorder(),
+		kubeClient:        testKubeClient,
+		operatorNamespace: testNamespace,
 	}
 	reqB := ctrl.Request{
 		NamespacedName: types.NamespacedName{
@@ -2015,13 +1373,13 @@ func TestEngineReconciler_TargetConflict_ResolvesOnRetarget(t *testing.T) {
 	})
 
 	reconciler := &EngineReconciler{
-		Client:                    k8sClient,
-		Scheme:                    scheme,
-		Recorder:                  utils.NewTestRecorder(),
-		kubeClient:                testKubeClient,
-		ruleSetCacheServerCluster: "test-cluster",
-		defaultWasmImage:          defaults.DefaultCorazaWasmOCIReference,
-		operatorNamespace:         testNamespace,
+		Client:            k8sClient,
+		Scheme:            scheme,
+		xdsConfig:         testXDSConfig(),
+		assetBaseURL:      testAssetBaseURL,
+		Recorder:          utils.NewTestRecorder(),
+		kubeClient:        testKubeClient,
+		operatorNamespace: testNamespace,
 	}
 	reqA := ctrl.Request{NamespacedName: types.NamespacedName{Name: engineA.Name, Namespace: testNamespace}}
 
@@ -2090,23 +1448,25 @@ func TestEngineReconciler_TargetConflict_ResolvesOnRetarget(t *testing.T) {
 
 func TestEngineReconciler_ReadyToTargetNotFound(t *testing.T) {
 	ctx := context.Background()
+	ns := setupTestNamespace(t, ctx)
 
 	t.Log("Creating Gateway and RuleSet for ready-to-notfound test")
 	gwName := "ready-notfound-gw"
-	gw := createTestGateway(t, ctx, k8sClient, gwName, testNamespace)
+	gw := createTestGateway(t, ctx, k8sClient, gwName, ns)
 
 	ruleset := utils.NewTestRuleSet(utils.RuleSetOptions{
 		Name:      "ready-notfound-ruleset",
-		Namespace: testNamespace,
+		Namespace: ns,
 	})
 	require.NoError(t, k8sClient.Create(ctx, ruleset))
 	t.Cleanup(func() {
 		_ = k8sClient.Delete(ctx, ruleset)
 	})
+	acceptTestRuleSet(t, ctx, ruleset, testAcceptRuleText)
 
 	engine := utils.NewTestEngine(utils.EngineOptions{
 		Name:        "ready-notfound-engine",
-		Namespace:   testNamespace,
+		Namespace:   ns,
 		GatewayName: gwName,
 		RuleSetName: ruleset.Name,
 	})
@@ -2116,13 +1476,13 @@ func TestEngineReconciler_ReadyToTargetNotFound(t *testing.T) {
 	})
 
 	reconciler := &EngineReconciler{
-		Client:                    k8sClient,
-		Scheme:                    scheme,
-		Recorder:                  utils.NewTestRecorder(),
-		kubeClient:                testKubeClient,
-		ruleSetCacheServerCluster: "test-cluster",
-		defaultWasmImage:          defaults.DefaultCorazaWasmOCIReference,
-		operatorNamespace:         testNamespace,
+		Client:            k8sClient,
+		Scheme:            scheme,
+		xdsConfig:         testXDSConfig(),
+		assetBaseURL:      testAssetBaseURL,
+		Recorder:          utils.NewTestRecorder(),
+		kubeClient:        testKubeClient,
+		operatorNamespace: ns,
 	}
 	req := ctrl.Request{
 		NamespacedName: types.NamespacedName{
@@ -2182,24 +1542,8 @@ func TestEngineReconciler_ReadyToTargetNotFound(t *testing.T) {
 	assert.True(t, recorder.HasEvent("Warning", "TargetNotFound"),
 		"expected Warning/TargetNotFound event; got: %v", recorder.Events)
 
-	t.Log("Verifying WasmPlugin was deleted")
-	wasmPlugin := &unstructured.Unstructured{}
-	wasmPlugin.SetGroupVersionKind(schema.GroupVersionKind{
-		Group:   "extensions.istio.io",
-		Version: "v1alpha1",
-		Kind:    "WasmPlugin",
-	})
-	wasmPluginKey := types.NamespacedName{
-		Name:      wasmPluginName(engine.Name),
-		Namespace: engine.Namespace,
-	}
-	err = k8sClient.Get(ctx, wasmPluginKey, wasmPlugin)
-	assert.True(t, apierrors.IsNotFound(err), "WasmPlugin should be deleted when Engine is not accepted, got: %v", err)
-
-	t.Log("Verifying token store entry was removed")
-	tokenKey := fmt.Sprintf("%s/%s/%s", engine.Namespace, engine.Name, engine.Spec.RuleSet.Name)
-	_, found := reconciler.tokenStore.Load(tokenKey)
-	assert.False(t, found, "token store entry should be removed when Engine is not accepted")
+	t.Log("Verifying EnvoyFilter was deleted")
+	requireNoEnvoyFilter(t, ctx, engine.Name, engine.Namespace)
 }
 
 // -----------------------------------------------------------------------------
@@ -2238,14 +1582,14 @@ func TestEngineReconciler_MetricsRecordOnSuccess(t *testing.T) {
 	require.NoError(t, err)
 
 	reconciler := &EngineReconciler{
-		Client:                    k8sClient,
-		Scheme:                    scheme,
-		Recorder:                  utils.NewTestRecorder(),
-		Metrics:                   m,
-		kubeClient:                testKubeClient,
-		ruleSetCacheServerCluster: "test-cluster",
-		defaultWasmImage:          defaults.DefaultCorazaWasmOCIReference,
-		operatorNamespace:         testNamespace,
+		Client:            k8sClient,
+		Scheme:            scheme,
+		xdsConfig:         testXDSConfig(),
+		assetBaseURL:      testAssetBaseURL,
+		Recorder:          utils.NewTestRecorder(),
+		Metrics:           m,
+		kubeClient:        testKubeClient,
+		operatorNamespace: testNamespace,
 	}
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: engine.Name, Namespace: engine.Namespace}}
 
@@ -2266,301 +1610,6 @@ func TestEngineReconciler_MetricsRecordOnSuccess(t *testing.T) {
 		"coraza_engine_condition must emit one series per engineConditionType")
 }
 
-// TestEngineReconciler_DeleteRecreateGetsNewToken verifies that deleting an
-// Engine and recreating it with the same name produces a fresh token bound to
-// a new ServiceAccount, not the stale token from the previous instance.
-func TestEngineReconciler_DeleteRecreateGetsNewToken(t *testing.T) {
-	ctx := t.Context()
-
-	const (
-		engineName  = "stale-token-engine"
-		rulesetName = "stale-token-ruleset"
-		gatewayName = "delete-recreate-stale-token-gw"
-	)
-
-	createTestGateway(t, ctx, k8sClient, gatewayName, testNamespace)
-
-	ruleset := utils.NewTestRuleSet(utils.RuleSetOptions{
-		Name:      rulesetName,
-		Namespace: testNamespace,
-	})
-	require.NoError(t, k8sClient.Create(ctx, ruleset))
-	t.Cleanup(func() {
-		if err := k8sClient.Delete(context.Background(), ruleset); err != nil {
-			t.Logf("Failed to delete ruleset: %v", err)
-		}
-	})
-
-	engine := utils.NewTestEngine(utils.EngineOptions{
-		Name:        engineName,
-		Namespace:   testNamespace,
-		RuleSetName: rulesetName,
-		GatewayName: gatewayName,
-	})
-	require.NoError(t, k8sClient.Create(ctx, engine))
-	// No t.Cleanup — this engine is deleted explicitly in Phase 2.
-
-	reg := prometheus.NewRegistry()
-	m, err := NewCorazaMetrics(reg)
-	require.NoError(t, err)
-
-	reconciler := &EngineReconciler{
-		Client:                    k8sClient,
-		Scheme:                    scheme,
-		Recorder:                  utils.NewTestRecorder(),
-		Metrics:                   m,
-		kubeClient:                testKubeClient,
-		ruleSetCacheServerCluster: "test-cluster",
-		defaultWasmImage:          defaults.DefaultCorazaWasmOCIReference,
-		operatorNamespace:         testNamespace,
-	}
-	req := ctrl.Request{
-		NamespacedName: types.NamespacedName{
-			Name:      engine.Name,
-			Namespace: engine.Namespace,
-		},
-	}
-	tokenKey := fmt.Sprintf("%s/%s/%s", testNamespace, engineName, rulesetName)
-
-	// --- Phase 1: initial provision (finalizer + provisioning reconciles) ---
-	result, err := reconciler.Reconcile(ctx, req)
-	require.NoError(t, err)
-	assert.NotZero(t, result.RequeueAfter, "finalizer add must request requeue")
-
-	result, err = reconciler.Reconcile(ctx, req)
-	require.NoError(t, err)
-	assert.NotZero(t, result.RequeueAfter, "provisioning must schedule token renewal requeue")
-
-	val, found := reconciler.tokenStore.Load(tokenKey)
-	require.True(t, found, "token must be stored after initial provisioning")
-	originalToken := val.(*TokenEntry).Token
-	require.NotEmpty(t, originalToken)
-
-	var saList corev1.ServiceAccountList
-	err = k8sClient.List(ctx, &saList,
-		client.InNamespace(testNamespace),
-		client.MatchingLabels(cacheClientSALabels(engineName)),
-	)
-	require.NoError(t, err)
-	require.Len(t, saList.Items, 1)
-	originalSAName := saList.Items[0].Name
-
-	// --- Phase 2: delete Engine and its SA (simulating GC) ---
-	require.NoError(t, k8sClient.Delete(ctx, engine))
-	require.NoError(t, k8sClient.Delete(ctx, &saList.Items[0]))
-
-	// Reconcile finalizer removal: Engine still exists (DeletionTimestamp
-	// set) — handleNetworkPolicyDeletion removes the finalizer.
-	_, err = reconciler.Reconcile(ctx, req)
-	require.NoError(t, err)
-
-	// Verify the Engine is now fully deleted (finalizer removed → GC'd).
-	var gone wafv1alpha1.Engine
-	require.True(t, apierrors.IsNotFound(k8sClient.Get(ctx, req.NamespacedName, &gone)),
-		"Engine must be gone after finalizer removal")
-
-	// Reconcile the IsNotFound path - cleans up the tokenStore.
-	_, err = reconciler.Reconcile(ctx, req)
-	require.NoError(t, err)
-
-	_, found = reconciler.tokenStore.Load(tokenKey)
-	assert.False(t, found, "tokenStore entry must be cleaned up when Engine is deleted")
-
-	// --- Phase 3: recreate Engine with the same name ---
-	engine2 := utils.NewTestEngine(utils.EngineOptions{
-		Name:        engineName,
-		Namespace:   testNamespace,
-		RuleSetName: rulesetName,
-		GatewayName: gatewayName,
-	})
-	require.NoError(t, k8sClient.Create(ctx, engine2))
-	t.Cleanup(func() {
-		if err := k8sClient.Delete(context.Background(), engine2); err != nil {
-			t.Logf("Failed to delete engine: %v", err)
-		}
-	})
-
-	// Reconcile the recreated Engine (finalizer + provisioning).
-	result, err = reconciler.Reconcile(ctx, req)
-	require.NoError(t, err)
-	assert.NotZero(t, result.RequeueAfter, "finalizer add must request requeue")
-
-	result, err = reconciler.Reconcile(ctx, req)
-	require.NoError(t, err)
-	assert.NotZero(t, result.RequeueAfter, "provisioning must schedule token renewal requeue")
-
-	// A new SA should have been created (the original was deleted).
-	var newSAList corev1.ServiceAccountList
-	err = k8sClient.List(ctx, &newSAList,
-		client.InNamespace(testNamespace),
-		client.MatchingLabels(cacheClientSALabels(engineName)),
-	)
-	require.NoError(t, err)
-	require.Len(t, newSAList.Items, 1)
-	assert.NotEqual(t, originalSAName, newSAList.Items[0].Name,
-		"recreated Engine must get a new SA, not reuse the deleted one")
-
-	// The recreated Engine must get a fresh token bound to the new SA.
-	val, found = reconciler.tokenStore.Load(tokenKey)
-	require.True(t, found, "recreated Engine must have a token")
-	newToken := val.(*TokenEntry).Token
-	assert.NotEqual(t, originalToken, newToken,
-		"recreated Engine must get a fresh token, not reuse the stale one")
-
-	assertWasmPluginCacheToken(t, ctx, engine2.Name, engine2.Namespace, newToken)
-	assertEngineCondition(t, ctx, engine2.Name, engine2.Namespace, "Ready", metav1.ConditionTrue)
-	assertEngineCondition(t, ctx, engine2.Name, engine2.Namespace, "Accepted", metav1.ConditionTrue)
-}
-
-// TestEngineReconciler_StaleOwnerSANotReused verifies that when an Engine is
-// deleted and recreated with the same name, a ServiceAccount left behind by the
-// previous Engine (stale owner reference, different UID) is not reused.
-func TestEngineReconciler_StaleOwnerSANotReused(t *testing.T) {
-	ctx := t.Context()
-
-	const (
-		engineName  = "stale-owner-engine"
-		rulesetName = "stale-owner-ruleset"
-		gatewayName = "stale-owner-gw"
-	)
-
-	createTestGateway(t, ctx, k8sClient, gatewayName, testNamespace)
-
-	ruleset := utils.NewTestRuleSet(utils.RuleSetOptions{
-		Name:      rulesetName,
-		Namespace: testNamespace,
-	})
-	require.NoError(t, k8sClient.Create(ctx, ruleset))
-	t.Cleanup(func() {
-		if err := k8sClient.Delete(context.Background(), ruleset); err != nil {
-			t.Logf("Failed to delete ruleset: %v", err)
-		}
-	})
-
-	engine1 := utils.NewTestEngine(utils.EngineOptions{
-		Name:        engineName,
-		Namespace:   testNamespace,
-		RuleSetName: rulesetName,
-		GatewayName: gatewayName,
-	})
-	require.NoError(t, k8sClient.Create(ctx, engine1))
-
-	reg := prometheus.NewRegistry()
-	m, err := NewCorazaMetrics(reg)
-	require.NoError(t, err)
-
-	reconciler := &EngineReconciler{
-		Client:                    k8sClient,
-		Scheme:                    scheme,
-		Recorder:                  utils.NewTestRecorder(),
-		Metrics:                   m,
-		kubeClient:                testKubeClient,
-		ruleSetCacheServerCluster: "test-cluster",
-		defaultWasmImage:          defaults.DefaultCorazaWasmOCIReference,
-		operatorNamespace:         testNamespace,
-	}
-	req := ctrl.Request{
-		NamespacedName: types.NamespacedName{
-			Name:      engineName,
-			Namespace: testNamespace,
-		},
-	}
-
-	tokenKey := fmt.Sprintf("%s/%s/%s", testNamespace, engineName, rulesetName)
-
-	// --- Phase 1: provision Engine1 to create its SA ---
-	_, err = reconciler.Reconcile(ctx, req) // finalizer
-	require.NoError(t, err)
-	_, err = reconciler.Reconcile(ctx, req) // provisioning
-	require.NoError(t, err)
-
-	val, found := reconciler.tokenStore.Load(tokenKey)
-	require.True(t, found, "token must be stored after initial provisioning")
-	originalToken := val.(*TokenEntry).Token
-	require.NotEmpty(t, originalToken)
-
-	var saList corev1.ServiceAccountList
-	err = k8sClient.List(ctx, &saList,
-		client.InNamespace(testNamespace),
-		client.MatchingLabels(cacheClientSALabels(engineName)),
-	)
-	require.NoError(t, err)
-	require.Len(t, saList.Items, 1)
-	staleSAName := saList.Items[0].Name
-	staleUID := engine1.UID
-
-	// --- Phase 2: delete Engine1 but leave the SA behind ---
-	require.NoError(t, k8sClient.Delete(ctx, engine1))
-	_, err = reconciler.Reconcile(ctx, req) // finalizer removal
-	require.NoError(t, err)
-	_, err = reconciler.Reconcile(ctx, req) // IsNotFound cleanup
-	require.NoError(t, err)
-
-	// SA still exists (envtest has no GC controller).
-	var remainingSAs corev1.ServiceAccountList
-	err = k8sClient.List(ctx, &remainingSAs,
-		client.InNamespace(testNamespace),
-		client.MatchingLabels(cacheClientSALabels(engineName)),
-	)
-	require.NoError(t, err)
-	require.Len(t, remainingSAs.Items, 1, "stale SA must still exist (no GC in envtest)")
-
-	// --- Phase 3: recreate Engine with the same name (different UID) ---
-	engine2 := utils.NewTestEngine(utils.EngineOptions{
-		Name:        engineName,
-		Namespace:   testNamespace,
-		RuleSetName: rulesetName,
-		GatewayName: gatewayName,
-	})
-	require.NoError(t, k8sClient.Create(ctx, engine2))
-	t.Cleanup(func() {
-		if err := k8sClient.Delete(context.Background(), engine2); err != nil {
-			t.Logf("Failed to delete engine: %v", err)
-		}
-	})
-	require.NotEqual(t, staleUID, engine2.UID, "recreated Engine must have a different UID")
-
-	_, err = reconciler.Reconcile(ctx, req) // finalizer
-	require.NoError(t, err)
-	_, err = reconciler.Reconcile(ctx, req) // provisioning
-	require.NoError(t, err)
-
-	// Must have created a new SA, not reused the stale one.
-	var allSAs corev1.ServiceAccountList
-	err = k8sClient.List(ctx, &allSAs,
-		client.InNamespace(testNamespace),
-		client.MatchingLabels(cacheClientSALabels(engineName)),
-	)
-	require.NoError(t, err)
-	require.Len(t, allSAs.Items, 2, "stale SA + new SA must both exist")
-
-	foundStale := false
-	for _, sa := range allSAs.Items {
-		ref := metav1.GetControllerOf(&sa)
-		require.NotNil(t, ref, "SA %s must have a controller owner reference", sa.Name)
-		if sa.Name == staleSAName {
-			foundStale = true
-			assert.Equal(t, staleUID, ref.UID,
-				"stale SA must still reference the old Engine UID")
-		} else {
-			assert.Equal(t, engine2.UID, ref.UID,
-				"new SA must be owned by the recreated Engine")
-		}
-	}
-	require.True(t, foundStale, "stale SA %s must be present in the list", staleSAName)
-
-	// Verify fresh token was provisioned (not the stale one).
-	val, found = reconciler.tokenStore.Load(tokenKey)
-	require.True(t, found, "recreated Engine must have a token in the store")
-	newToken := val.(*TokenEntry).Token
-	assert.NotEqual(t, originalToken, newToken,
-		"recreated Engine must get a fresh token, not reuse the stale one")
-
-	assertWasmPluginCacheToken(t, ctx, engine2.Name, engine2.Namespace, newToken)
-	assertEngineCondition(t, ctx, engine2.Name, engine2.Namespace, "Ready", metav1.ConditionTrue)
-	assertEngineCondition(t, ctx, engine2.Name, engine2.Namespace, "Accepted", metav1.ConditionTrue)
-}
-
 // TestEngineReconciler_MetricsForgetOnNotFound verifies that a not-found
 // reconcile (simulating deletion) calls ForgetEngine and removes the info and
 // condition series from the registry.
@@ -2578,13 +1627,13 @@ func TestEngineReconciler_MetricsForgetOnNotFound(t *testing.T) {
 		"pre-condition: info series must exist before reconcile")
 
 	reconciler := &EngineReconciler{
-		Client:                    k8sClient,
-		Scheme:                    scheme,
-		Recorder:                  utils.NewTestRecorder(),
-		Metrics:                   m,
-		ruleSetCacheServerCluster: "test-cluster",
-		defaultWasmImage:          defaults.DefaultCorazaWasmOCIReference,
-		operatorNamespace:         testNamespace,
+		Client:            k8sClient,
+		Scheme:            scheme,
+		xdsConfig:         testXDSConfig(),
+		assetBaseURL:      testAssetBaseURL,
+		Recorder:          utils.NewTestRecorder(),
+		Metrics:           m,
+		operatorNamespace: testNamespace,
 	}
 
 	// Resource does not exist — should trigger the ForgetEngine path.

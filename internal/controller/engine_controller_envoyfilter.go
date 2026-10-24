@@ -55,6 +55,20 @@ const (
 	fileBasedMetadataTypeURL  = "type.googleapis.com/envoy.config.grpc_credential.v3.FileBasedMetadataConfig"
 )
 
+// envoyFilterGVK is the group/version/kind of the ECDS EnvoyFilter.
+var envoyFilterGVK = schema.GroupVersionKind{
+	Group: "networking.istio.io", Version: "v1alpha3", Kind: "EnvoyFilter",
+}
+
+// ECDSConfig carries the operator-side ECDS endpoint settings.
+type ECDSConfig struct {
+	// AdvertiseAddress is the operator Service address Envoy dials for ECDS.
+	AdvertiseAddress string
+	// CAPEM is the public CA PEM the Gateway uses to verify the operator
+	// certificate.
+	CAPEM []byte
+}
+
 // EnvoyFilterConfig carries the operator-side settings of the ECDS attachment.
 type EnvoyFilterConfig struct {
 	// AdvertiseAddress is "<operator-service>.<ns>.svc.cluster.local:18080" and
@@ -270,9 +284,9 @@ func buildEnvoyFilter(
 			},
 			"spec": map[string]any{
 				"workloadSelector": map[string]any{
-					"matchLabels": toAnyMap(matchLabels),
+					"labels": toAnyMap(matchLabels),
 				},
-				"patches": []any{
+				"configPatches": []any{
 					assetClusterPatch,
 					httpFilterPatch,
 				},
@@ -282,11 +296,7 @@ func buildEnvoyFilter(
 
 	envoyFilter.SetLabels(labels)
 	envoyFilter.SetAnnotations(annotations)
-	envoyFilter.SetGroupVersionKind(schema.GroupVersionKind{
-		Group:   "networking.istio.io",
-		Version: "v1alpha3",
-		Kind:    "EnvoyFilter",
-	})
+	envoyFilter.SetGroupVersionKind(envoyFilterGVK)
 
 	return envoyFilter, nil
 }

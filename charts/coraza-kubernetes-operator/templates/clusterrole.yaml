@@ -72,12 +72,9 @@ rules:
   resources:
   - wasmplugins
   verbs:
-  - create
   - delete
   - get
   - list
-  - patch
-  - update
   - watch
 - apiGroups:
   - gateway.networking.k8s.io
@@ -91,13 +88,15 @@ rules:
 - apiGroups:
   - networking.istio.io
   resources:
-  - destinationrules
-  - serviceentries
+  - envoyfilters
   verbs:
   - create
+  - delete
   - get
+  - list
   - patch
   - update
+  - watch
 - apiGroups:
   - telemetry.istio.io
   resources:

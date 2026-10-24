@@ -136,9 +136,9 @@ func TestBuildEnvoyFilterShape(t *testing.T) {
 			assert.Equal(t, caHash([]byte(envoyFilterTestCA)), caHashAnnotation)
 
 			assert.Equal(t, map[string]any{gatewayNameLabel: "gw"},
-				nestedMap(t, ef.Object, "spec", "workloadSelector", "matchLabels"))
+				nestedMap(t, ef.Object, "spec", "workloadSelector", "labels"))
 
-			patches := nestedSlice(t, ef.Object, "spec", "patches")
+			patches := nestedSlice(t, ef.Object, "spec", "configPatches")
 			require.Len(t, patches, 2)
 
 			// Patch 1: the WASM asset cluster.
@@ -234,7 +234,7 @@ func TestBuildEnvoyFilterDefaultAssetPort(t *testing.T) {
 		EnvoyFilterConfig{AdvertiseAddress: envoyFilterTestAdvertise, CAPEM: []byte(envoyFilterTestCA)}, "fail")
 	require.NoError(t, err)
 
-	cluster := nestedMap(t, asMap(t, nestedSlice(t, ef.Object, "spec", "patches")[0]), "patch", "value")
+	cluster := nestedMap(t, asMap(t, nestedSlice(t, ef.Object, "spec", "configPatches")[0]), "patch", "value")
 	socket := socketAddress(t, cluster)
 	assert.Equal(t, "assets.example.com", socket["address"])
 	assert.Equal(t, int64(443), socket["port_value"])
