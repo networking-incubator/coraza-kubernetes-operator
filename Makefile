@@ -177,6 +177,39 @@ release.operatorhub: ## Submit OLM bundle to OperatorHub community-operators
 	hack/publish_operatorhub.sh --version $(VERSION:v%=%)
 
 # ------------------------------------------------------------------------------
+# Bundled WASM assets
+# ------------------------------------------------------------------------------
+
+ASSETS_DIR ?= internal/assets
+# Raw plugin.wasm to bundle; required by wasm.bundle.
+WASM_MODULE ?=
+WASM_MODULE_NAME ?= coraza-proxy-wasm
+# Optional manifest metadata (git SHA and linked versions of the real module).
+WASM_GIT_SHA ?= dev
+WASM_CORAZA_VERSION ?= dev
+WASM_PROXY_WASM_SDK_VERSION ?= dev
+
+.PHONY: wasm.bundle
+wasm.bundle: ## Bundle WASM_MODULE=<path> (raw plugin.wasm) and rewrite its manifest
+	@test -n "$(WASM_MODULE)" || { echo "WASM_MODULE is required: path to a raw plugin.wasm" >&2; exit 1; }
+	@test -f "$(WASM_MODULE)" || { echo "WASM_MODULE not found: $(WASM_MODULE)" >&2; exit 1; }
+	cp "$(WASM_MODULE)" "$(ASSETS_DIR)/plugin.wasm"
+	@# Metadata is written as YAML plain scalars: git SHAs and versions are safe unquoted.
+	@sum=$$(sha256sum "$(ASSETS_DIR)/plugin.wasm" | cut -d' ' -f1); \
+		printf 'schema_version: 1\nmodule: %s\nfile: plugin.wasm\nsha256: %s\ngit_sha: %s\ncoraza_version: %s\nproxy_wasm_sdk_version: %s\n' \
+			'$(WASM_MODULE_NAME)' "$$sum" '$(WASM_GIT_SHA)' '$(WASM_CORAZA_VERSION)' '$(WASM_PROXY_WASM_SDK_VERSION)' \
+			> "$(ASSETS_DIR)/plugin.manifest.yaml"; \
+		echo "wasm.bundle: $$sum $(ASSETS_DIR)/plugin.wasm"
+
+.PHONY: wasm.verify
+wasm.verify: ## Verify the bundled module digest against plugin.manifest.yaml
+	@want=$$(awk '/^sha256:/{print $$2; exit}' "$(ASSETS_DIR)/plugin.manifest.yaml"); \
+	got=$$(sha256sum "$(ASSETS_DIR)/plugin.wasm" | cut -d' ' -f1); \
+	if [ -z "$$want" ]; then echo "wasm.verify: no sha256 in $(ASSETS_DIR)/plugin.manifest.yaml" >&2; exit 1; fi; \
+	if [ "$$want" != "$$got" ]; then echo "wasm.verify: digest mismatch: manifest $$want, $(ASSETS_DIR)/plugin.wasm $$got" >&2; exit 1; fi; \
+	echo "wasm.verify: $$got $(ASSETS_DIR)/plugin.wasm ok"
+
+# ------------------------------------------------------------------------------
 # Deployment
 # ------------------------------------------------------------------------------
 

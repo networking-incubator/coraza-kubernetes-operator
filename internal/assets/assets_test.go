@@ -21,6 +21,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"io/fs"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -138,5 +139,35 @@ func TestVerifyAll(t *testing.T) {
 
 	if err := VerifyAll(manifestFS(nil, module), nil); err == nil {
 		t.Fatal("VerifyAll(nil) error = nil, want error")
+	}
+}
+
+// TestEmbeddedBundle reproduces the `make wasm.bundle`/`make wasm.verify`
+// contract in Go: the committed bytes must hash to the committed manifest, and a
+// manifest whose digest no longer matches the bundled file must fail.
+func TestEmbeddedBundle(t *testing.T) {
+	manifest, err := Load(embedded)
+	if err != nil {
+		t.Fatalf("Load(embedded) error = %v", err)
+	}
+	if manifest.File != "plugin.wasm" {
+		t.Errorf("manifest file = %q, want plugin.wasm (the file wasm.bundle writes)", manifest.File)
+	}
+	if manifest.Module == "" {
+		t.Error("manifest module is empty")
+	}
+
+	module, err := fs.ReadFile(embedded, manifest.File)
+	if err != nil {
+		t.Fatalf("read embedded module: %v", err)
+	}
+	if got := digest(module); got != manifest.SHA256 {
+		t.Errorf("bundled module digest = %s, manifest sha256 = %s; run make wasm.bundle", got, manifest.SHA256)
+	}
+
+	stale := *manifest
+	stale.SHA256 = digest(append(module, 0))
+	if err := VerifyAll(embedded, &stale); err == nil {
+		t.Fatal("VerifyAll(stale manifest) error = nil, want digest mismatch")
 	}
 }

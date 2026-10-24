@@ -93,6 +93,48 @@ jobs:
       - name: set up docker buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
+      # The image embeds a reviewed coraza-proxy-wasm release binary; this
+      # workflow never builds the sibling repository. Pin it with repository
+      # variables set before tagging:
+      #   CORAZA_PROXY_WASM_VERSION  sibling release tag that holds plugin.wasm
+      #   CORAZA_PROXY_WASM_SHA256   lowercase SHA-256 of that plugin.wasm
+      #   CORAZA_PROXY_WASM_GIT_SHA  commit the module was built from
+      # The download is build-time only: the operator serves the module from its
+      # own /wasm/<digest>.wasm route, and Envoy rejects redirecting asset URLs,
+      # so never point an Engine url at a GitHub release asset. The pinned
+      # sibling release must already be published (draft assets are not
+      # downloadable with this repository's token).
+      - name: bundle pinned coraza-proxy-wasm module
+        run: |
+          set -eu
+          : "${CORAZA_PROXY_WASM_VERSION:?set the CORAZA_PROXY_WASM_VERSION repository variable}"
+          : "${CORAZA_PROXY_WASM_SHA256:?set the CORAZA_PROXY_WASM_SHA256 repository variable}"
+          : "${CORAZA_PROXY_WASM_GIT_SHA:?set the CORAZA_PROXY_WASM_GIT_SHA repository variable}"
+
+          mkdir -p dist/wasm
+          gh release download "${CORAZA_PROXY_WASM_VERSION}" \
+            --repo networking-incubator/coraza-proxy-wasm \
+            --pattern plugin.wasm \
+            --dir dist/wasm
+          echo "${CORAZA_PROXY_WASM_SHA256}  dist/wasm/plugin.wasm" | sha256sum --check --strict -
+
+          make wasm.bundle wasm.verify
+          cp internal/assets/plugin.manifest.yaml dist/wasm/
+          sha256sum dist/wasm/plugin.wasm | awk '{print $1}' > dist/wasm/plugin.wasm.sha256
+        env:
+          WASM_MODULE: dist/wasm/plugin.wasm
+          WASM_GIT_SHA: ${{ vars.CORAZA_PROXY_WASM_GIT_SHA }}
+          CORAZA_PROXY_WASM_VERSION: ${{ vars.CORAZA_PROXY_WASM_VERSION }}
+          CORAZA_PROXY_WASM_SHA256: ${{ vars.CORAZA_PROXY_WASM_SHA256 }}
+          CORAZA_PROXY_WASM_GIT_SHA: ${{ vars.CORAZA_PROXY_WASM_GIT_SHA }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: upload wasm artifacts
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: wasm-bundle
+          path: dist/wasm/
+
       - name: log in to ghcr
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
@@ -233,6 +275,12 @@ jobs:
           name: manifests
           path: dist/
 
+      - name: download bundled wasm artifacts
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: wasm-bundle
+          path: dist/wasm/
+
       # IMPORTANT: draft release — a maintainer must validate and publish manually.
       # The chart .tgz is included here (not in a separate chart-releaser step)
       # so that pages.yml can generate the Helm repo index directly from release
@@ -267,6 +315,9 @@ jobs:
             dist/kubectl-coraza-linux-arm64
             dist/kubectl-coraza-darwin-amd64
             dist/kubectl-coraza-darwin-arm64
+            dist/wasm/plugin.wasm
+            dist/wasm/plugin.wasm.sha256
+            dist/wasm/plugin.manifest.yaml
           )
 
           for f in "${ASSETS[@]}"; do
