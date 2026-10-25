@@ -53,6 +53,9 @@ const (
 	wasmFilterTypeURL         = "type.googleapis.com/envoy.extensions.filters.http.wasm.v3.Wasm"
 	rbacFilterTypeURL         = "type.googleapis.com/envoy.extensions.filters.http.rbac.v3.RBAC"
 	fileBasedMetadataTypeURL  = "type.googleapis.com/envoy.config.grpc_credential.v3.FileBasedMetadataConfig"
+	// fileBasedMetadataFactory selects the GoogleGrpc credentials factory that
+	// understands from_plugin call credentials; the default factory ignores them.
+	fileBasedMetadataFactory = "envoy.grpc_credentials.file_based_metadata"
 )
 
 // envoyFilterGVK is the group/version/kind of the ECDS EnvoyFilter.
@@ -181,6 +184,12 @@ func buildEnvoyFilter(
 						"@type": upstreamTLSContextTypeURL,
 						"sni":   assetHost,
 						"common_tls_context": map[string]any{
+							// Envoy's upstream TLS defaults to a TLS 1.2 maximum;
+							// the operator listener requires TLS 1.3.
+							"tls_params": map[string]any{
+								"tls_minimum_protocol_version": "TLSv1_3",
+								"tls_maximum_protocol_version": "TLSv1_3",
+							},
 							"validation_context": map[string]any{
 								"trusted_ca": map[string]any{
 									"inline_string": caPEM,
@@ -224,6 +233,9 @@ func buildEnvoyFilter(
 									"google_grpc": map[string]any{
 										"target_uri":  cfg.AdvertiseAddress,
 										"stat_prefix": ecdsStatPrefix,
+										// Without this the default credentials factory
+										// silently drops the from_plugin token.
+										"credentials_factory_name": fileBasedMetadataFactory,
 										"channel_args": map[string]any{
 											"args": map[string]any{
 												"grpc.max_receive_message_length": map[string]any{

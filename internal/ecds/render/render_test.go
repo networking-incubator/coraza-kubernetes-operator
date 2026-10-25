@@ -173,6 +173,7 @@ func TestRenderResourceShape(t *testing.T) {
 	require.NotNil(t, vm)
 	assert.Equal(t, "coraza-"+string(testEngineUID), vm.VmId)
 	assert.Equal(t, "envoy.wasm.runtime.v8", vm.Runtime)
+	assert.True(t, vm.NackOnCodeCacheMiss)
 
 	remote := vm.GetCode().GetRemote()
 	require.NotNil(t, remote)

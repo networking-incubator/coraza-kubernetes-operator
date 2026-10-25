@@ -19,6 +19,7 @@ package xds
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 
@@ -70,11 +71,13 @@ func (s *Server) StreamExtensionConfigs(stream extensionv3.ExtensionConfigDiscov
 
 	token, err := bearerToken(ctx)
 	if err != nil {
+		log.Info("ECDS stream rejected", "reason", "authorization metadata", "detail", err.Error())
 		s.Metrics.AuthFailure("error")
 		return status.Error(codes.Unauthenticated, authFailureMessage)
 	}
 	identity, err := s.Auth.Authenticate(ctx, token)
 	if err != nil {
+		log.Info("ECDS stream rejected", "reason", "token review", "detail", err.Error())
 		s.Metrics.AuthFailure("error")
 		return status.Error(codes.Unauthenticated, authFailureMessage)
 	}
@@ -228,13 +231,22 @@ func bearerToken(ctx context.Context) (string, error) {
 	}
 	values := md.Get(authorizationHeader)
 	if len(values) != 1 {
-		return "", errors.New("missing or duplicate authorization header")
+		return "", fmt.Errorf("missing or duplicate authorization header (keys: %v)", metadataKeys(md))
 	}
 	scheme, token, ok := strings.Cut(values[0], " ")
 	if !ok || !strings.EqualFold(scheme, bearerScheme) || strings.TrimSpace(token) == "" {
 		return "", errors.New("malformed authorization header")
 	}
 	return strings.TrimSpace(token), nil
+}
+
+// metadataKeys returns the incoming metadata keys without their values.
+func metadataKeys(md metadata.MD) []string {
+	keys := make([]string, 0, len(md))
+	for key := range md {
+		keys = append(keys, key)
+	}
+	return keys
 }
 
 func receiveStatus(err error) error {

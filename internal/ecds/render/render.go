@@ -374,6 +374,10 @@ func buildResource(name string, binary BinaryRef, runtime, vmID string, codeTime
 			VmConfig: &wasmv3.VmConfig{
 				VmId:    vmID,
 				Runtime: runtime,
+				// ECDS delivers this config dynamically; NACK the update until
+				// the remote code is cached instead of applying a filter that
+				// cannot load and fails closed.
+				NackOnCodeCacheMiss: true,
 				Code: &corev3.AsyncDataSource{
 					Specifier: &corev3.AsyncDataSource_Remote{
 						Remote: &corev3.RemoteDataSource{

@@ -187,10 +187,14 @@ func TestBuildEnvoyFilterShape(t *testing.T) {
 			googleGrpc := nestedMap(t, asMap(t, grpcServices[0]), "google_grpc")
 			assert.Equal(t, envoyFilterTestAdvertise, nestedString(t, googleGrpc, "target_uri"))
 			assert.Equal(t, "coraza_ecds", nestedString(t, googleGrpc, "stat_prefix"))
+			assert.Equal(t, "envoy.grpc_credentials.file_based_metadata",
+				nestedString(t, googleGrpc, "credentials_factory_name"))
 			assert.Equal(t, int64(16777216),
 				nestedInt(t, googleGrpc, "channel_args", "args", "grpc.max_receive_message_length", "int_value"))
 			assert.Equal(t, envoyFilterTestCA,
 				nestedString(t, googleGrpc, "channel_credentials", "ssl_credentials", "root_certs", "inline_string"))
+			assert.Equal(t, "TLSv1_3",
+				nestedString(t, assetClusterPatch, "patch", "value", "transport_socket", "typed_config", "common_tls_context", "tls_params", "tls_minimum_protocol_version"))
 
 			callCredentials := nestedSlice(t, googleGrpc, "call_credentials")
 			require.Len(t, callCredentials, 1)
