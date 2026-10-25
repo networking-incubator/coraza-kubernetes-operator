@@ -39,6 +39,7 @@ import (
 // requires the controller ServiceAccount to perform delegated authn/authz checks.
 // +kubebuilder:rbac:groups=authentication.k8s.io,resources=tokenreviews,verbs=create
 // +kubebuilder:rbac:groups=authorization.k8s.io,resources=subjectaccessreviews,verbs=create
+// +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=get;list;watch
 
 // -----------------------------------------------------------------------------
 // Manager - Vars
