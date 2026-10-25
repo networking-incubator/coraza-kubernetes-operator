@@ -118,6 +118,20 @@ istio:
   # When empty, the operator does not set an Istio revision label on managed resources.
   revision: ""
 
+# Serving certificate for the ECDS and WASM asset endpoint. When existingSecret
+# is empty the chart generates a self-signed CA and certificate. The generated
+# material is recreated on every upgrade; reuse across upgrades (Helm lookup)
+# and the OpenShift service-serving certificate option are Phase 7.
+tls:
+  # Name of an existing Secret in the release namespace with keys
+  # ca.crt, tls.crt, and tls.key.
+  existingSecret: ""
+  certName: "tls.crt"
+  keyName: "tls.key"
+  caName: "ca.crt"
+  # Extra DNS SANs appended to the generated certificate.
+  sans: []
+
 # Default WASM plugin OCI URL when an Engine omits spec.driver.wasm.image.
 # When empty, the operator's built-in default (internal/defaults.DefaultCorazaWasmOCIReference) is used.
 defaultWasmImage: ""

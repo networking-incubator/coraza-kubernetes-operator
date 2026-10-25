@@ -1,0 +1,28 @@
+{{- if not .Values.tls.existingSecret }}
+{{- /*
+Serving certificate for ECDS and the WASM asset endpoint. The certificate is
+regenerated on every render/upgrade; reuse across upgrades (Helm lookup) and the
+OpenShift service-serving option are Phase 7.
+*/ -}}
+{{- $fullname := include "coraza-operator.fullname" . }}
+{{- $ca := genCA (printf "%s-ca" $fullname) 3650 }}
+{{- $dnsNames := list
+      $fullname
+      (printf "%s.%s" $fullname .Release.Namespace)
+      (printf "%s.%s.svc" $fullname .Release.Namespace)
+      (printf "%s.%s.svc.cluster.local" $fullname .Release.Namespace) }}
+{{- $dnsNames = concat $dnsNames (.Values.tls.sans | default list) }}
+{{- $cert := genSignedCert $fullname nil $dnsNames 3650 $ca }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $fullname }}-serving-cert
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "coraza-operator.labels" . | nindent 4 }}
+type: kubernetes.io/tls
+data:
+  ca.crt: {{ $ca.Cert | b64enc }}
+  tls.crt: {{ $cert.Cert | b64enc }}
+  tls.key: {{ $cert.Key | b64enc }}
+{{- end }}
