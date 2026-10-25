@@ -22,6 +22,7 @@ import (
 	"flag"
 	"fmt"
 	"net"
+	"net/http"
 	"os"
 	"strconv"
 	"time"
@@ -48,6 +49,7 @@ import (
 	wafv1alpha1 "github.com/networking-incubator/coraza-kubernetes-operator/api/v1alpha1"
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/controller"
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/rulesets/cache"
+	"github.com/networking-incubator/coraza-kubernetes-operator/internal/xds"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -111,15 +113,52 @@ func main() {
 
 	rulesetCache := setupRuleSetCache(cfg)
 
+	xdsDeps, err := xds.NewDependencies(xds.Config{
+		KubeClient:    kubeClient,
+		Reader:        mgr.GetClient(),
+		Cache:         mgr.GetCache(),
+		BindAddress:   cfg.xdsBindAddress,
+		TokenAudience: cfg.xdsTokenAudience,
+		CertDir:       cfg.xdsCertDir,
+		CertName:      cfg.xdsCertName,
+		KeyName:       cfg.xdsKeyName,
+		CAPath:        cfg.xdsCAPath,
+		Limits:        cfg.xdsLimits,
+		Registry:      metrics.Registry,
+		Logger:        ctrl.Log.WithName("xds"),
+	})
+	if err != nil {
+		setupLog.Error(err, "unable to construct xDS serving plane")
+		os.Exit(1)
+	}
+
 	ecdsConfig, assetBaseURL := buildECDSConfig(cfg, podNamespace)
-	if err := controller.SetupControllers(mgr, rulesetCache, cfg.istioRevision, podNamespace, kubeClient, cfg.failOnLegacyEngines, ecdsConfig, assetBaseURL); err != nil {
+	if err := controller.SetupControllers(mgr, controller.ControllerDeps{
+		KubeClient:          kubeClient,
+		RuleSetCache:        rulesetCache,
+		IstioRevision:       cfg.istioRevision,
+		OperatorNamespace:   podNamespace,
+		FailOnLegacyEngines: cfg.failOnLegacyEngines,
+		ECDSConfig:          ecdsConfig,
+		AssetBaseURL:        assetBaseURL,
+		XDS:                 xdsDeps,
+	}); err != nil {
 		setupLog.Error(err, "unable to setup controllers")
+		os.Exit(1)
+	}
+
+	if err := mgr.Add(xdsDeps.Listener); err != nil {
+		setupLog.Error(err, "unable to add xDS listener runnable")
+		os.Exit(1)
+	}
+	if err := mgr.Add(xdsDeps.Streams); err != nil {
+		setupLog.Error(err, "unable to add xDS revalidation runnable")
 		os.Exit(1)
 	}
 
 	// +kubebuilder:scaffold:builder
 
-	setupHealthChecks(mgr)
+	setupHealthChecks(mgr, xdsDeps)
 
 	setupLog.Info("starting manager")
 	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
@@ -164,6 +203,14 @@ type config struct {
 	assetBaseURL        string
 	xdsCAPath           string
 	operatorServiceName string
+
+	// ECDS serving plane.
+	xdsBindAddress   string
+	xdsTokenAudience string
+	xdsCertDir       string
+	xdsCertName      string
+	xdsKeyName       string
+	xdsLimits        xds.Limits
 }
 
 func parseFlags() config {
@@ -199,6 +246,18 @@ func parseFlags() config {
 		"The CA bundle Gateways use to verify the operator certificate")
 	flag.StringVar(&cfg.operatorServiceName, "operator-service-name", "",
 		"The operator Service name used to derive the default xDS advertise address")
+	flag.StringVar(&cfg.xdsBindAddress, "xds-bind-address", ":18080",
+		"The address the ECDS and WASM asset listener binds to")
+	flag.StringVar(&cfg.xdsTokenAudience, "xds-token-audience", "",
+		"The expected TokenReview audience; empty uses the API server default audience")
+	flag.StringVar(&cfg.xdsCertDir, "xds-cert-path", "/etc/coraza-tls",
+		"The directory that contains the xDS serving certificate and CA bundle")
+	flag.StringVar(&cfg.xdsCertName, "xds-cert-name", "tls.crt",
+		"The name of the xDS serving certificate file")
+	flag.StringVar(&cfg.xdsKeyName, "xds-key-name", "tls.key",
+		"The name of the xDS serving key file")
+	cfg.xdsLimits = xds.DefaultLimits()
+	cfg.xdsLimits.AddFlags(flag.CommandLine)
 
 	opts := zap.Options{Development: false}
 	opts.BindFlags(flag.CommandLine)
@@ -324,7 +383,7 @@ func setupRuleSetCache(cfg config) *cache.RuleSetCache {
 	return rulesetCache
 }
 
-func setupHealthChecks(mgr ctrl.Manager) {
+func setupHealthChecks(mgr ctrl.Manager, deps *xds.Dependencies) {
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
 		setupLog.Error(err, "unable to set up health check")
 		os.Exit(1)
@@ -332,5 +391,17 @@ func setupHealthChecks(mgr ctrl.Manager) {
 	if err := mgr.AddReadyzCheck("readyz", healthz.Ping); err != nil {
 		setupLog.Error(err, "unable to set up ready check")
 		os.Exit(1)
+	}
+
+	checks := map[string]func() error{
+		"xds-assets":      deps.CheckAssets,
+		"xds-server":      deps.CheckServer,
+		"xds-publication": deps.CheckPublication,
+	}
+	for name, check := range checks {
+		if err := mgr.AddReadyzCheck(name, func(_ *http.Request) error { return check() }); err != nil {
+			setupLog.Error(err, "unable to set up xDS readiness check", "check", name)
+			os.Exit(1)
+		}
 	}
 }

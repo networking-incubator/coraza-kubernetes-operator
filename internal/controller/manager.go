@@ -25,6 +25,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/metrics"
 
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/rulesets/cache"
+	"github.com/networking-incubator/coraza-kubernetes-operator/internal/xds"
 )
 
 // -----------------------------------------------------------------------------
@@ -48,12 +49,24 @@ import (
 // cache server.
 const DefaultRuleSetCacheServerPort = 18080
 
+// ControllerDeps carries the manager-wide dependencies shared by controllers.
+type ControllerDeps struct {
+	KubeClient          kubernetes.Interface
+	RuleSetCache        *cache.RuleSetCache
+	IstioRevision       string
+	OperatorNamespace   string
+	FailOnLegacyEngines bool
+	ECDSConfig          ECDSConfig
+	AssetBaseURL        string
+	XDS                 *xds.Dependencies
+}
+
 // -----------------------------------------------------------------------------
 // Manager - Setup
 // -----------------------------------------------------------------------------
 
 // SetupControllers initializes all controllers
-func SetupControllers(mgr ctrl.Manager, rulesetCache *cache.RuleSetCache, istioRevision, operatorNamespace string, kubeClient kubernetes.Interface, failOnLegacyEngines bool, ecdsConfig ECDSConfig, assetBaseURL string) error {
+func SetupControllers(mgr ctrl.Manager, deps ControllerDeps) error {
 	corazaMetrics, err := NewCorazaMetrics(metrics.Registry)
 	if err != nil {
 		return fmt.Errorf("register coraza metrics: %w", err)
@@ -63,7 +76,7 @@ func SetupControllers(mgr ctrl.Manager, rulesetCache *cache.RuleSetCache, istioR
 		Reader:       mgr.GetAPIReader(),
 		Recorder:     mgr.GetEventRecorder("legacy-preflight"),
 		Metrics:      corazaMetrics,
-		FailOnLegacy: failOnLegacyEngines,
+		FailOnLegacy: deps.FailOnLegacyEngines,
 	}); err != nil {
 		return fmt.Errorf("add legacy Engine preflight: %w", err)
 	}
@@ -72,7 +85,7 @@ func SetupControllers(mgr ctrl.Manager, rulesetCache *cache.RuleSetCache, istioR
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
 		Recorder: mgr.GetEventRecorder("ruleset-controller"),
-		Cache:    rulesetCache,
+		Cache:    deps.RuleSetCache,
 		Metrics:  corazaMetrics,
 	}).SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("unable to create controller RuleSet: %w", err)
@@ -92,13 +105,31 @@ func SetupControllers(mgr ctrl.Manager, rulesetCache *cache.RuleSetCache, istioR
 		Scheme:            mgr.GetScheme(),
 		Recorder:          mgr.GetEventRecorder("engine-controller"),
 		Metrics:           corazaMetrics,
-		kubeClient:        kubeClient,
-		istioRevision:     istioRevision,
-		xdsConfig:         ecdsConfig,
-		assetBaseURL:      assetBaseURL,
-		operatorNamespace: operatorNamespace,
+		kubeClient:        deps.KubeClient,
+		istioRevision:     deps.IstioRevision,
+		xdsConfig:         deps.ECDSConfig,
+		assetBaseURL:      deps.AssetBaseURL,
+		operatorNamespace: deps.OperatorNamespace,
 	}).SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("unable to create controller Engine: %w", err)
+	}
+
+	if deps.XDS != nil {
+		if err := (&PublicationReconciler{
+			Client:    mgr.GetClient(),
+			APIReader: mgr.GetAPIReader(),
+			Scheme:    mgr.GetScheme(),
+			Store:     deps.XDS.Store,
+			Authz:     deps.XDS.Authz,
+			Readiness: deps.XDS.Readiness,
+			Metrics:   deps.XDS.Metrics,
+			Limits:    deps.XDS.Limits,
+		}).SetupWithManager(mgr); err != nil {
+			return fmt.Errorf("unable to create controller Publication: %w", err)
+		}
+		if err := mgr.Add(deps.XDS.Startup); err != nil {
+			return fmt.Errorf("add xDS publication startup: %w", err)
+		}
 	}
 
 	return nil
