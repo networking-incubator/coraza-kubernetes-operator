@@ -91,11 +91,6 @@ var (
 		Group: "extensions.istio.io", Version: "v1alpha1", Resource: "wasmplugins",
 	}
 
-	// EnvoyFilterGVR is the GroupVersionResource for EnvoyFilter resources.
-	EnvoyFilterGVR = schema.GroupVersionResource{
-		Group: "networking.istio.io", Version: "v1alpha3", Resource: "envoyfilters",
-	}
-
 	// TelemetryGVR is the GroupVersionResource for Istio Telemetry resources.
 	TelemetryGVR = schema.GroupVersionResource{
 		Group: "telemetry.istio.io", Version: "v1", Resource: "telemetries",

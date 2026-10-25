@@ -21,7 +21,7 @@ KIND_CLUSTER_NAME ?= coraza-kubernetes-operator-integration
 # Default coraza matches kind + operator Helm in hack/kind_cluster.py. For OpenShift,
 # use openshift-gateway (match operator istio.revision) or empty for default-revision Istio.
 ISTIO_GATEWAY_REVISION ?= coraza
-ISTIO_VERSION ?= 1.30.3
+ISTIO_VERSION ?= 1.31.3
 # Pin kube-prometheus-stack chart version (https://artifacthub.io/packages/helm/prometheus-community/kube-prometheus-stack).
 # Override at install time: make observability.prometheus.deploy KUBE_PROM_STACK_VERSION=x.y.z
 KUBE_PROM_STACK_VERSION ?= 86.2.3
