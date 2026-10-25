@@ -29,7 +29,6 @@ import (
 	wafv1alpha1 "github.com/networking-incubator/coraza-kubernetes-operator/api/v1alpha1"
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/ecds/render"
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/rulesets/assemble"
-	"github.com/networking-incubator/coraza-kubernetes-operator/internal/rulesets/cache"
 	"github.com/networking-incubator/coraza-kubernetes-operator/test/utils"
 )
 
@@ -98,7 +97,6 @@ func TestRuleSetReconciler_AcceptsContentByHash(t *testing.T) {
 		Client:   k8sClient,
 		Scheme:   scheme,
 		Recorder: recorder,
-		Cache:    cache.NewRuleSetCache(),
 	}
 	nn := types.NamespacedName{Name: ruleSet.Name, Namespace: ruleSet.Namespace}
 	_, err := reconcileRuleSetWithRuleSources(ctx, t, nn, reconciler)
@@ -153,7 +151,6 @@ func TestRuleSetReconciler_PreservesAcceptedContentOnInvalidUpdate(t *testing.T)
 				Client:   k8sClient,
 				Scheme:   scheme,
 				Recorder: utils.NewFakeRecorder(),
-				Cache:    cache.NewRuleSetCache(),
 			}
 			nn := types.NamespacedName{Name: ruleSet.Name, Namespace: ruleSet.Namespace}
 			_, err := reconcileRuleSetWithRuleSources(ctx, t, nn, reconciler)
@@ -203,7 +200,6 @@ func TestRuleSetReconciler_EmptyRulesPolicyAcceptance(t *testing.T) {
 			Client:   k8sClient,
 			Scheme:   scheme,
 			Recorder: utils.NewFakeRecorder(),
-			Cache:    cache.NewRuleSetCache(),
 		}
 		nn := types.NamespacedName{Name: ruleSet.Name, Namespace: ruleSet.Namespace}
 		_, err := reconcileRuleSetWithRuleSources(ctx, t, nn, reconciler)
@@ -237,7 +233,6 @@ func TestRuleSetReconciler_EmptyRulesPolicyAcceptance(t *testing.T) {
 			Client:   k8sClient,
 			Scheme:   scheme,
 			Recorder: utils.NewFakeRecorder(),
-			Cache:    cache.NewRuleSetCache(),
 		}
 		nn := types.NamespacedName{Name: ruleSet.Name, Namespace: ruleSet.Namespace}
 		_, err := reconcileRuleSetWithRuleSources(ctx, t, nn, reconciler)

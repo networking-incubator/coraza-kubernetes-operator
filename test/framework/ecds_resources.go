@@ -74,7 +74,7 @@ func EnvoyFilterName(engineName string) string {
 }
 
 // -----------------------------------------------------------------------------
-// EnvoyFilter / WasmPlugin / NetworkPolicy Assertions
+// EnvoyFilter / NetworkPolicy Assertions
 // -----------------------------------------------------------------------------
 
 // ExpectEnvoyFilter polls until the Engine's EnvoyFilter exists and returns it.
@@ -95,16 +95,6 @@ func (s *Scenario) ExpectEnvoyFilter(namespace, engineName string) *unstructured
 		return true
 	}, DefaultTimeout, DefaultInterval, "EnvoyFilter %s/%s should exist", namespace, name)
 	return output
-}
-
-// NoWasmPlugin polls until the legacy WasmPlugin for the Engine no longer exists.
-// The ECDS path must never leave a WasmPlugin attached: a stray plugin inspects
-// traffic a second time (R12).
-func (s *Scenario) NoWasmPlugin(namespace, engineName string) {
-	s.T.Helper()
-	// The legacy WasmPlugin and the new EnvoyFilter share the same deterministic name.
-	s.T.Logf("Waiting for legacy WasmPlugin %s/%s to be gone", namespace, EnvoyFilterName(engineName))
-	s.ExpectResourceGone(namespace, EnvoyFilterName(engineName), WasmPluginGVR)
 }
 
 // ExpectEngineNetworkPolicy polls until the NetworkPolicy that authorizes the

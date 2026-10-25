@@ -4,13 +4,8 @@ image:
   tag: ""
   pullPolicy: IfNotPresent
 
-# NOTE: HA Presently Not Supported:
 #  https://github.com/networking-incubator/coraza-kubernetes-operator/issues/38
 replicas: 1
-
-cache:
-  # Interval between cache garbage-collection sweeps.
-  gcInterval: "5m"
 
 resources:
   limits:
@@ -131,15 +126,6 @@ tls:
   caName: "ca.crt"
   # Extra DNS SANs appended to the generated certificate.
   sans: []
-
-# Default WASM plugin OCI URL when an Engine omits spec.driver.wasm.image.
-# When empty, the operator's built-in default (internal/defaults.DefaultCorazaWasmOCIReference) is used.
-defaultWasmImage: ""
-
-# Refuse to start when a stored Engine still sets the removed
-# spec.driver.wasm.image/imagePullSecret fields. Default false: the operator
-# lists and blocks only those Engines.
-failOnLegacyEngines: false
 
 openshift:
   enabled: false

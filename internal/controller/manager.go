@@ -24,7 +24,6 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/metrics"
 
-	"github.com/networking-incubator/coraza-kubernetes-operator/internal/rulesets/cache"
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/xds"
 )
 
@@ -45,20 +44,17 @@ import (
 // Manager - Vars
 // -----------------------------------------------------------------------------
 
-// DefaultRuleSetCacheServerPort is the default port number for the RuleSet
-// cache server.
-const DefaultRuleSetCacheServerPort = 18080
+// DefaultXDSPort is the default port for the ECDS and WASM asset listener.
+const DefaultXDSPort = 18080
 
 // ControllerDeps carries the manager-wide dependencies shared by controllers.
 type ControllerDeps struct {
-	KubeClient          kubernetes.Interface
-	RuleSetCache        *cache.RuleSetCache
-	IstioRevision       string
-	OperatorNamespace   string
-	FailOnLegacyEngines bool
-	ECDSConfig          ECDSConfig
-	AssetBaseURL        string
-	XDS                 *xds.Dependencies
+	KubeClient        kubernetes.Interface
+	IstioRevision     string
+	OperatorNamespace string
+	ECDSConfig        ECDSConfig
+	AssetBaseURL      string
+	XDS               *xds.Dependencies
 }
 
 // -----------------------------------------------------------------------------
@@ -72,20 +68,10 @@ func SetupControllers(mgr ctrl.Manager, deps ControllerDeps) error {
 		return fmt.Errorf("register coraza metrics: %w", err)
 	}
 
-	if err := mgr.Add(&LegacyEnginePreflight{
-		Reader:       mgr.GetAPIReader(),
-		Recorder:     mgr.GetEventRecorder("legacy-preflight"),
-		Metrics:      corazaMetrics,
-		FailOnLegacy: deps.FailOnLegacyEngines,
-	}); err != nil {
-		return fmt.Errorf("add legacy Engine preflight: %w", err)
-	}
-
 	if err := (&RuleSetReconciler{
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
 		Recorder: mgr.GetEventRecorder("ruleset-controller"),
-		Cache:    deps.RuleSetCache,
 		Metrics:  corazaMetrics,
 	}).SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("unable to create controller RuleSet: %w", err)
@@ -101,7 +87,6 @@ func SetupControllers(mgr ctrl.Manager, deps ControllerDeps) error {
 
 	if err := (&EngineReconciler{
 		Client:            mgr.GetClient(),
-		APIReader:         mgr.GetAPIReader(),
 		Scheme:            mgr.GetScheme(),
 		Recorder:          mgr.GetEventRecorder("engine-controller"),
 		Metrics:           corazaMetrics,

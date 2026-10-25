@@ -24,7 +24,6 @@ import (
 
 	"github.com/stretchr/testify/require"
 	appsv1 "k8s.io/api/apps/v1"
-	authv1 "k8s.io/api/authentication/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -86,11 +85,6 @@ var (
 		Group: "gateway.networking.k8s.io", Version: "v1", Resource: "httproutes",
 	}
 
-	// WasmPluginGVR is the GroupVersionResource for WasmPlugin resources.
-	WasmPluginGVR = schema.GroupVersionResource{
-		Group: "extensions.istio.io", Version: "v1alpha1", Resource: "wasmplugins",
-	}
-
 	// TelemetryGVR is the GroupVersionResource for Istio Telemetry resources.
 	TelemetryGVR = schema.GroupVersionResource{
 		Group: "telemetry.istio.io", Version: "v1", Resource: "telemetries",
@@ -112,10 +106,6 @@ type EngineOpts struct {
 	// FailurePolicy determines behavior when the WAF is not ready.
 	// Defaults to wafv1alpha1.FailurePolicyFail.
 	FailurePolicy wafv1alpha1.FailurePolicy
-
-	// PollInterval is the ruleSetCacheServer poll interval in seconds.
-	// Defaults to 5.
-	PollInterval int32
 
 	// EnableObservability sets spec.observability.mode to Enabled.
 	EnableObservability bool
@@ -240,9 +230,6 @@ func BuildEngine(namespace, name string, opts EngineOpts) *unstructured.Unstruct
 	if opts.FailurePolicy == "" {
 		opts.FailurePolicy = wafv1alpha1.FailurePolicyFail
 	}
-	if opts.PollInterval == 0 {
-		opts.PollInterval = 5
-	}
 	if opts.GatewayName == "" {
 		opts.GatewayName = "gateway"
 	}
@@ -273,9 +260,6 @@ func BuildEngine(namespace, name string, opts EngineOpts) *unstructured.Unstruct
 			},
 			FailurePolicy: opts.FailurePolicy,
 			Observability: observability,
-			RuleSetCacheServer: &wafv1alpha1.RuleSetCacheServerConfig{
-				PollIntervalSeconds: opts.PollInterval,
-			},
 			Driver: wafv1alpha1.DriverConfig{
 				Type: wafv1alpha1.DriverTypeWasm,
 				// Both url and sha256 are omitted: the operator serves its
@@ -379,25 +363,6 @@ func (s *Scenario) CreateRuleData(namespace, name string, files map[string]strin
 			Files: files,
 		},
 	})
-}
-
-// CreateCacheServerToken creates a ServiceAccount token via TokenRequest for the cache server client and returns the token string.
-func (s *Scenario) CreateCacheServerToken(namespace, name, audience string) string {
-	s.T.Helper()
-	ctx := s.T.Context()
-
-	tokenReq := &authv1.TokenRequest{
-		Spec: authv1.TokenRequestSpec{
-			Audiences: []string{audience},
-		},
-	}
-	result, err := s.F.KubeClient.CoreV1().ServiceAccounts(namespace).CreateToken(
-		ctx, name, tokenReq, metav1.CreateOptions{},
-	)
-	require.NoError(s.T, err, "create token for SA %s/%s", namespace, name)
-
-	s.T.Logf("Created token for ServiceAccount: %s/%s", namespace, name)
-	return result.Status.Token
 }
 
 // DeleteRuleSource deletes a RuleSource in the namespace.

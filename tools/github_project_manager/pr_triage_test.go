@@ -49,7 +49,7 @@ func TestComputePRAreaLabels(t *testing.T) {
 		{
 			name:   "cache changes",
 			labels: []string{},
-			files:  []string{"internal/rulesets/cache/cache.go"},
+			files:  []string{"internal/rulesets/assemble/assemble.go"},
 			want:   []string{"area/cache"},
 		},
 		{

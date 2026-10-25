@@ -112,22 +112,6 @@ func (s *Scenario) ExpectGatewayAccepted(namespace, name string) {
 // Resource Existence Assertions
 // -----------------------------------------------------------------------------
 
-// ExpectWasmPluginExists polls until a WasmPlugin with the given name exists
-// in the namespace.
-func (s *Scenario) ExpectWasmPluginExists(namespace, name string) *unstructured.Unstructured {
-	s.T.Helper()
-	s.T.Logf("Waiting for WasmPlugin %s/%s to exist", namespace, name)
-	var err error
-	output := &unstructured.Unstructured{}
-	require.Eventually(s.T, func() bool {
-		output, err = s.F.DynamicClient.Resource(WasmPluginGVR).Namespace(namespace).Get(
-			s.T.Context(), name, metav1.GetOptions{},
-		)
-		return err == nil
-	}, DefaultTimeout, DefaultInterval, "WasmPlugin %s/%s should exist", namespace, name)
-	return output
-}
-
 // ExpectEnvoyFilterExists polls until an EnvoyFilter with the given name
 // exists in the namespace.
 func (s *Scenario) ExpectEnvoyFilterExists(namespace, name string) *unstructured.Unstructured {
@@ -155,28 +139,6 @@ func (s *Scenario) ExpectServiceAccountExists(namespace, name string) {
 		)
 		return err == nil
 	}, DefaultTimeout, DefaultInterval, "ServiceAccount %s/%s should exist", namespace, name)
-}
-
-// ExpectCacheClientSAExists polls until a cache client ServiceAccount exists
-// for the given engine (matched by app.kubernetes.io/instance label).
-// Returns the discovered ServiceAccount name.
-func (s *Scenario) ExpectCacheClientSAExists(namespace, engineName string) string {
-	s.T.Helper()
-	s.T.Logf("Waiting for cache client ServiceAccount for engine %s/%s", namespace, engineName)
-	var saName string
-	require.Eventually(s.T, func() bool {
-		list, err := s.F.KubeClient.CoreV1().ServiceAccounts(namespace).List(
-			s.T.Context(), metav1.ListOptions{
-				LabelSelector: "app.kubernetes.io/component=cache-client,app.kubernetes.io/instance=" + engineName,
-			},
-		)
-		if err != nil || len(list.Items) == 0 {
-			return false
-		}
-		saName = list.Items[0].Name
-		return true
-	}, DefaultTimeout, DefaultInterval, "cache client SA for engine %s/%s should exist", namespace, engineName)
-	return saName
 }
 
 // ExpectResourceGone polls until the specified resource no longer exists.

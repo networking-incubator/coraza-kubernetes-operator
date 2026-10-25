@@ -40,7 +40,6 @@ import (
 	wafv1alpha1 "github.com/networking-incubator/coraza-kubernetes-operator/api/v1alpha1"
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/ecds/render"
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/rulesets/assemble"
-	"github.com/networking-incubator/coraza-kubernetes-operator/internal/rulesets/cache"
 )
 
 // -----------------------------------------------------------------------------
@@ -66,7 +65,6 @@ type RuleSetReconciler struct {
 	client.Client
 	Scheme   *runtime.Scheme
 	Recorder events.EventRecorder
-	Cache    *cache.RuleSetCache
 	Metrics  *CorazaMetrics
 }
 
@@ -131,12 +129,6 @@ func (r *RuleSetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	var ruleset wafv1alpha1.RuleSet
 	if err := r.Get(ctx, req.NamespacedName, &ruleset); err != nil {
 		if apierrors.IsNotFound(err) {
-			cacheKey := fmt.Sprintf("%s/%s", req.Namespace, req.Name)
-			if r.Cache.Delete(cacheKey) {
-				logDebug(log, req, "RuleSet", "Deleted cache entry for removed resource")
-			} else {
-				logDebug(log, req, "RuleSet", "Resource not found, no cache entry to remove")
-			}
 			r.Metrics.ForgetRuleSet(req.Namespace, req.Name)
 			r.reconcileRuleDataMetrics(ctx, req.Namespace)
 			return ctrl.Result{}, nil

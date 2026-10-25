@@ -73,28 +73,6 @@ func TestEngineWasmDriverCEL(t *testing.T) {
 			wasm: &wafv1alpha1.WasmDriverConfig{},
 		},
 		{
-			name: "legacy image rejected",
-			wasm: &wafv1alpha1.WasmDriverConfig{
-				Image: "oci://example.com/plugin:1",
-			},
-			wantErr: "spec.driver.wasm.image and imagePullSecret are removed",
-		},
-		{
-			name: "legacy imagePullSecret rejected",
-			wasm: &wafv1alpha1.WasmDriverConfig{
-				ImagePullSecret: "registry-creds",
-			},
-			wantErr: "spec.driver.wasm.image and imagePullSecret are removed",
-		},
-		{
-			name: "legacy image and imagePullSecret rejected together",
-			wasm: &wafv1alpha1.WasmDriverConfig{
-				Image:           "oci://example.com/plugin:1",
-				ImagePullSecret: "registry-creds",
-			},
-			wantErr: "spec.driver.wasm.image and imagePullSecret are removed",
-		},
-		{
 			name:    "url without sha256",
 			wasm:    &wafv1alpha1.WasmDriverConfig{URL: "https://example.com/plugin.wasm"},
 			wantErr: "url and sha256 must be set together",

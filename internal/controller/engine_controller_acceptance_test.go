@@ -27,7 +27,6 @@ import (
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -49,11 +48,6 @@ const (
 )
 
 const testCAPEM = "-----BEGIN CERTIFICATE-----\nMIIBtestCa\n-----END CERTIFICATE-----\n"
-
-// legacyWasmPluginGVK is the GVK of the retired WasmPlugin child resource.
-var legacyWasmPluginGVK = schema.GroupVersionKind{
-	Group: "extensions.istio.io", Version: "v1alpha1", Kind: "WasmPlugin",
-}
 
 func testXDSConfig() ECDSConfig {
 	return ECDSConfig{
@@ -137,14 +131,6 @@ func requireNoEnvoyFilter(t *testing.T, ctx context.Context, engineName, namespa
 	t.Helper()
 	_, err := getEnvoyFilter(t, ctx, engineName, namespace)
 	assert.True(t, apierrors.IsNotFound(err), "EnvoyFilter should not exist, got: %v", err)
-}
-
-func requireNoLegacyWasmPlugin(t *testing.T, ctx context.Context, engineName, namespace string) {
-	t.Helper()
-	wasmPlugin := &unstructured.Unstructured{}
-	wasmPlugin.SetGroupVersionKind(legacyWasmPluginGVK)
-	err := k8sClient.Get(ctx, types.NamespacedName{Namespace: namespace, Name: legacyWasmPluginName(engineName)}, wasmPlugin)
-	assert.True(t, apierrors.IsNotFound(err), "WasmPlugin should not exist, got: %v", err)
 }
 
 // reconcileEngine runs the finalizer reconcile and one provisioning reconcile.
@@ -283,7 +269,6 @@ func TestEngineReconciler_AwaitingRuleSetAcceptance(t *testing.T) {
 	assert.Equal(t, metav1.ConditionFalse, ready.Status)
 
 	requireNoEnvoyFilter(t, ctx, engine.Name, engine.Namespace)
-	requireNoLegacyWasmPlugin(t, ctx, engine.Name, engine.Namespace)
 }
 
 func TestEngineReconciler_TLSNotConfiguredFailsClosed(t *testing.T) {
@@ -375,39 +360,6 @@ func TestEngineReconciler_AcceptsConfigurationAndAttachesEnvoyFilter(t *testing.
 	require.True(t, found)
 	assert.Len(t, patches, 2, "asset cluster and HTTP filter patches")
 
-	requireNoLegacyWasmPlugin(t, ctx, engine.Name, engine.Namespace)
-}
-
-func TestEngineReconciler_DeletesLegacyWasmPlugin(t *testing.T) {
-	ctx := context.Background()
-	ns := setupTestNamespace(t, ctx)
-	createTestGateway(t, ctx, k8sClient, "legacy-gw", ns)
-
-	ruleSet := utils.NewTestRuleSet(utils.RuleSetOptions{Name: "legacy-ruleset", Namespace: ns})
-	require.NoError(t, k8sClient.Create(ctx, ruleSet))
-	acceptTestRuleSet(t, ctx, ruleSet, testAcceptRuleText)
-
-	engine := utils.NewTestEngine(utils.EngineOptions{
-		Name:        "legacy-engine",
-		Namespace:   ns,
-		GatewayName: "legacy-gw",
-		RuleSetName: ruleSet.Name,
-		WasmURL:     utils.DefaultTestWasmURL,
-		WasmSHA256:  utils.DefaultTestWasmSHA256,
-	})
-	require.NoError(t, k8sClient.Create(ctx, engine))
-
-	wasmPlugin := &unstructured.Unstructured{}
-	wasmPlugin.SetGroupVersionKind(legacyWasmPluginGVK)
-	wasmPlugin.SetNamespace(ns)
-	wasmPlugin.SetName(legacyWasmPluginName(engine.Name))
-	wasmPlugin.Object["spec"] = map[string]any{"url": "oci://legacy.example/plugin:latest"}
-	require.NoError(t, k8sClient.Create(ctx, wasmPlugin))
-
-	reconcileEngine(t, ctx, newAcceptedEngineTestReconciler(), engine)
-
-	requireNoLegacyWasmPlugin(t, ctx, engine.Name, engine.Namespace)
-	requireEnvoyFilterExists(t, ctx, engine.Name, engine.Namespace)
 }
 
 func TestEngineReconciler_CleanupNotAcceptedDeletesEnvoyFilter(t *testing.T) {
@@ -438,7 +390,6 @@ func TestEngineReconciler_CleanupNotAcceptedDeletesEnvoyFilter(t *testing.T) {
 	require.NoError(t, err)
 
 	requireNoEnvoyFilter(t, ctx, engine.Name, engine.Namespace)
-	requireNoLegacyWasmPlugin(t, ctx, engine.Name, engine.Namespace)
 
 	var updated wafv1alpha1.Engine
 	require.NoError(t, k8sClient.Get(ctx, client.ObjectKeyFromObject(engine), &updated))

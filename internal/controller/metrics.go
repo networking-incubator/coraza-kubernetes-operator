@@ -55,10 +55,6 @@ type CorazaMetrics struct {
 	engineCondition *prometheus.GaugeVec
 	engines         *prometheus.GaugeVec
 
-	// legacyWasmEngines is the number of Engines found at startup that still
-	// set the removed spec.driver.wasm.image/imagePullSecret fields.
-	legacyWasmEngines prometheus.Gauge
-
 	rulesetInfo      *prometheus.GaugeVec
 	rulesetCondition *prometheus.GaugeVec
 	rulesets         *prometheus.GaugeVec
@@ -77,7 +73,6 @@ type CorazaMetrics struct {
 	rulesetValidations           *prometheus.CounterVec
 	rulesourceValidationDuration *prometheus.HistogramVec
 	rulesetValidationDuration    *prometheus.HistogramVec
-	cacheSetDuration             *prometheus.HistogramVec
 }
 
 // NewCorazaMetrics creates a CorazaMetrics and registers all gauges with reg.
@@ -98,11 +93,6 @@ func NewCorazaMetrics(reg prometheus.Registerer) (*CorazaMetrics, error) {
 			Name: "coraza_engines",
 			Help: "Total number of Engine resources per namespace.",
 		}, []string{"namespace"}),
-
-		legacyWasmEngines: prometheus.NewGauge(prometheus.GaugeOpts{
-			Name: "coraza_legacy_wasm_engines",
-			Help: "Number of Engine resources that still set the removed spec.driver.wasm.image/imagePullSecret fields.",
-		}),
 
 		rulesetInfo: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "coraza_ruleset_info",
@@ -166,7 +156,7 @@ func NewCorazaMetrics(reg prometheus.Registerer) (*CorazaMetrics, error) {
 
 		rulesetValidations: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "coraza_ruleset_validations_total",
-			Help: "RuleSet aggregate validation outcomes recorded once per status transition (valid=Coraza parse succeeded and rules cached, invalid=parse failed).",
+			Help: "RuleSet aggregate validation outcomes recorded once per status transition (valid=Coraza parse succeeded and rules accepted, invalid=parse failed).",
 		}, []string{"namespace", "outcome"}),
 
 		rulesourceValidationDuration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
@@ -177,24 +167,19 @@ func NewCorazaMetrics(reg prometheus.Registerer) (*CorazaMetrics, error) {
 
 		rulesetValidationDuration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
 			Name:    "coraza_ruleset_validation_duration_seconds",
-			Help:    "Duration of RuleSet Coraza validation (PMFromFile + aggregate parse) by outcome; excludes status patches and cache writes.",
+			Help:    "Duration of RuleSet Coraza validation (PMFromFile + aggregate parse) by outcome; excludes status patches.",
 			Buckets: []float64{.001, .005, .01, .025, .05, .1, .25, .5, 1, 2.5, 5},
 		}, []string{"namespace", "outcome"}),
 
-		cacheSetDuration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
-			Name:    "coraza_cache_set_duration_seconds",
-			Help:    "Duration of cache Put operations recorded once per RuleSet cache transition; excludes resync and content-unchanged reconciles.",
-			Buckets: []float64{.0001, .0005, .001, .005, .01, .025, .05, .1},
-		}, []string{"namespace"}),
 	}
 
 	for _, c := range []prometheus.Collector{
-		m.engineInfo, m.engineCondition, m.engines, m.legacyWasmEngines,
+		m.engineInfo, m.engineCondition, m.engines,
 		m.rulesetInfo, m.rulesetCondition, m.rulesets, m.rulesetSources, m.rulesetDataFiles,
 		m.rulesourceInfo, m.rulesourceCondition, m.rulesources,
 		m.ruledataInfo, m.ruledataCondition, m.ruledatas,
 		m.rulesourceValidations, m.rulesetValidations,
-		m.rulesourceValidationDuration, m.rulesetValidationDuration, m.cacheSetDuration,
+		m.rulesourceValidationDuration, m.rulesetValidationDuration,
 	} {
 		if err := reg.Register(c); err != nil {
 			return nil, err
@@ -287,15 +272,6 @@ func (m *CorazaMetrics) SetEnginesTotal(ns string, count int) {
 		return
 	}
 	m.engines.WithLabelValues(ns).Set(float64(count))
-}
-
-// SetLegacyWasmEngines sets the number of Engines found at startup that still
-// use the removed Wasm image fields.
-func (m *CorazaMetrics) SetLegacyWasmEngines(count int) {
-	if m == nil {
-		return
-	}
-	m.legacyWasmEngines.Set(float64(count))
 }
 
 // -----------------------------------------------------------------------------
@@ -447,10 +423,3 @@ func (m *CorazaMetrics) ObserveRuleSetValidation(ns, outcome string, d time.Dura
 	m.rulesetValidationDuration.WithLabelValues(ns, outcome).Observe(d.Seconds())
 }
 
-// ObserveCacheSet records a cache Put duration.
-func (m *CorazaMetrics) ObserveCacheSet(ns string, d time.Duration) {
-	if m == nil {
-		return
-	}
-	m.cacheSetDuration.WithLabelValues(ns).Observe(d.Seconds())
-}

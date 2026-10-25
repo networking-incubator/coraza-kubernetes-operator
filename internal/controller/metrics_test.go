@@ -659,7 +659,6 @@ func TestCorazaMetricsNilSafe(t *testing.T) {
 		m.IncRuleSetValidation("ns", "invalid")
 		m.ObserveRuleSourceValidation("ns", "valid", time.Millisecond)
 		m.ObserveRuleSetValidation("ns", "invalid", 2*time.Millisecond)
-		m.ObserveCacheSet("ns", time.Microsecond)
 	})
 }
 
@@ -674,7 +673,6 @@ func TestCorazaMetricsValidationMetrics(t *testing.T) {
 	m.IncRuleSetValidation("default", "invalid")
 	m.ObserveRuleSourceValidation("default", "valid", 10*time.Millisecond)
 	m.ObserveRuleSetValidation("default", "valid", 20*time.Millisecond)
-	m.ObserveCacheSet("default", 5*time.Millisecond)
 
 	gathered, err := reg.Gather()
 	require.NoError(t, err)
@@ -703,7 +701,6 @@ func TestCorazaMetricsValidationMetrics(t *testing.T) {
 
 	assert.Equal(t, 1, testutil.CollectAndCount(reg, "coraza_rulesource_validation_duration_seconds"))
 	assert.Equal(t, 1, testutil.CollectAndCount(reg, "coraza_ruleset_validation_duration_seconds"))
-	assert.Equal(t, 1, testutil.CollectAndCount(reg, "coraza_cache_set_duration_seconds"))
 }
 
 func gatherValidationCounter(t *testing.T, reg *prometheus.Registry, outcome string) float64 {
@@ -731,25 +728,6 @@ func gatherNamespaceGauge(t *testing.T, reg *prometheus.Registry, metricName, ns
 				return metric.GetGauge().GetValue()
 			}
 		}
-	}
-	return 0
-}
-
-func gatherCacheSetDurationSampleCount(t *testing.T, reg *prometheus.Registry) uint64 {
-	t.Helper()
-	gathered, err := reg.Gather()
-	require.NoError(t, err)
-	for _, mf := range gathered {
-		if mf.GetName() != "coraza_cache_set_duration_seconds" {
-			continue
-		}
-		var total uint64
-		for _, metric := range mf.GetMetric() {
-			if h := metric.GetHistogram(); h != nil {
-				total += h.GetSampleCount()
-			}
-		}
-		return total
 	}
 	return 0
 }

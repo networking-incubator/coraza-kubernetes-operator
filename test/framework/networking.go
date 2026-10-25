@@ -278,8 +278,8 @@ func (g *GatewayProxy) ExpectHeaderStatus(path string, headers map[string]string
 // Cache Server
 // -----------------------------------------------------------------------------
 
-// cacheServerPort is the port the cache server listens on inside the operator pod.
-const cacheServerPort = 18080
+// ecdsPort is the ECDS/asset port inside the operator pod.
+const ecdsPort = 18080
 
 // CacheServerProxy manages a port-forward to the operator's cache server and
 // provides HTTP helpers for testing cache authentication.
@@ -449,7 +449,7 @@ func (c *CacheServerProxy) runPortForward(ctx context.Context, operatorNamespace
 	}()
 
 	pf, err := portforward.New(dialer,
-		[]string{fmt.Sprintf("%s:%d", c.localPort, cacheServerPort)},
+		[]string{fmt.Sprintf("%s:%d", c.localPort, ecdsPort)},
 		stopCh, nil, io.Discard, io.Discard,
 	)
 	if err != nil {

@@ -115,7 +115,6 @@ type EngineOptions struct {
 	RuleSetName         string
 	WasmURL             string
 	WasmSHA256          string
-	PollIntervalSeconds int32
 	GatewayName         string
 	FailurePolicy       wafv1alpha1.FailurePolicy
 }
@@ -130,9 +129,6 @@ func NewTestEngine(opts EngineOptions) *wafv1alpha1.Engine {
 	}
 	if opts.RuleSetName == "" {
 		opts.RuleSetName = "test-ruleset"
-	}
-	if opts.PollIntervalSeconds == 0 {
-		opts.PollIntervalSeconds = 5
 	}
 	if opts.GatewayName == "" {
 		opts.GatewayName = "test-gw"
@@ -160,9 +156,6 @@ func NewTestEngine(opts EngineOptions) *wafv1alpha1.Engine {
 				Type:     wafv1alpha1.EngineTargetTypeGateway,
 				Name:     opts.GatewayName,
 				Provider: wafv1alpha1.EngineTargetProviderIstio,
-			},
-			RuleSetCacheServer: &wafv1alpha1.RuleSetCacheServerConfig{
-				PollIntervalSeconds: opts.PollIntervalSeconds,
 			},
 			Driver: wafv1alpha1.DriverConfig{
 				Type: wafv1alpha1.DriverTypeWasm,

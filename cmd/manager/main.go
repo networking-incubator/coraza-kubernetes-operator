@@ -25,7 +25,6 @@ import (
 	"net/http"
 	"os"
 	"strconv"
-	"time"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
@@ -48,7 +47,6 @@ import (
 
 	wafv1alpha1 "github.com/networking-incubator/coraza-kubernetes-operator/api/v1alpha1"
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/controller"
-	"github.com/networking-incubator/coraza-kubernetes-operator/internal/rulesets/cache"
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/xds"
 	// +kubebuilder:scaffold:imports
 )
@@ -81,9 +79,6 @@ func main() {
 	cfg := parseFlags()
 	setupLog = ctrl.Log.WithName("setup")
 	logFlags()
-	setupLog.Info("Deprecated flags are accepted but ignored",
-		"flags", "--default-wasm-image, --envoy-cluster-name")
-
 	tlsOpts := buildTLSOpts()
 
 	podNamespace := os.Getenv("POD_NAMESPACE")
@@ -111,8 +106,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	rulesetCache := setupRuleSetCache(cfg)
-
 	xdsDeps, err := xds.NewDependencies(xds.Config{
 		KubeClient:    kubeClient,
 		Reader:        mgr.GetClient(),
@@ -134,14 +127,12 @@ func main() {
 
 	ecdsConfig, assetBaseURL := buildECDSConfig(cfg, podNamespace)
 	if err := controller.SetupControllers(mgr, controller.ControllerDeps{
-		KubeClient:          kubeClient,
-		RuleSetCache:        rulesetCache,
-		IstioRevision:       cfg.istioRevision,
-		OperatorNamespace:   podNamespace,
-		FailOnLegacyEngines: cfg.failOnLegacyEngines,
-		ECDSConfig:          ecdsConfig,
-		AssetBaseURL:        assetBaseURL,
-		XDS:                 xdsDeps,
+		KubeClient:        kubeClient,
+		IstioRevision:     cfg.istioRevision,
+		OperatorNamespace: podNamespace,
+		ECDSConfig:        ecdsConfig,
+		AssetBaseURL:      assetBaseURL,
+		XDS:               xdsDeps,
 	}); err != nil {
 		setupLog.Error(err, "unable to setup controllers")
 		os.Exit(1)
@@ -177,23 +168,8 @@ type config struct {
 	enableLeaderElect bool
 	metricsCertPath   string
 	metricsCertName   string
-	metricsCertKey    string
-	cacheGCInterval   time.Duration
-	cacheMaxAge       time.Duration
-	cacheMaxSize      int
-	cacheServerPort   int
-
-	// Deprecated and ignored: kept so the chart can keep passing them until
-	// Phase 7 removes the flags and the chart arguments together.
-	envoyClusterName string
-	defaultWasmImage string
-
-	istioRevision string
-	operatorName  string
-
-	// failOnLegacyEngines makes the startup preflight stop the manager when a
-	// stored Engine still sets spec.driver.wasm.image or imagePullSecret.
-	failOnLegacyEngines bool
+	metricsCertKey string
+	istioRevision  string
 
 	// ECDS settings: the address Gateways dial for config discovery, the port
 	// appended when the address has none, the base URL of the WASM asset, and
@@ -224,21 +200,10 @@ func parseFlags() config {
 	flag.StringVar(&cfg.metricsCertPath, "metrics-cert-path", "", "The directory that contains the metrics server certificate.")
 	flag.StringVar(&cfg.metricsCertName, "metrics-cert-name", "tls.crt", "The name of the metrics server certificate file.")
 	flag.StringVar(&cfg.metricsCertKey, "metrics-cert-key", "tls.key", "The name of the metrics server key file.")
-	flag.DurationVar(&cfg.cacheGCInterval, "cache-gc-interval", cache.CacheGCInterval, "How often to check for and remove stale cache entries in the RuleSet cache")
-	flag.DurationVar(&cfg.cacheMaxAge, "cache-max-age", cache.CacheMaxAge, "Maximum age of a cache entry before it's considered stale in the RuleSet cache")
-	flag.IntVar(&cfg.cacheMaxSize, "cache-max-size", cache.CacheMaxSize, fmt.Sprintf("Maximum total size of all cached rules in the RuleSet cache in bytes (default %dMB)", cache.CacheMaxSize/(1024*1024)))
-	flag.IntVar(&cfg.cacheServerPort, "cache-server-port", controller.DefaultRuleSetCacheServerPort, fmt.Sprintf("Port number for the RuleSet cache server to listen on (default %d)", controller.DefaultRuleSetCacheServerPort))
-	// Deprecated: accepted for chart compatibility until Phase 7 removes both
-	// the flags and the chart arguments. Neither value is used.
-	flag.StringVar(&cfg.envoyClusterName, "envoy-cluster-name", "", "Deprecated and ignored")
 	flag.StringVar(&cfg.istioRevision, "istio-revision", "", "The Istio revision label value for managed Istio resources")
-	flag.StringVar(&cfg.defaultWasmImage, "default-wasm-image", "", "Deprecated and ignored")
-	flag.StringVar(&cfg.operatorName, "operator-name", "", "The operator release name used to derive managed resource names (when unset, Istio prerequisites are skipped)")
-	flag.BoolVar(&cfg.failOnLegacyEngines, "fail-on-legacy-engines", false,
-		"Stop the manager when a stored Engine still sets the removed spec.driver.wasm.image or imagePullSecret fields")
 	flag.StringVar(&cfg.xdsAdvertiseAddress, "xds-advertise-address", "",
 		"The operator address Gateways dial for ECDS; defaults to <operator-service-name>.<POD_NAMESPACE>.svc.cluster.local")
-	flag.IntVar(&cfg.xdsPort, "xds-port", controller.DefaultRuleSetCacheServerPort,
+	flag.IntVar(&cfg.xdsPort, "xds-port", controller.DefaultXDSPort,
 		"The operator ECDS port appended to the advertise address when it has no port")
 	flag.StringVar(&cfg.assetBaseURL, "asset-base-url", "",
 		"The base URL Envoy fetches the WASM asset from; defaults to https://<advertise-address>")
@@ -274,16 +239,8 @@ func parseFlags() config {
 // reports TLSNotConfigured instead of rendering an unverified chain.
 func buildECDSConfig(cfg config, podNamespace string) (controller.ECDSConfig, string) {
 	advertise := cfg.xdsAdvertiseAddress
-	if advertise == "" {
-		serviceName := cfg.operatorServiceName
-		if serviceName == "" {
-			// The chart passes the release fullname as --operator-name, which is
-			// also the Service name.
-			serviceName = cfg.operatorName
-		}
-		if serviceName != "" {
-			advertise = fmt.Sprintf("%s.%s.svc.cluster.local", serviceName, podNamespace)
-		}
+	if advertise == "" && cfg.operatorServiceName != "" {
+		advertise = fmt.Sprintf("%s.%s.svc.cluster.local", cfg.operatorServiceName, podNamespace)
 	}
 	if advertise != "" {
 		if _, _, err := net.SplitHostPort(advertise); err != nil {
@@ -362,25 +319,6 @@ func buildCacheOptions(operatorNamespace string) ctrlcache.Options {
 			},
 		},
 	}
-}
-
-func setupRuleSetCache(cfg config) *cache.RuleSetCache {
-	rulesetCache := cache.NewRuleSetCache()
-	rulesetCache.SetLogger(ctrl.Log.WithName("ruleset-cache"))
-	gcConfig := &cache.GarbageCollectionConfig{
-		GCInterval: cfg.cacheGCInterval,
-		MaxAge:     cfg.cacheMaxAge,
-		MaxSize:    cfg.cacheMaxSize,
-	}
-
-	if err := cache.RegisterUSEMetrics(metrics.Registry, rulesetCache, *gcConfig); err != nil {
-		setupLog.Error(err, "unable to register USE metrics for ruleset cache")
-		os.Exit(1)
-	}
-
-	// The legacy HTTP rule server is intentionally not registered: ECDS is the
-	// only delivery path. The package and its tests are retained.
-	return rulesetCache
 }
 
 func setupHealthChecks(mgr ctrl.Manager, deps *xds.Dependencies) {

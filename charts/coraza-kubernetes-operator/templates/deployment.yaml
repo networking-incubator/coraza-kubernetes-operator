@@ -53,22 +53,14 @@ spec:
             - --metrics-cert-key={{ .Values.metrics.keyName | default "tls.key" }}
             {{- end }}
             {{- end }}
-            - --envoy-cluster-name={{ printf "outbound|80||%s" (include "coraza-operator.serviceFQDN" .) }}
-            - --cache-gc-interval={{ .Values.cache.gcInterval }}
             {{- if .Values.istio.revision }}
             - --istio-revision={{ .Values.istio.revision }}
             {{- end }}
-            - --operator-name={{ include "coraza-operator.fullname" . }}
+            - --operator-service-name={{ include "coraza-operator.fullname" . }}
             - --xds-cert-path=/etc/coraza-tls
             - --xds-cert-name={{ .Values.tls.certName | default "tls.crt" }}
             - --xds-key-name={{ .Values.tls.keyName | default "tls.key" }}
             - --xds-ca-path=/etc/coraza-tls/{{ .Values.tls.caName | default "ca.crt" }}
-            {{- if .Values.defaultWasmImage }}
-            - --default-wasm-image={{ .Values.defaultWasmImage }}
-            {{- end }}
-            {{- if .Values.failOnLegacyEngines }}
-            - --fail-on-legacy-engines=true
-            {{- end }}
             {{- if .Values.logging.development }}
             - --zap-devel=true
             {{- else }}
