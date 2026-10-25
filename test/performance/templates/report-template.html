@@ -1,0 +1,1260 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Coraza WAF Performance Test Results</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background: #f5f5f7;
+            min-height: 100vh;
+        }
+
+        /* Navigation Bar */
+        .navbar {
+            position: sticky;
+            top: 0;
+            z-index: 1000;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            box-shadow: 0 2px 12px rgba(0,0,0,0.15);
+        }
+
+        .navbar-content {
+            max-width: 1400px;
+            margin: 0 auto;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0 2rem;
+            height: 64px;
+        }
+
+        .navbar-brand {
+            color: white;
+            font-size: 1.25rem;
+            font-weight: 700;
+            text-decoration: none;
+        }
+
+        .navbar-menu {
+            display: flex;
+            gap: 0.5rem;
+            list-style: none;
+        }
+
+        .navbar-item {
+            position: relative;
+        }
+
+        .navbar-link {
+            display: block;
+            color: white;
+            text-decoration: none;
+            padding: 0.75rem 1.25rem;
+            border-radius: 8px;
+            font-weight: 500;
+            transition: background 0.2s;
+            cursor: pointer;
+        }
+
+        .navbar-link:hover {
+            background: rgba(255,255,255,0.15);
+        }
+
+        .navbar-link.active {
+            background: rgba(255,255,255,0.25);
+        }
+
+        /* Container */
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+
+        /* Section */
+        .section {
+            background: white;
+            border-radius: 12px;
+            padding: 2rem;
+            margin-bottom: 2rem;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+            scroll-margin-top: 80px;
+        }
+
+        .section-title {
+            font-size: 1.75rem;
+            color: #1f2937;
+            margin-bottom: 1.5rem;
+            padding-bottom: 0.75rem;
+            border-bottom: 3px solid #667eea;
+        }
+
+        .section-subtitle {
+            font-size: 1.1rem;
+            color: #6b7280;
+            margin-bottom: 1.5rem;
+        }
+
+        /* Cards Grid */
+        .cards-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+            gap: 1.5rem;
+            margin-top: 1.5rem;
+        }
+
+        .card {
+            background: #f9fafb;
+            border: 2px solid #e5e7eb;
+            border-radius: 12px;
+            padding: 1.5rem;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .card:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 8px 24px rgba(102, 126, 234, 0.2);
+            border-color: #667eea;
+        }
+
+        .card-title {
+            font-size: 1.25rem;
+            font-weight: 600;
+            color: #667eea;
+            margin-bottom: 0.75rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .card-icon {
+            font-size: 1.5rem;
+        }
+
+        .card-description {
+            color: #6b7280;
+            line-height: 1.6;
+            margin-bottom: 1rem;
+        }
+
+        .card-meta {
+            display: flex;
+            gap: 1rem;
+            flex-wrap: wrap;
+        }
+
+        .card-tag {
+            display: inline-block;
+            background: #e0e7ff;
+            color: #4f46e5;
+            padding: 0.25rem 0.75rem;
+            border-radius: 12px;
+            font-size: 0.85rem;
+            font-weight: 500;
+        }
+
+        /* Modal */
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.6);
+            z-index: 2000;
+            align-items: center;
+            justify-content: center;
+            backdrop-filter: blur(4px);
+        }
+
+        .modal.active {
+            display: flex;
+        }
+
+        .modal-content {
+            background: white;
+            border-radius: 16px;
+            max-width: 800px;
+            max-height: 85vh;
+            width: 90%;
+            overflow: hidden;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            animation: modalSlideIn 0.3s ease-out;
+        }
+
+        @keyframes modalSlideIn {
+            from {
+                opacity: 0;
+                transform: translateY(-30px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .modal-header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 1.5rem 2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .modal-title {
+            font-size: 1.5rem;
+            font-weight: 700;
+        }
+
+        .modal-close {
+            background: none;
+            border: none;
+            color: white;
+            font-size: 1.75rem;
+            cursor: pointer;
+            padding: 0.25rem;
+            line-height: 1;
+            opacity: 0.9;
+            transition: opacity 0.2s;
+        }
+
+        .modal-close:hover {
+            opacity: 1;
+        }
+
+        .modal-body {
+            padding: 2rem;
+            overflow-y: auto;
+            max-height: calc(85vh - 80px);
+        }
+
+        .code-block {
+            background: #1f2937;
+            color: #e5e7eb;
+            padding: 1.5rem;
+            border-radius: 8px;
+            font-family: 'Monaco', 'Menlo', 'Courier New', monospace;
+            font-size: 0.9rem;
+            line-height: 1.6;
+            overflow-x: auto;
+            white-space: pre;
+        }
+
+        .code-block .comment {
+            color: #9ca3af;
+        }
+
+        .code-block .keyword {
+            color: #a78bfa;
+        }
+
+        .code-block .string {
+            color: #34d399;
+        }
+
+        .meta-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1rem;
+            margin: 1.5rem 0;
+        }
+
+        .meta-item {
+            background: #f9fafb;
+            padding: 1rem;
+            border-radius: 8px;
+            border-left: 4px solid #667eea;
+        }
+
+        .meta-label {
+            color: #667eea;
+            font-size: 0.85rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            margin-bottom: 0.5rem;
+            font-weight: 600;
+        }
+
+        .meta-value {
+            color: #1f2937;
+            font-size: 1.1rem;
+            font-weight: 600;
+        }
+
+        /* Charts */
+        .help {
+            position: relative;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 1.25rem;
+            height: 1.25rem;
+            margin-left: 0.5rem;
+            border-radius: 50%;
+            background: #667eea;
+            color: white;
+            font-size: 0.8rem;
+            font-weight: 700;
+            vertical-align: middle;
+            cursor: help;
+            user-select: none;
+        }
+
+        .help-text {
+            visibility: hidden;
+            opacity: 0;
+            position: absolute;
+            left: 50%;
+            bottom: calc(100% + 10px);
+            transform: translateX(-50%);
+            width: 360px;
+            max-width: 80vw;
+            padding: 0.875rem 1rem;
+            background: #1f2937;
+            color: #e5e7eb;
+            border-radius: 8px;
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+            font-size: 0.875rem;
+            font-weight: 400;
+            line-height: 1.6;
+            text-align: left;
+            white-space: normal;
+            pointer-events: none;
+            transition: opacity 0.2s;
+            z-index: 100;
+        }
+
+        .help-text strong {
+            color: white;
+        }
+
+        /* Arrow pointing down at the badge */
+        .help-text::after {
+            content: "";
+            position: absolute;
+            top: 100%;
+            left: 50%;
+            transform: translateX(-50%);
+            border: 6px solid transparent;
+            border-top-color: #1f2937;
+        }
+
+        .help:hover .help-text,
+        .help:focus .help-text,
+        .help:focus-visible .help-text {
+            visibility: visible;
+            opacity: 1;
+        }
+
+        .chart-container {
+            position: relative;
+            height: 400px;
+            margin: 2rem 0;
+        }
+
+        /* Tables */
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 1.5rem 0;
+            font-size: 0.95rem;
+        }
+
+        th {
+            background: #667eea;
+            color: white;
+            padding: 1rem;
+            text-align: left;
+            font-weight: 600;
+        }
+
+        td {
+            padding: 0.875rem 1rem;
+            border-bottom: 1px solid #e5e7eb;
+        }
+
+        tr:hover {
+            background: #f9fafb;
+        }
+
+        .metric {
+            font-weight: 600;
+            color: #1f2937;
+        }
+
+        .overhead {
+            color: #dc2626;
+            font-weight: 600;
+        }
+
+        .overhead.low {
+            color: #059669;
+        }
+
+        .overhead.medium {
+            color: #d97706;
+        }
+
+        /* Findings Box */
+        .findings {
+            background: #eff6ff;
+            border-left: 4px solid #3b82f6;
+            padding: 1.5rem;
+            border-radius: 8px;
+            margin: 2rem 0;
+        }
+
+        .findings h3 {
+            color: #1e40af;
+            margin-bottom: 1rem;
+        }
+
+        .findings ul {
+            margin-left: 1.5rem;
+        }
+
+        .findings li {
+            margin: 0.75rem 0;
+            color: #1e3a8a;
+            line-height: 1.6;
+        }
+
+        /* Footer */
+        .footer {
+            text-align: center;
+            padding: 2rem;
+            color: #6b7280;
+            font-size: 0.9rem;
+        }
+
+        /* Percentile Cards */
+        .percentile-card {
+            background: white;
+            border: 2px solid #e5e7eb;
+            border-radius: 12px;
+            padding: 1.5rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .percentile-card-header {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            margin-bottom: 1.25rem;
+            padding-bottom: 0.75rem;
+            border-bottom: 2px solid #667eea;
+        }
+
+        .percentile-badge {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 0.5rem 1rem;
+            border-radius: 8px;
+            font-size: 1.25rem;
+            font-weight: 700;
+        }
+
+        .percentile-title {
+            font-size: 1.1rem;
+            color: #6b7280;
+        }
+
+        .comparison-grid {
+            display: grid;
+            gap: 1rem;
+        }
+
+        .profile-comparison {
+            background: #f9fafb;
+            border-radius: 8px;
+            padding: 1rem;
+            border-left: 4px solid #667eea;
+        }
+
+        .profile-name {
+            font-size: 1rem;
+            font-weight: 600;
+            color: #667eea;
+            margin-bottom: 0.75rem;
+        }
+
+        .waf-configs {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+            gap: 0.75rem;
+        }
+
+        .waf-config-item {
+            background: white;
+            padding: 0.75rem;
+            border-radius: 6px;
+            border: 1px solid #e5e7eb;
+        }
+
+        .config-name {
+            font-size: 0.75rem;
+            color: #6b7280;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            margin-bottom: 0.25rem;
+        }
+
+        .config-value {
+            font-size: 1.1rem;
+            font-weight: 700;
+            color: #1f2937;
+            margin-bottom: 0.25rem;
+        }
+
+        .config-overhead {
+            font-size: 0.85rem;
+            font-weight: 600;
+        }
+
+        .config-overhead.baseline {
+            color: #6b7280;
+        }
+
+        .config-overhead.low {
+            color: #059669;
+        }
+
+        .config-overhead.medium {
+            color: #d97706;
+        }
+
+        .config-overhead.high {
+            color: #dc2626;
+        }
+
+        /* Architecture Diagram */
+        .arch-diagram {
+            background: #f9fafb;
+            border: 2px solid #e5e7eb;
+            border-radius: 12px;
+            padding: 2rem;
+            margin: 2rem 0;
+            overflow-x: auto;
+        }
+
+        .arch-flow {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 1.5rem;
+            min-width: 800px;
+            margin: 2rem 0;
+        }
+
+        .arch-component {
+            background: white;
+            border: 2px solid #667eea;
+            border-radius: 12px;
+            padding: 1.5rem;
+            min-width: 140px;
+            text-align: center;
+            box-shadow: 0 2px 8px rgba(102, 126, 234, 0.15);
+        }
+
+        .arch-component.source {
+            border-color: #3b82f6;
+        }
+
+        .arch-component.gateway {
+            border-color: #8b5cf6;
+            background: linear-gradient(135deg, #f9fafb 0%, #eff6ff 100%);
+        }
+
+        .arch-component.waf {
+            border-color: #ec4899;
+            background: linear-gradient(135deg, #fdf2f8 0%, #fce7f3 100%);
+        }
+
+        .arch-component.backend {
+            border-color: #10b981;
+        }
+
+        .arch-icon {
+            font-size: 2.5rem;
+            margin-bottom: 0.5rem;
+        }
+
+        .arch-title {
+            font-weight: 700;
+            color: #1f2937;
+            margin-bottom: 0.25rem;
+            font-size: 1rem;
+        }
+
+        .arch-subtitle {
+            font-size: 0.85rem;
+            color: #6b7280;
+        }
+
+        .arch-arrow {
+            font-size: 2rem;
+            color: #667eea;
+            font-weight: 300;
+        }
+
+        .arch-details {
+            background: white;
+            border: 1px solid #e5e7eb;
+            border-radius: 8px;
+            padding: 1.5rem;
+            margin-top: 2rem;
+        }
+
+        .arch-details h4 {
+            color: #374151;
+            margin-bottom: 1rem;
+            font-size: 1.1rem;
+        }
+
+        .arch-steps {
+            list-style: none;
+            counter-reset: step-counter;
+        }
+
+        .arch-steps li {
+            counter-increment: step-counter;
+            margin: 1rem 0;
+            padding-left: 3rem;
+            position: relative;
+        }
+
+        .arch-steps li::before {
+            content: counter(step-counter);
+            position: absolute;
+            left: 0;
+            top: 0;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            width: 2rem;
+            height: 2rem;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 700;
+            font-size: 0.9rem;
+        }
+
+        .arch-steps li strong {
+            color: #667eea;
+        }
+
+        /* Test Matrix */
+        .matrix-container {
+            background: white;
+            border: 1px solid #e5e7eb;
+            border-radius: 8px;
+            padding: 1.5rem;
+            margin: 2rem 0;
+            overflow-x: auto;
+        }
+
+        .matrix-legend {
+            display: flex;
+            gap: 2rem;
+            margin-bottom: 1.5rem;
+            padding: 1rem;
+            background: #f9fafb;
+            border-radius: 8px;
+        }
+
+        .matrix-legend-item {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .matrix-legend-icon {
+            width: 20px;
+            height: 20px;
+            border-radius: 4px;
+            border: 2px solid #e5e7eb;
+        }
+
+        .matrix-legend-icon.completed {
+            background: #10b981;
+            border-color: #059669;
+        }
+
+        .matrix-legend-icon.missing {
+            background: #fee2e2;
+            border-color: #dc2626;
+        }
+
+        .matrix-table {
+            width: 100%;
+            border-collapse: separate;
+            border-spacing: 0;
+        }
+
+        .matrix-table th {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 1rem;
+            text-align: center;
+            font-weight: 600;
+            position: sticky;
+            top: 0;
+            z-index: 10;
+        }
+
+        .matrix-table th:first-child {
+            text-align: left;
+            border-top-left-radius: 8px;
+        }
+
+        .matrix-table th:last-child {
+            border-top-right-radius: 8px;
+        }
+
+        .matrix-table td {
+            padding: 0.75rem;
+            text-align: center;
+            border: 1px solid #e5e7eb;
+        }
+
+        .matrix-table td:first-child {
+            text-align: left;
+            font-weight: 600;
+            background: #f9fafb;
+            color: #667eea;
+        }
+
+        .matrix-cell {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 0.25rem;
+        }
+
+        .matrix-status {
+            width: 32px;
+            height: 32px;
+            border-radius: 6px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.25rem;
+        }
+
+        .matrix-status.completed {
+            background: #d1fae5;
+            color: #059669;
+        }
+
+        .matrix-status.missing {
+            background: #fee2e2;
+            color: #dc2626;
+        }
+
+        .matrix-metrics {
+            font-size: 0.75rem;
+            color: #6b7280;
+        }
+
+        .matrix-summary {
+            margin-top: 1.5rem;
+            padding: 1rem;
+            background: #eff6ff;
+            border-radius: 8px;
+            border-left: 4px solid #3b82f6;
+        }
+
+        .matrix-summary-stats {
+            display: flex;
+            gap: 2rem;
+            margin-top: 0.75rem;
+        }
+
+        .matrix-summary-stat {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .matrix-summary-value {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: #1f2937;
+        }
+
+        .matrix-summary-label {
+            font-size: 0.85rem;
+            color: #6b7280;
+        }
+
+        /* Utilities */
+        .hidden {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <!-- Navigation Bar -->
+    <nav class="navbar">
+        <div class="navbar-content">
+            <a href="#" class="navbar-brand">🛡️ Coraza WAF Performance</a>
+            <ul class="navbar-menu">
+                <li class="navbar-item">
+                    <a class="navbar-link active" data-section="architecture">Architecture</a>
+                </li>
+                <li class="navbar-item">
+                    <a class="navbar-link" data-section="scenario">Scenario</a>
+                </li>
+                <li class="navbar-item">
+                    <a class="navbar-link" data-section="profiles">Profiles</a>
+                </li>
+                <li class="navbar-item">
+                    <a class="navbar-link" data-section="rulesets">WAF Rulesets</a>
+                </li>
+                <li class="navbar-item">
+                    <a class="navbar-link" data-section="matrix">Test Matrix</a>
+                </li>
+                <li class="navbar-item">
+                    <a class="navbar-link" data-section="percentile">Performance Results</a>
+                </li>
+            </ul>
+        </div>
+    </nav>
+
+    <div class="container">
+        <!-- Architecture Section -->
+        <section id="architecture" class="section">
+            <h2 class="section-title">Architecture & Traffic Flow</h2>
+
+            <div class="arch-diagram">
+                <div class="arch-flow">
+                    <div class="arch-component source">
+                        <div class="arch-icon">🔄</div>
+                        <div class="arch-title">Fortio</div>
+                        <div class="arch-subtitle">Load Generator</div>
+                    </div>
+
+                    <div class="arch-arrow">→</div>
+
+                    <div class="arch-component gateway">
+                        <div class="arch-icon">🚪</div>
+                        <div class="arch-title">Istio Gateway</div>
+                        <div class="arch-subtitle">Envoy Proxy</div>
+                    </div>
+
+                    <div class="arch-arrow">→</div>
+
+                    <div class="arch-component waf">
+                        <div class="arch-icon">🛡️</div>
+                        <div class="arch-title">Coraza WAF</div>
+                        <div class="arch-subtitle">WASM Plugin</div>
+                    </div>
+
+                    <div class="arch-arrow">→</div>
+
+                    <div class="arch-component backend">
+                        <div class="arch-icon">📦</div>
+                        <div class="arch-title">Backend</div>
+                        <div class="arch-subtitle">Echo Service</div>
+                    </div>
+                </div>
+
+                <div class="arch-details">
+                    <h4>Request Flow Details</h4>
+                    <ul class="arch-steps">
+                        <li>
+                            <strong>Fortio Load Generator</strong> generates HTTP requests at a fixed rate (500 QPS) with 16 concurrent connections.
+                            Runs as a pod inside the cluster with direct access to the Gateway service.
+                        </li>
+                        <li>
+                            <strong>Istio Gateway</strong> receives the request via Envoy proxy.
+                            The Gateway is managed by Istio using the <code>openshift-default</code> GatewayClass on OpenShift 4.22.18.
+                        </li>
+                        <li>
+                            <strong>Coraza WAF WASM Plugin</strong> (optional, depending on test configuration) inspects the request.
+                            Runs inside the Envoy proxy as a WebAssembly module. Rules are statically embedded (not cache-polled) for consistent performance measurement.
+                            The WAF evaluates all configured rules (__RULE_COUNT_LIST__ depending on ruleset) and either allows or blocks the request.
+                        </li>
+                        <li>
+                            <strong>Backend Echo Service</strong> receives allowed requests and returns a simple HTTP response.
+                            This service just echoes back request details - no actual application logic.
+                            Used as a consistent endpoint for measuring gateway + WAF overhead.
+                        </li>
+                        <li>
+                            <strong>Response travels back</strong> through the same path: Backend → WAF (if enabled) → Gateway → Fortio.
+                            Total latency (request + response) is measured and reported at various percentiles (p50, p95, p99).
+                        </li>
+                    </ul>
+                </div>
+
+                <div class="arch-details" style="margin-top: 1.5rem;">
+                    <h4>Key Components</h4>
+                    <div class="meta-grid">
+                        <div class="meta-item">
+                            <div class="meta-label">Operator</div>
+                            <div class="meta-value">coraza-kubernetes-operator v0.5.0</div>
+                        </div>
+                        <div class="meta-item">
+                            <div class="meta-label">WAF Engine</div>
+                            <div class="meta-value">Coraza (libcoraza)</div>
+                        </div>
+                        <div class="meta-item">
+                            <div class="meta-label">WASM Runtime</div>
+                            <div class="meta-value">Envoy proxy-wasm</div>
+                        </div>
+                        <div class="meta-item">
+                            <div class="meta-label">Platform</div>
+                            <div class="meta-value">OpenShift 4.22.18</div>
+                        </div>
+                        <div class="meta-item">
+                            <div class="meta-label">Service Mesh</div>
+                            <div class="meta-value">Istio v1.27.5</div>
+                        </div>
+                        <div class="meta-item">
+                            <div class="meta-label">Namespace</div>
+                            <div class="meta-value">waf-perf</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="arch-details" style="margin-top: 1.5rem;">
+                    <h4>What We're Measuring</h4>
+                    <div class="findings">
+                        <ul>
+                            <li><strong>Baseline (WAF OFF):</strong> Pure Istio Gateway + Envoy overhead without any WAF filtering. This is our reference point.</li>
+                            <li><strong>WAF Overhead:</strong> Additional latency introduced by the Coraza WASM plugin when evaluating security rules. Calculated as: (WAF latency - Baseline latency) / Baseline latency.</li>
+                            <li><strong>Rule Count Impact:</strong> How the number of rules (__WAF_RULE_COUNT_LIST__) affects latency. More rules = more inspection work = higher latency.</li>
+                            <li><strong>Request Shape Impact:</strong> How request complexity (simple GET, query parameters, headers) affects WAF overhead. CRS rules iterate over ARGS and HEADERS, so more data = more work.</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Scenario Section -->
+        <section id="scenario" class="section">
+            <h2 class="section-title">Test Scenario</h2>
+
+            <div class="cards-grid">
+                __SCENARIO_CARD__
+            </div>
+        </section>
+
+        <!-- Profiles Section -->
+        <section id="profiles" class="section">
+            <h2 class="section-title">Load Profiles</h2>
+            <p class="section-subtitle">Click on a profile to view its detailed configuration</p>
+
+            <div class="cards-grid">
+                __PROFILE_CARDS__
+            </div>
+        </section>
+
+        <!-- WAF Rulesets Section -->
+        <section id="rulesets" class="section">
+            <h2 class="section-title">WAF Rulesets</h2>
+
+            <div class="cards-grid">
+                __RULESET_CARDS__
+            </div>
+        </section>
+
+        <!-- Test Matrix Section -->
+        <section id="matrix" class="section">
+            <h2 class="section-title">Test Matrix</h2>
+            <p class="section-subtitle">All test permutations: Profiles × Rulesets × Scenario</p>
+
+            <div class="matrix-container">
+                <div class="matrix-legend">
+                    <div class="matrix-legend-item">
+                        <div class="matrix-legend-icon completed"></div>
+                        <span>Test Completed</span>
+                    </div>
+                    <div class="matrix-legend-item">
+                        <div class="matrix-legend-icon missing"></div>
+                        <span>Test Missing</span>
+                    </div>
+                </div>
+
+                __TEST_MATRIX_TABLE__
+            </div>
+        </section>
+
+        <!-- Percentile Section -->
+        <section id="percentile" class="section">
+            <h2 class="section-title">Performance Results</h2>
+
+            __PERCENTILE_CARDS__
+
+            <h3 style="margin-top: 2rem; margin-bottom: 1rem; color: #374151;">Latency by Load Profile</h3>
+            <div class="chart-container">
+                <canvas id="latencyChart"></canvas>
+            </div>
+
+            <h3 style="margin-top: 3rem; margin-bottom: 1rem; color: #374151;">CRS Overhead by Request Profile</h3>
+            <div class="chart-container">
+                <canvas id="overheadChart"></canvas>
+            </div>
+
+            <!-- NEW ADVANCED VISUALIZATIONS -->
+
+            <h3 style="margin-top: 3rem; margin-bottom: 1rem; color: #374151;">📊 Latency Distribution Across Percentiles</h3>
+            <div class="chart-container" style="height: 500px;">
+                <canvas id="latencyDistributionChart"></canvas>
+            </div>
+
+            <h3 style="margin-top: 3rem; margin-bottom: 1rem; color: #374151;">🔄 Request Complexity Impact</h3>
+            <div class="chart-container">
+                <canvas id="complexityScalingChart"></canvas>
+            </div>
+
+            <h3 style="margin-top: 3rem; margin-bottom: 1rem; color: #374151;">⚙️ Rules Efficiency (Marginal Cost per Rule)</h3>
+            <div class="chart-container">
+                <canvas id="rulesEfficiencyChart"></canvas>
+            </div>
+
+            <h3 style="margin-top: 3rem; margin-bottom: 1rem; color: #374151;">📈 Tail Latency Ratio (Predictability)<span class="help" tabindex="0" role="note" aria-label="Answers one question: is the WAF making latency erratic? Each bar is p99 divided by p50, so it measures how spread out latency is, independently of how slow it is. A bar of 1.0 would mean the slowest 1% of requests are just as fast as a typical one, with no tail at all. Low, even bars mean the WAF adds latency consistently on every request, rather than letting some requests stall.">?<span class="help-text">Answers one question: <strong>is the WAF making latency erratic?</strong> Each bar is p99 divided by p50, so it measures how <em>spread out</em> latency is, independently of how slow it is. A bar of 1.0 would mean the slowest 1% of requests are just as fast as a typical one — no tail at all. Low, even bars mean the WAF adds latency consistently on every request, rather than letting some requests stall.</span></span></h3>
+            <div class="chart-container" style="height: 450px;">
+                <canvas id="tailRatioChart"></canvas>
+            </div>
+
+            <h3 style="margin-top: 3rem; margin-bottom: 1rem; color: #374151;">🔥 Latency Heatmap (p95)</h3>
+            <div style="overflow-x: auto; margin-top: 1rem;">
+                <table id="heatmapTable" style="width: 100%; border-collapse: collapse;">
+                    <thead>
+                        <tr style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white;">
+                            <th style="padding: 1rem; text-align: left; border: 1px solid #e5e7eb;">Load Profile</th>
+                            <th style="padding: 1rem; text-align: center; border: 1px solid #e5e7eb;">Off</th>
+                            <th style="padding: 1rem; text-align: center; border: 1px solid #e5e7eb;">Minimal</th>
+                            <th style="padding: 1rem; text-align: center; border: 1px solid #e5e7eb;">Medium</th>
+                            <th style="padding: 1rem; text-align: center; border: 1px solid #e5e7eb;">CRS</th>
+                        </tr>
+                    </thead>
+                    <tbody id="heatmapBody">
+                        <!-- Populated by JavaScript -->
+                    </tbody>
+                </table>
+            </div>
+
+            <!-- Profile Tables -->
+            __PROFILE_TABLES__
+        </section>
+
+        <!-- Findings Section -->
+        <section id="findings" class="section">
+            <h2 class="section-title">Key Findings</h2>
+
+            __KEY_FINDINGS__
+        </section>
+
+        <!-- Footer -->
+        <div class="footer">
+            <p>Generated on __GENERATED_DATE__ | __TEST_DURATION__</p>
+            <p>Coraza Kubernetes Operator __OPERATOR_VERSION__ • __PLATFORM__ • __ISTIO_VERSION__</p>
+        </div>
+    </div>
+
+    <!-- Modals -->
+    <div id="modal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <div class="modal-title" id="modalTitle"></div>
+                <button class="modal-close" onclick="closeModal()">✕</button>
+            </div>
+            <div class="modal-body" id="modalBody"></div>
+        </div>
+    </div>
+
+    <script>
+        // Data injected by generator
+        const DATA = /*__DATA__*/null;
+
+        // Navigation
+        document.querySelectorAll('.navbar-link').forEach(link => {
+            link.addEventListener('click', function(e) {
+                e.preventDefault();
+
+                // Update active state
+                document.querySelectorAll('.navbar-link').forEach(l => l.classList.remove('active'));
+                this.classList.add('active');
+
+                // Scroll to section
+                const sectionId = this.dataset.section;
+                const section = document.getElementById(sectionId);
+                if (section) {
+                    section.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                }
+            });
+        });
+
+        // Modal functions
+        function openModal(title, content) {
+            document.getElementById('modalTitle').textContent = title;
+            document.getElementById('modalBody').innerHTML = content;
+            document.getElementById('modal').classList.add('active');
+            document.body.style.overflow = 'hidden';
+        }
+
+        function openRulesetModal(rulesetId) {
+            if (!DATA || !DATA.rulesets || !DATA.rulesets[rulesetId]) {
+                openModal('Error', '<p>Ruleset data not found</p>');
+                return;
+            }
+
+            const rulesetTitles = {
+                'off': 'OFF (No WAF)',
+                'minimal': 'Minimal Ruleset',
+                'medium': 'Medium Ruleset',
+                'crs': 'CRS (CoreRuleSet)'
+            };
+
+            const title = rulesetTitles[rulesetId] || 'Ruleset';
+            const content = DATA.rulesets[rulesetId];
+            const modalContent = `<div class="code-block">${content}</div>`;
+
+            openModal(title, modalContent);
+        }
+
+        function closeModal() {
+            document.getElementById('modal').classList.remove('active');
+            document.body.style.overflow = '';
+        }
+
+        // Close modal on backdrop click
+        document.getElementById('modal').addEventListener('click', function(e) {
+            if (e.target === this) {
+                closeModal();
+            }
+        });
+
+        // Close modal on Escape key
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'Escape') {
+                closeModal();
+            }
+        });
+
+        // Charts
+        if (DATA) {
+            // Latency chart
+            const latencyCtx = document.getElementById('latencyChart').getContext('2d');
+            new Chart(latencyCtx, DATA.latencyChart);
+
+            // Overhead chart
+            const overheadCtx = document.getElementById('overheadChart').getContext('2d');
+            new Chart(overheadCtx, DATA.overheadChart);
+
+            // NEW CHARTS
+
+            // Latency Distribution Chart
+            if (DATA.latencyDistributionChart) {
+                const distCtx = document.getElementById('latencyDistributionChart').getContext('2d');
+                new Chart(distCtx, DATA.latencyDistributionChart);
+            }
+
+            // Complexity Scaling Chart
+            if (DATA.complexityScalingChart) {
+                const complexCtx = document.getElementById('complexityScalingChart').getContext('2d');
+                new Chart(complexCtx, DATA.complexityScalingChart);
+            }
+
+            // Rules Efficiency Chart
+            if (DATA.rulesEfficiencyChart) {
+                const effCtx = document.getElementById('rulesEfficiencyChart').getContext('2d');
+                new Chart(effCtx, DATA.rulesEfficiencyChart);
+            }
+
+            // Tail Ratio Chart
+            if (DATA.tailRatioChart) {
+                const tailCtx = document.getElementById('tailRatioChart').getContext('2d');
+                new Chart(tailCtx, DATA.tailRatioChart);
+            }
+
+            // Heatmap Table
+            if (DATA.heatmapData) {
+                renderHeatmap(DATA.heatmapData);
+            }
+        }
+
+        // Render heatmap table with color coding
+        function renderHeatmap(data) {
+            const tbody = document.getElementById('heatmapBody');
+            tbody.innerHTML = '';
+
+            // Find min/max for color scaling
+            let allValues = [];
+            data.forEach(row => {
+                ['off', 'minimal', 'medium', 'crs'].forEach(config => {
+                    if (row[config] !== null && row[config] !== undefined) {
+                        allValues.push(row[config]);
+                    }
+                });
+            });
+
+            const minVal = Math.min(...allValues);
+            const maxVal = Math.max(...allValues);
+
+            // Generate rows
+            data.forEach(row => {
+                const tr = document.createElement('tr');
+
+                // Profile name
+                const profileTd = document.createElement('td');
+                profileTd.style.padding = '1rem';
+                profileTd.style.fontWeight = '600';
+                profileTd.style.border = '1px solid #e5e7eb';
+                profileTd.textContent = row.profile;
+                tr.appendChild(profileTd);
+
+                // Config values
+                ['off', 'minimal', 'medium', 'crs'].forEach(config => {
+                    const td = document.createElement('td');
+                    td.style.padding = '1rem';
+                    td.style.textAlign = 'center';
+                    td.style.border = '1px solid #e5e7eb';
+                    td.style.fontWeight = '600';
+                    td.style.fontSize = '1.1rem';
+
+                    const value = row[config];
+                    if (value !== null && value !== undefined) {
+                        // Calculate color intensity (green = fast, red = slow)
+                        const normalized = (value - minVal) / (maxVal - minVal);
+                        const hue = (1 - normalized) * 120; // 120 = green, 0 = red
+                        const saturation = 70;
+                        const lightness = 85;
+
+                        td.style.backgroundColor = `hsl(${hue}, ${saturation}%, ${lightness}%)`;
+                        td.textContent = value.toFixed(2) + ' ms';
+
+                        // Dark text for light backgrounds
+                        if (lightness > 50) {
+                            td.style.color = '#1f2937';
+                        }
+                    } else {
+                        td.textContent = 'N/A';
+                        td.style.backgroundColor = '#f3f4f6';
+                        td.style.color = '#9ca3af';
+                    }
+
+                    tr.appendChild(td);
+                });
+
+                tbody.appendChild(tr);
+            });
+        }
+    </script>
+</body>
+</html>

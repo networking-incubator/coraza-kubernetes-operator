@@ -1,27 +1,27 @@
 ---
-title: "Observability demo on KIND"
+title: "Observability demo"
 linkTitle: "Observability demo"
 weight: 46
-description: "Run Prometheus, Grafana, and Coraza control-plane dashboards on a local KIND cluster."
+description: "Run Prometheus, Grafana, and Coraza control-plane dashboards on a Kubernetes cluster."
 ---
 
-This guide walks through the local observability demo: Prometheus Operator, Grafana,
+This guide walks through the observability demo: Prometheus Operator, Grafana,
 Coraza operator metrics scraping, and the bundled control-plane dashboards.
 
 ## Prerequisites
 
-- Docker (or Podman where supported by KIND)
-- `kubectl`, `helm`, `kind`, `curl`, `go`, `jq`
-- A completed [KIND cluster setup]({{< relref "install-kubernetes-helm" >}}) via `make cluster.kind`
+- Access to a Kubernetes or OpenShift cluster
+- Istio installed with Gateway API support
+- Coraza operator deployed
+- `kubectl`, `helm`, `curl`, `go`, `jq`
 
-The observability demo **does not** recreate the KIND cluster. It layers monitoring on
-top of an existing cluster.
+The observability demo layers monitoring on top of an existing cluster.
 
 ## Quick start
 
 ```bash
-# 1. Create the KIND cluster (Istio, Gateway, operator) — unchanged from other guides
-make cluster.kind
+# 1. Ensure cluster is ready with Istio and Coraza operator
+# (See DEVELOPMENT.md for cluster setup)
 
 # 2. Deploy Prometheus, enable operator monitoring, seed demo workload
 make observability.demo
@@ -180,8 +180,7 @@ on the Overview dashboard.
 make observability.prometheus.undeploy
 ```
 
-This removes the `monitoring` namespace and Prometheus RBAC. The Coraza operator and
-KIND cluster remain (`make clean.cluster.kind` destroys the cluster).
+This removes the `monitoring` namespace and Prometheus RBAC. The Coraza operator remains deployed.
 
 ## Makefile reference
 

@@ -23,21 +23,12 @@ Kubernetes Gateway API and Istio.
 
 All samples must be deployed to the same namespace.
 
-On a generic cluster, create the Gateway first, then apply the Kustomize bundle:
+Create the Gateway first, then apply the Kustomize bundle:
 
 ```bash
 kubectl apply -f config/samples/gateway.yaml
 kubectl apply -k config/samples/
 ```
-
-For the KIND integration cluster (`make cluster.kind`), the Gateway is created automatically in `integration-tests`.
-Apply only the workload bundle:
-
-```bash
-kubectl apply -n integration-tests -k config/samples/
-```
-
-This is also what `make observability.demo.workload` uses.
 
 ## Test
 
@@ -62,7 +53,5 @@ kubectl logs deploy/coraza-gateway-istio
 
 ```bash
 kubectl delete -k config/samples/
-kubectl delete -f config/samples/gateway.yaml   # only if you applied gateway.yaml above
+kubectl delete -f config/samples/gateway.yaml
 ```
-
-On the KIND integration cluster, omit the `gateway.yaml` delete; the Gateway is owned by `make cluster.kind`.

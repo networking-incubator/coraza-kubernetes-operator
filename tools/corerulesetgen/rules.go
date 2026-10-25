@@ -17,8 +17,10 @@ func ruleValidationAnnotationKey() string {
 var (
 	secDirectiveLine = regexp.MustCompile(`^(SecRule|SecAction|SecMarker)\b`)
 	ruleIDRe         = regexp.MustCompile(`id:(\d+)`)
-	// chain in ModSecurity rule actions (e.g. ,chain, or ,chain")
-	chainActionRe = regexp.MustCompile(`,\s*chain\s*(?:,|")`)
+	// chain in ModSecurity rule actions (e.g. ,chain, or ,chain"). CRS puts the
+	// action list on continuation lines, so a backslash-newline can sit between
+	// the comma and "chain" - those must be skipped as well as plain whitespace.
+	chainActionRe = regexp.MustCompile(`,[\s\\]*chain[\s\\]*(?:,|")`)
 )
 
 // trimLineEnd trims trailing CR/LF, spaces, and tabs. Continuation lines
@@ -45,7 +47,12 @@ func splitIntoRules(content string) []string {
 			}
 			continue
 		}
-		if !strings.HasPrefix(stripped, "#") && secDirectiveLine.MatchString(stripped) {
+		// Chained SecRules are indented in CRS, so test the directive with
+		// leading whitespace removed. Matching on the raw line left indented
+		// chain members unparsed, and dropping a chain starter then orphaned
+		// them into standalone rules.
+		directive := strings.TrimLeft(stripped, " \t")
+		if !strings.HasPrefix(directive, "#") && secDirectiveLine.MatchString(directive) {
 			current = []string{line}
 			if strings.HasSuffix(stripped, "\\") {
 				inMultiline = true

@@ -96,3 +96,44 @@ SecRule ARGS "@rx y" "id:20,phase:2,pass"
 	require.NotContains(t, out, "id:20")
 	require.True(t, strings.Contains(strings.Join(warns, ""), "SecRule chain"))
 }
+
+// Regression: CRS writes chained rules with the continuation on its own
+// indented line (",\" then "    chain\"") and the chained SecRule indented too.
+// Both forms were invisible to the splitter and the chain detector, so ignoring
+// a chain starter left its children behind as standalone rules. For 920420 that
+// orphan scored every request carrying a Content-Type and 403'd all POSTs.
+func TestProcessFileContent_dropsIndentedCrsStyleChain(t *testing.T) {
+	content := `SecRule REQUEST_HEADERS:Content-Type "@rx ^[^;\s]+" \
+    "id:920420,\
+    phase:1,\
+    block,\
+    capture,\
+    t:none,\
+    msg:'Request content type is not allowed by policy',\
+    severity:'CRITICAL',\
+    setvar:'tx.content_type=|%{tx.0}|',\
+    chain"
+    SecRule TX:content_type "!@within %{tx.allowed_request_content_type}" \
+        "t:lowercase,\
+        setvar:'tx.inbound_anomaly_score_pl1=+%{tx.critical_anomaly_score}'"
+
+SecRule ARGS "@rx keep-me" "id:999999,phase:2,pass"
+`
+	dir := t.TempDir()
+	path := filepath.Join(dir, "REQUEST-920-PROTOCOL-ENFORCEMENT.conf")
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+
+	out, _, err := processFileContent(path, map[string]struct{}{"920420": {}}, nil, false)
+	require.NoError(t, err)
+
+	require.NotContains(t, out, "920420", "chain starter must be dropped")
+	require.NotContains(t, out, "TX:content_type",
+		"chained child must be dropped with its starter, not left orphaned")
+	require.Contains(t, out, "999999", "unrelated rules must survive")
+}
+
+func TestSecRuleHasChainAction_continuationBeforeChain(t *testing.T) {
+	// ",\" + newline + indentation + `chain"` is the standard CRS layout.
+	block := "SecRule A \"@rx x\" \\\n    \"id:1,\\\n    phase:1,\\\n    chain\""
+	require.True(t, secRuleHasChainAction(block))
+}

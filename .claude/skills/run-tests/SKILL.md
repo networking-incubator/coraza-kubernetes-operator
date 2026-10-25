@@ -20,7 +20,7 @@ Ask yourself: what changed? Pick the narrowest test tier that covers the change.
 | Tier | Build tag | What it tests | When to use |
 |------|-----------|---------------|-------------|
 | Unit | _(none)_ | Controller logic via envtest, utils, API types | Code-only changes (no cluster needed) |
-| Integration | `integration` | Full operator in a Kind cluster + Istio | Operator behavior, gateway proxying, metrics |
+| Integration | `integration` | Full operator in a Kubernetes/OpenShift cluster + Istio | Operator behavior, gateway proxying, metrics |
 | Conformance | `conformance` | CoreRuleSet parity via go-ftw against a live gateway | Rule processing changes |
 | E2E | `e2e` | End-to-end scenarios | Full-stack validation |
 
@@ -40,7 +40,6 @@ Other variables (needed only for integration/conformance/e2e):
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `KIND_CLUSTER_NAME` | `coraza-kubernetes-operator-integration` | Kind cluster name |
 | `ISTIO_GATEWAY_REVISION` | `coraza` | `istio.io/rev` label on test Gateways |
 | `K8S_VERSION` | _(latest GA)_ | envtest binary version for unit tests |
 
@@ -64,7 +63,13 @@ ISTIO_VERSION=<version> go test ./... -count=1 -timeout 180s
 
 ### 4. Running integration, conformance, or e2e tests
 
-These tests run against a real Kind cluster. **Before running them, you MUST ensure the cluster has the latest code:**
+These tests run against a real Kubernetes/OpenShift cluster. **Before running them, you MUST ensure the cluster has the latest code:**
+
+#### Prerequisites
+
+- Access to a Kubernetes or OpenShift cluster
+- Istio installed (use `istioctl install --set profile=demo --set revision=coraza -y` if not installed)
+- Coraza operator deployed (`make deploy`)
 
 #### Step 1: Regenerate manifests if RBAC, CRDs, or Helm templates changed
 
@@ -75,31 +80,22 @@ make manifests generate    # Regenerate CRDs and RBAC from markers
 make helm.sync             # Sync generated CRDs + RBAC into the Helm chart
 ```
 
-#### Step 2: Rebuild and reload the operator image
+#### Step 2: Redeploy the operator with updated manifests
 
-If any Go code changed (controllers, cmd, etc.):
-
-```bash
-make build.image           # Build the operator container image
-make cluster.load-images   # Load it into the Kind cluster
-```
-
-#### Step 3: Redeploy the operator with updated manifests
-
-If manifests changed (Step 1) or the image changed (Step 2):
+If manifests changed (Step 1) or Go code changed:
 
 ```bash
 make deploy                # Helm upgrade --install with current image + chart
 ```
 
-If only the image changed (no manifest changes), a rollout restart suffices:
+If only minor Go code changes, a rollout restart suffices:
 
 ```bash
 kubectl rollout restart deployment/coraza-kubernetes-operator -n coraza-system
 kubectl rollout status deployment/coraza-kubernetes-operator -n coraza-system --timeout=60s
 ```
 
-#### Step 4: Run the tests
+#### Step 3: Run the tests
 
 ```bash
 make test.integration    # Integration tests
@@ -107,12 +103,7 @@ make test.conformance    # Conformance tests (also runs coreruleset parity check
 make test.e2e            # End-to-end tests
 ```
 
-If the Kind cluster does not exist yet:
-```bash
-make cluster.kind        # Creates cluster + installs Istio + MetalLB + deploys operator
-```
-
-**Common failure mode:** "engine never gets ready" or resources stuck in Progressing almost always means the operator image in the cluster is stale, or RBAC/CRDs are out of sync with the code. Rebuild, reload, and redeploy.
+**Common failure mode:** "engine never gets ready" or resources stuck in Progressing almost always means the operator image in the cluster is stale, or RBAC/CRDs are out of sync with the code. Redeploy with `make deploy`.
 
 ### 5. Linting
 

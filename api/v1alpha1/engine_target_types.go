@@ -46,7 +46,7 @@ type EngineTarget struct {
 	// +required
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=63
-	// +kubebuilder:validation:XValidation:rule="!format.dns1035Label().validate(self).hasValue()",message="name must be a valid DNS-1035 label (lowercase, starts with a letter)"
+	// +kubebuilder:validation:XValidation:rule="self.matches('^[a-z]([-a-z0-9]*[a-z0-9])?$')",message="name must be a valid DNS-1035 label (lowercase, starts with a letter)"
 	Name string `json:"name,omitempty"`
 
 	// provider identifies the infrastructure provider that manages the
