@@ -202,7 +202,9 @@ spec:
 
 def deploy_istio_sail(context: str) -> None:
     """Install the Sail operator via Helm and wait for readiness."""
-    istio_version = require_env("ISTIO_VERSION")
+    # Sail chart releases track Istio minor versions; the operator version is
+    # independent of the Istio patch version installed by the Istio CR.
+    sail_version = os.environ.get("SAIL_OPERATOR_VERSION", "1.31.1")
 
     print("Deploying Istio Sail Operator")
     run(f"helm repo add sail-operator {SAIL_REPO}")
@@ -217,7 +219,7 @@ def deploy_istio_sail(context: str) -> None:
     if result.returncode != 0:
         run(
             f"helm install sail-operator sail-operator/sail-operator "
-            f"--version {istio_version} "
+            f"--version {sail_version} "
             f"--namespace sail-operator --kube-context {context}"
         )
     else:
