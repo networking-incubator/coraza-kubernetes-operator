@@ -1,11 +1,13 @@
 # Native ECDS distribution for Coraza configuration
 
-- **Status:** architectural proposal for peer review; no implementation yet.
+- **Status:** architectural proposal for peer review; not merged or released. An unmerged ECDS MVP informs the refinements below, but is not functionality delivered on `main`.
 - **Scope:** Coraza Kubernetes Operator (CKO), coraza-proxy-wasm, and their Istio integration.
 - **Baseline inspected:** CKO commit `38b5b06`, upstream Istio 1.30.3, and OpenShift cluster-ingress-operator commit `286c3a6fd1b6b2b7edd990fa5a1fe5ea5507c1bf` with Istio 1.30.4 templates.
-- **Date:** 2026-10-23.
+- **Date:** 2026-10-23; revised 2026-10-27 against the agreed MVP scope and unmerged prototype.
 
 This document defines the intended behavior and the contracts needed to implement it. It is not an ordered implementation plan. Decisions agreed during architecture discussion are distinguished from proposed engineering details and integration checks that belong to implementation.
+
+The prototype reviewed for this revision is `ecds/mvp` at `5de300a` ([fork PR #3](https://github.com/rikatz/coraza-kubernetes-operator/pull/3)), with the local companion plugin at `31bca96`. References to prototype evidence do not assert a released artifact, full platform support, or completion of the acceptance scenarios. The [MVP boundary](#mvp-boundary-and-follow-on-work) distinguishes the first delivery from later work.
 
 For a first review, read the [decision record](#4-decision-record), [architecture](#6-architecture-and-ownership), [authentication](#10-authentication-authorization-and-transport), [binary delivery](#11-binary-delivery-without-gateway-customization), and [HA behavior](#14-high-availability-and-restart-behavior). The [examples](#16-examples) and [validation requirements](#19-validation-requirements-for-implementation) define the implementation-facing contract; [review focus](#22-review-focus) identifies the main tradeoffs. A [separate read-only ECDS controller](#21-future-decision-separate-read-only-ecds-controller) is a future deployment option, not part of this implementation scope.
 
@@ -21,13 +23,13 @@ The binary source is an HTTPS URL serving raw WASM bytes, paired with their SHA-
 
 ## 2. Why change the current model?
 
-Today, RuleSource and RuleData provide desired rule content. RuleSet reconciliation assembles and validates it, then places rule text and data files in a process-local HTTP cache. Engine reconciliation creates a WasmPlugin containing cache coordinates, an authentication token, polling settings, and Engine settings. The plugin polls for a revision and downloads changes before compiling a new WAF.
+In the pre-ECDS baseline inspected above, RuleSource and RuleData provide desired rule content. RuleSet reconciliation assembles and validates it, then places rule text and data files in a process-local HTTP cache. Engine reconciliation creates a WasmPlugin containing cache coordinates, an authentication token, polling settings, and Engine settings. The plugin polls for a revision and downloads changes before compiling a new WAF.
 
 This spreads configuration delivery across the operator, an HTTP revision protocol, polling logic inside WASM, and WasmPlugin updates. Credential renewal also changes plugin configuration. The current cache is populated only by the leader, while the Service can route requests to replicas without that state. The chart therefore explicitly does not support HA.
 
 ECDS moves subscription, reconnect, configuration delivery, and acknowledgement into Envoy's native control-plane protocol. The expected benefits are:
 
-- Event-driven updates without a five-second rule polling interval.
+- Event-driven updates without a rule polling interval.
 - No credential-driven WASM reconfiguration.
 - A single complete Engine configuration, including its assembled rules and data files.
 - Explicit ACK/NACK visibility, with no claim that an ACK proves continuing WAF health.
@@ -52,6 +54,16 @@ ECDS does not make delivery globally atomic, eliminate configuration caching, or
 9. Keep existing namespace isolation, validation, unsupported-rule policy, target conflict handling, and observability semantics.
 10. Make all effective changes content-addressed and reproducible across replicas and restarts.
 11. Serve the bundled default WASM module directly from CKO without external artifact access in air-gapped deployments.
+
+### MVP boundary and follow-on work
+
+The first delivery targets upstream Istio on KIND: complete rules and RuleData, deterministic accepted hashes, leader-only acceptance/provisioning, all-replica publication, authenticated and authorized ECDS, TLS, native bootstrap policy, and the bundled real WASM module. The prototype's recorded from-scratch demo used Istio 1.31.1; the original inspection used 1.30.3. Neither record establishes OpenShift compatibility or passes the entire validation campaign by implication.
+
+The MVP keeps one complete inline configuration per Engine. Module bytes remain a remote HTTPS reference with SHA-256 verification, never inline ECDS bytes or Gateway-mounted files. The current plugin's versioned JSON and embedded-CRS filesystem behavior are temporary: the team intends to replace that plugin. Preserve the operator's assembly/acceptance and ECDS boundaries while allowing the plugin-specific payload and build dependency to change.
+
+Custom external module-host trust/allowlists, multi-module release rollover, OpenShift service-serving certificates and proxy-image verification, HA chaos/soak hardening, and the full acceptance campaign are follow-on work. The all-replica architecture remains in scope; this cut does not turn a single-replica demo into a verified HA deployment. OLM packaging is outside this MVP. The separate serving deployment and incremental RuleData distribution remain future decisions in Sections 21 and 24.
+
+Distinguish revised decisions from unfinished deployment profiles. Bounded readiness, hard-invalidation handling, recovery versions and acceptance-gated bootstrap sequencing below supersede the original stronger guarantees in response to MVP findings; they are not promises to restore those guarantees later. Conversely, the legacy-image preflight/tombstones and certificate reuse are not present in the reviewed prototype, and custom URL/digest fields lack the complete external-host policy. Keep those as follow-on gaps before claiming the corresponding upgrade, release-rollover, or external-host support, not new blockers to merging the development MVP. See [follow-on work](#follow-on-work-and-deferred-prototype-findings) for next steps; merging the MVP and closing the recorded five review findings are separate work items.
 
 ### Non-goals
 
@@ -78,17 +90,24 @@ ECDS does not make delivery globally atomic, eliminate configuration caching, or
 | Convergence | Different workers and Gateway replicas may briefly enforce different valid versions; document and observe this caveat. |
 | CKO outage or invalid replacement | Continue enforcing the last accepted configuration indefinitely while its process retains it. |
 | Initial startup | Explicit fail-open allows traffic without an initial valid configuration; the default remains fail-closed. |
-| Invalid or missing rule references | Retain the previous configuration and mark desired state degraded. Deleting the Engine deliberately detaches its WAF. |
+| Invalid or missing rule references | Reject the replacement and mark desired state degraded. Established proxies retain their WAF; retention of a distributable accepted record has the hard-invalidation exceptions in Section 7. Deleting the Engine deliberately detaches its WAF. |
 | Persistence | Historical payloads remain in process memory. Accepted hashes in Kubernetes do not constitute a historical payload store. |
-| Ready | Preserve provisioning semantics. ACK/NACK and delivery state are reported separately. |
+| Ready | Preserve acceptance/provisioning semantics, not proxy ACK or runtime health. Delivery diagnostics remain separate; an Engine-visible NACK signal is deferred follow-on work. |
 | Istio attachment | EnvoyFilter directly configures CKO upstream clusters and ECDS filter attachment; no WasmPlugin or TrafficExtension resources. |
-| HTTP rule server | Keep its implementation disabled, with no active rule endpoints. Decide a future enablement flag/contract when needed. |
+| HTTP rule server | Keep its implementation, token helpers and prerequisite code disabled, with no active rule endpoints. Retain `spec.ruleSetCacheServer` unchanged but ignored. Decide a future enablement flag/contract when needed. |
 | Binary delivery | CKO bundles and serves the default raw WASM module plus an asset manifest for air-gapped use; Envoy downloads by HTTPS and verifies SHA-256. Custom URL/digest pairs remain possible. |
 | Gateway modification | EnvoyFilter-based proxy configuration only; no pod-template customization or pod rollouts, including for binary updates. |
 | Authentication | Kubernetes ServiceAccount tokens validated with TokenReview, replacing the proposed Istio certificate companion model. |
 | Authorization | A ServiceAccount may consume configurations only for Engines targeting Gateways using that identity. Shared ServiceAccounts share access. |
-| Platform scope | Upstream Istio and OpenShift Gateway Istiod share one protocol and authentication model. |
+| Platform scope | One protocol/authentication model; upstream Istio is the MVP validation target. OpenShift image capability and integration verification are post-MVP. |
 | HA | One leader reconciles; every replica serves accepted configuration. This supersedes the earlier single-replica proposal. |
+| Cold readiness | Bound initial reconstruction waiting rather than allowing one unreconstructable Engine to keep every replica unready indefinitely. Report unavailable Engines; Ready does not guarantee identical snapshots. |
+| NACK recovery | Permit bounded derived wire versions and VM IDs to overcome Envoy's rejected-config cache. Keep the accepted content hash unchanged; stop on exhaustion. |
+| Bootstrap sequencing | Gate weakening on a matching accepted record, not on proxy ACKs or fleet activation. After attachment convergence, explicit fail-open can allow traffic while ECDS is unavailable. |
+| API migration | Breaking change within `waf.k8s.coraza.io/v1alpha1`; no new API version or conversion webhook. Reject legacy image requests explicitly, rather than silently selecting the bundled module. |
+| Empty rules | `RuleSet.spec.emptyRulesPolicy`: `Reject` by default, `Allow` only as an explicit no-op opt-in. Empty content is not missing content. |
+| Transport and trust | One TLS listener with ALPN and HTTP/gRPC request dispatch. Use a Helm-managed or supplied certificate Secret and inject the public CA through Envoy configuration; no Gateway volume. |
+| Plugin replacement | The current consumer and its JSON/CRS-alias details are temporary. Keep plugin replacement separate from operator-side acceptance and ECDS transport. |
 | Future deployment split | A separate read-only ECDS controller is an alternative for later security/placement decisions, not a current implementation goal. |
 | Remaining integration details | Verify during implementation; revisit a decision only when a concrete limitation requires it. |
 
@@ -105,7 +124,8 @@ ECDS does not make delivery globally atomic, eliminate configuration caching, or
 | Last-known-good configuration | The most recent successfully retained configuration in a CKO replica or Envoy process. It is not a durable revision history. |
 | Binary digest | The SHA-256 of the exact raw WASM bytes fetched by Envoy. |
 | Embedded WASM bundle | Raw WASM release bytes and a manifest packaged with CKO. It contains no Engine rules, RuleData, or credentials. |
-| Resource version | The content hash identifying a complete ECDS resource. It is distinct from Kubernetes resourceVersion and an xDS response nonce. |
+| Accepted content version | The deterministic hash of a complete effective Engine configuration. It is distinct from Kubernetes resourceVersion and an xDS response nonce. |
+| Recovery version | A bounded, derived ECDS wire version used to retry a rejected configuration. It does not approve new content or change the accepted hash in Kubernetes. |
 
 ## 6. Architecture and ownership
 
@@ -145,7 +165,7 @@ flowchart LR
 | Optional custom WASM availability | The configured HTTPS host, independent of CKO's embedded assets |
 | Binary download, digest verification, and code caching | Envoy native remote code loader |
 | Ordinary Gateway deployment and routing | Istio/OpenShift platform |
-| CKO-specific upstream clusters and HTTP filter attachment | Leader-managed EnvoyFilter |
+| CKO-specific upstream connections and HTTP filter attachment | Leader-managed EnvoyFilter |
 | Token validation and Engine authorization | Every serving CKO replica |
 | WAF creation and per-request transactions | Coraza WASM plugin |
 | Existing central ALS collectors and provider configuration | Platform, as today |
@@ -168,7 +188,7 @@ This is an opaque Envoy resource identifier, not a Kubernetes object name. Names
 
 The resource is a full envoy.config.core.v3.TypedExtensionConfig. Its typed_config is envoy.extensions.filters.http.wasm.v3.Wasm. The nested PluginConfig includes VM/code information, the native WASM failure policy, and JSON runtime configuration. ECDS supplies the complete native filter configuration for the EnvoyFilter attachment. See [Envoy's WASM interface][wasm-proto].
 
-The proposed JSON schema is versioned and self-contained:
+The MVP JSON schema for the current ECDS-aware plugin is versioned and self-contained. It is a consumer contract, not a permanent cross-plugin API; replacing the plugin may change this encoding without changing Kubernetes rule inputs or the ECDS acceptance model:
 
 ```json
 {
@@ -177,6 +197,7 @@ The proposed JSON schema is versioned and self-contained:
   "namespace": "shop",
   "engine_uid": "11111111-1111-4111-8111-111111111111",
   "driver_type": "wasm",
+  "empty_rules_policy": "Reject",
   "failure_policy": "fail",
   "enable_filter_state_logs": true,
   "rules": "SecRuleEngine On\nSecRule ARGS \"@contains attack\" \"id:1001,phase:2,deny,status:403\"",
@@ -186,7 +207,9 @@ The proposed JSON schema is versioned and self-contained:
 }
 ```
 
-Data values are base64-encoded bytes in JSON, matching Go's encoding of byte slices. Preserve the existing RuleSource order, RuleData merge behavior, filename validation, and complete RuleSet validation. Source-level validation opt-outs do not bypass aggregate validation. Enforce encoded and decoded size limits before allocating or compiling the payload. An empty desired ruleset must not accidentally become a pass-through configuration.
+Data values are base64-encoded bytes in JSON, matching Go's encoding of byte slices. Preserve the existing RuleSource order, RuleData merge behavior, filename validation, and complete RuleSet validation. Source-level validation opt-outs do not bypass aggregate validation. Validate with an in-memory filesystem, not the operator host filesystem; reject unsupported host-writing directives and references the consumer cannot resolve. Consumer-specific embedded aliases require explicit validation and conformance checks, not an assumption that the operator and plugin embed identical files or Coraza versions.
+
+Bound decoded data, file count and encoded message size, accounting for base64 expansion, escaped keys and the ECDS envelope. Reject an undeliverable configuration before Engine acceptance, not only when publishing. Recheck limits on publication and validate installation limits against consumer caps at startup. The reviewed prototype uses a 16 MiB message limit, 8 MiB decoded-data default and 4096 files; these are sizing evidence, not permanent API guarantees. Reject empty assembled rules by default; `empty_rules_policy: Allow` explicitly permits a no-op WAF and must not be inferred from missing inputs.
 
 Runtime JSON contains no token, token file contents, polling interval, HTTP rule-server address, or per-pod connection identifier. A reconnect does not change it.
 
@@ -201,7 +224,7 @@ engineVersion = SHA256(canonical(complete effective Engine configuration))
 
 The Engine configuration includes Engine identity, RuleSet content, failure policy, observability settings, the WASM byte digest, code location, VM settings, and a rendering-schema version. It excludes response nonces, status timestamps, Kubernetes resourceVersion, credentials, and replica identity. The version itself is outside the content being hashed, avoiding a recursive hash definition.
 
-Use `sha256:<64 hexadecimal characters>` for the ECDS version. Reverting exactly to an older effective configuration may reproduce its older version; xDS versions are opaque, not monotonic counters. Rule text is byte-sensitive: changing whitespace or comments can change the version. Metadata unrelated to effective behavior must not.
+Use `sha256:<64 hexadecimal characters>` for the accepted content version. Reverting exactly to an older effective configuration may reproduce its older version; xDS versions are opaque, not monotonic counters. Rule text is byte-sensitive: changing whitespace or comments can change the version. Metadata unrelated to effective behavior must not. The bounded recovery exception in Section 9 may derive a wire version and VM ID without changing this accepted content identity.
 
 The binary SHA-256 identifies the raw response bytes, not a compressed archive or container manifest. CKO includes the supplied digest in the resource; Envoy verifies downloaded bytes against it. CKO validation of a reference does not assert that its remote content is available or correct.
 
@@ -212,9 +235,11 @@ Add accepted-content metadata to existing statuses, without a new revision CRD. 
 | Resource | Required information |
 | --- | --- |
 | RuleSet | Accepted assembled-content hash and the generation at which it was accepted |
-| Engine | Accepted complete-resource version, accepted RuleSet UID/hash, accepted Engine generation, rendering-schema version, binary HTTPS URL, and raw WASM digest |
+| Engine | Accepted complete-resource version, accepted RuleSet UID/hash, accepted Engine generation, rendering-schema version, binary HTTPS URL, raw WASM digest, and effective failure policy |
 
-These records contain identifiers and digests, not rules, data files, credentials, or compiled WAF objects. Preserve the previous accepted record when desired inputs become invalid, while updating conditions to describe the failure.
+These records contain identifiers and effective settings, not rules, data files, credentials, or compiled WAF objects. Preserve the previous accepted record during ordinary wait states, while updating conditions to describe the failure. Clear an unjustified Engine record on a missing/recreated RuleSet, content rejected as invalid by the current validator, definitive missing inputs encountered during Engine assembly, or delivery-limit rejection. A missing dependency may first be observed as a RuleSet wait/degraded state that retains the record; it does not imply universal immediate clearing.
+
+Clearing a record withdraws the replica's distributable snapshot; it is not remote erasure of an already active proxy WAF and must not send an empty successful ECDS response. A fresh proxy may then have only its attachment's bootstrap policy until acceptance recovers. Do not claim historical-config availability or guaranteed fail-closed behavior merely because the record was cleared: bootstrap depends on the delivered attachment and chosen failure policy.
 
 **Ready alone never authorizes publication.** A referenced RuleSource can change without incrementing its RuleSet's generation. Each serving replica must reconstruct the exact bytes and compare their hash with the accepted record before publishing. The Engine record must also match its complete reconstructed configuration, so policy-only changes cannot escape the gate.
 
@@ -225,11 +250,11 @@ These records contain identifiers and digests, not rules, data files, credential
 1. Observe desired inputs and enforce current target-conflict and namespace rules.
 2. Assemble and validate the RuleSet, including data dependencies and unsupported-rule policy.
 3. Validate the effective binary HTTPS URL and SHA-256 syntax. When the Engine omits them, select the default from CKO's verified embedded manifest and its advertised asset URL. Do not fetch a remote binary during reconciliation; Envoy verifies downloaded bytes. CKO verifies its own bundled bytes against their manifest at startup.
-4. Construct and validate the effective Engine configuration, compute its version, and prepare the leader's immutable local candidate. A prepared candidate must not be served as accepted before its accepted metadata is published.
+4. Construct and validate the effective Engine configuration, including delivery limits, and compute its version. A rendered candidate must not be served as accepted before its accepted metadata is published.
 5. Recheck input identities/versions before acceptance. If inputs changed during assembly, retry; do not approve a stale mixed read.
-6. Apply the required EnvoyFilter and existing optional Telemetry/NetworkPolicy resources. The bootstrap attachment must honor the stricter of the policy currently in force and the requested policy: tighten immediately, and defer a weakening change until the accepted resource is active.
+6. Apply the NetworkPolicy before the EnvoyFilter; optional Telemetry failure must not block WAF provisioning. The bootstrap attachment must honor the stricter of its current and requested policy: tighten immediately, and defer weakening until the new configuration has an accepted record.
 7. Publish accepted metadata and the corresponding conditions atomically within each status patch. RuleSet acceptance precedes Engine acceptance. Mark Engine Ready only after the local candidate is prepared and attachment is provisioned.
-8. Activate the accepted candidate locally. Other replicas consume the accepted record and verify it through the shared publication path. Ready describes the leader's prepared/provisioned state; local serving follows acceptance and other replicas may lag. It does not wait for every proxy's ACK.
+8. Publish through the same reconstruction/hash gate on the leader and all other replicas. Ready describes accepted/provisioned state; local serving follows acceptance and replicas may lag. It does not wait for a proxy ACK, nor does acceptance prove proxy activation.
 
 The implementation must account for a leader crash between these operations. Partial progress must result in bootstrap behavior or continued last-known-good enforcement, never an unvalidated publication. No global transaction across several Kubernetes objects is assumed.
 
@@ -288,7 +313,7 @@ Use the Envoy v3 ExtensionConfigDiscoveryService from go-control-plane. The prop
 | Resource type URL | type.googleapis.com/envoy.config.core.v3.TypedExtensionConfig |
 | Nested filter type URL | type.googleapis.com/envoy.extensions.filters.http.wasm.v3.Wasm |
 | Subscription | Explicit Engine-instance resource name; no unrestricted wildcard access |
-| Version | Stable complete-resource content hash |
+| Version | Accepted content hash; bounded derived recovery versions as described below |
 | Nonce | Response/stream correlation only; may differ across replicas |
 | ACK/NACK | Correlated to the response nonce and the client's reported accepted version/error |
 | Reconnect | Reauthenticate, reauthorize, establish a new subscription, and reconcile client/server versions |
@@ -299,7 +324,9 @@ ACK-only requests may omit fields; use the established stream's subscription sta
 
 Do not send an empty successful response to represent invalid desired state, a missing local reconstruction, or a temporary cache miss: omission can be interpreted as resource removal. A known authorized resource that cannot currently be reconstructed should retain its established snapshot, wait for availability, or return an appropriate retryable stream error. An unknown or unauthorized Engine must not leak its content or existence through detailed errors.
 
-A NACK is visible operationally and does not create a new content version or trigger an unbounded republish loop. A reconnect, bootstrap retry, or explicit recovery attempt may resend the same version; the consumer must not rebuild a WAF when the effective resource is unchanged. An ACK is protocol acceptance, not proof that every worker remains healthy or that traffic was evaluated successfully.
+A NACK must not approve new content, roll back other proxies, or trigger an unbounded republish loop. Ordinary reconnects retain the same version and should not rebuild an unchanged effective resource. Cold remote-module startup needs a specific exception: target Envoy behavior can remember a rejected typed-config hash, so reconnecting or resending only the same version does not reliably retry it.
+
+Permit a bounded recovery attempt that derives both an ECDS wire version and VM ID from the accepted resource, leaving rules, data, policy and binary reference unchanged. The reviewed MVP uses `<accepted-version>.retryN` and a corresponding VM-ID suffix, bounded by a 20-second window and 10 attempts; an ACK clears the budget. These are recovery identities, not new leader acceptance or an alteration of the status hash. Expose exhaustion, stop retrying, and preserve last-known-good or bootstrap behavior. This deliberately relaxes the original same-version-only retry assumption, not the hash gate. An ACK remains protocol acceptance, not proof that every worker is healthy or traffic was evaluated successfully.
 
 Set explicit limits for message size, decoded data, subscriptions per identity, concurrent streams, pending watches, and queued updates. The supported RuleSet envelope must fit the chosen limits; do not inherit an accidental default that rejects the project's full CRS scenario. These values and retry timers belong to implementation measurements, not new Engine polling options.
 
@@ -342,20 +369,15 @@ Live inspection of both pods for the OpenShift Gateway `openshift-ingress/waf-te
 
 Reusing the standard token means CKO accepts a credential also valid for the Kubernetes API; per-Engine authorization remains mandatory. No dedicated token projection or Istio agent is required.
 
-Support for a Gateway image is conditional on this inspection: the image must expose the standard projected token readably, with an audience CKO explicitly accepts, without Gateway template or mount changes. The OpenShift Gateway image meets that condition. The upstream Istio Gateway image remains a deferred integration check, so the upstream platform claim is limited to images that pass it. If another supported Gateway lacks a suitable existing token, report that concrete incompatibility during implementation; do not silently edit its pod template or fall back to anonymous access.
+Support for a Gateway image is conditional on this inspection: the image must expose the standard projected token readably, with an audience CKO explicitly accepts, without Gateway template or mount changes. The inspected OpenShift Gateway meets the token-mount condition, but this alone does not verify its ECDS credential extensions. The unmerged upstream Istio prototype provides evidence for the selected mechanism below; OpenShift's complete proxy-image verification remains post-MVP. If another supported Gateway lacks a suitable existing token, report that concrete incompatibility during implementation; do not silently edit its pod template or fall back to anonymous access.
 
 ### Reading and renewing the token
 
 The required client behavior is to read the current file for each new RPC/stream and handle Kubernetes projected-volume rotation. A token path placed in initial_metadata is just a string; it does not read the file.
 
-Two existing Envoy mechanisms are implementation candidates:
+Select Google gRPC with file-based metadata credentials for the MVP, using `credentials_factory_name: envoy.grpc_credentials.file_based_metadata` and the corresponding `from_plugin` call credentials. The factory setting is required: the default credentials factory can ignore the file-based call credentials. Google gRPC connects directly to the advertised CKO address with explicit CA trust; it does not require an Envoy-managed ECDS cluster. The binary fetch still uses a separate Envoy cluster without credentials.
 
-| Candidate | Evidence and unresolved detail |
-| --- | --- |
-| Google gRPC file-based metadata credentials | Reads a DataSource when producing RPC metadata. Requires verifying Google gRPC and the credentials extension in the actual upstream/OpenShift proxy images. |
-| Native envoy_grpc plus upstream credential injector | Uses Envoy's upstream HTTP filter chain. Must prove the complete token-file-to-GenericSecret path, rotation, and extension availability without a new mount, sidecar, custom SDS provider, or circular dependency on authenticated CKO. |
-
-See [GrpcService][grpc-service], [file-based metadata credentials][file-credentials], and [generic credential injection][generic-credentials]. Select the smallest mechanism that passes the supported-image tests; do not introduce an abstraction for multiple credential backends in advance.
+Native `envoy_grpc` plus an upstream credential injector is an alternative only if a target image proves Google gRPC unavailable. It would need a complete mount-free credential path and an ECDS cluster; it is not a second MVP backend or an assumed fallback. See [GrpcService][grpc-service], [file-based metadata credentials][file-credentials], and [generic credential injection][generic-credentials].
 
 Authentication metadata cannot be replaced on an already open stream. CKO must end or reauthenticate streams before the presented token expires, with bounded lifetime and jitter to avoid synchronized reconnects. Reauthorize subscription changes and changes to the Engine/Gateway identity mapping. Bounded TokenReview revalidation must also cover idle long-lived streams; transport keepalive alone is not reauthentication. TokenReview unavailability must not grant a new identity access. Existing Envoy configuration continues to enforce while reconnection is retried.
 
@@ -380,9 +402,11 @@ Workloads using the same ServiceAccount share that authentication identity and c
 
 ServiceAccount tokens authenticate clients; ordinary server TLS protects the token and authenticates CKO. No client certificate or Istio mTLS is required by this contract.
 
-OpenShift installation can use the platform service-serving certificate mechanism; upstream installation supplies a serving certificate and trust bundle through deployment configuration. CKO may mount its own serving-certificate Secret; Gateway pods remain unchanged.
+Use a Helm-managed CA and serving-certificate Secret, or a supplied Secret containing `ca.crt`, `tls.crt` and `tls.key`. Certificates must include the advertised operator Service DNS names. Reuse generated material across Helm upgrades rather than rotating the CA as a side effect of rendering the chart. OpenShift service-serving certificates are an optional post-MVP installation profile, not an MVP prerequisite.
 
-The trust-bundle source object, the component that watches it, the permitted Envoy delivery mechanism, the verified server name, and the CA rotation order are deferred to a future architecture decision. Until that decision, these invariants apply: distribute the public trust bundle through Envoy configuration without adding a Gateway volume; verify the server name as well as the certificate chain; never substitute insecure-skip-verification for trust distribution; and keep CA material out of the Engine payload. A CA update may update a cluster or reconnect a stream, but it must not cause an otherwise unchanged WASM resource to reload.
+CKO mounts its own Secret; Gateway pods remain unchanged. The leader's attachment provisioning reads the public CA from installation configuration and injects it into Google gRPC SSL credentials and the binary-fetch cluster's TLS context. Verify the advertised server name as well as the certificate chain; never use insecure-skip-verification. CA and token material stay outside the Engine runtime payload and accepted-content hash.
+
+CA rotation must establish overlapping trust in Envoy before replacing the serving certificate, verify existing streams, reconnects and new connections, then retire the old root. Serving-leaf reload alone does not implement that sequence. The reviewed prototype loads the attachment CA at startup and the chart regenerates its default certificate material, so Secret reuse and coordinated trust refresh remain follow-on work; do not claim seamless CA rotation. Watch/reconcile ownership for live CA refresh must be specified and validated before that support is advertised. A trust update may reconnect ECDS but must not reload an otherwise unchanged WAF.
 
 ## 11. Binary delivery without Gateway customization
 
@@ -416,17 +440,15 @@ flowchart LR
 
 Replace Engine.spec.driver.wasm.image and imagePullSecret with a paired HTTPS URL and raw-byte SHA-256, proposed as Engine.spec.driver.wasm.url and Engine.spec.driver.wasm.sha256. An Engine omitting both uses the bundled module identified by CKO's embedded manifest and the corresponding operator-Service HTTPS URL. If either override is supplied, both are required. Replicas render the same accepted resolved pair.
 
-The release packages both the actual raw WASM bytes and a small manifest containing the module's version, asset filename and SHA-256. A manifest containing only a remote reference would not satisfy the air-gapped requirement. The packaging mechanism may use Go embedding or immutable assets in the operator image; it must not fetch or unpack an OCI image at runtime. The manifest is release metadata, not a Gateway-mounted ConfigMap or a store of WAF rules.
+The release packages both the actual raw WASM bytes and a small manifest containing the module's version, asset filename and SHA-256. A manifest containing only a remote reference would not satisfy the air-gapped requirement. The packaging mechanism may use Go embedding or immutable assets in the operator image; it must not fetch or unpack an OCI image at runtime. The manifest is release metadata, not a Gateway-mounted ConfigMap or a store of WAF rules. Commit a minimal valid empty WASM fixture for developer builds/tests, but replace it and its manifest with the real consumer module for a demo or release; the fixture is not a WAF.
 
-An illustrative manifest is:
+An illustrative single-module MVP manifest is:
 
 ```yaml
 schema_version: 1
-default_module: coraza-waf-1.0.0
-modules:
-  - name: coraza-waf-1.0.0
-    file: plugin.wasm
-    sha256: cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+module: coraza-waf-1.0.0
+file: plugin.wasm
+sha256: cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
 ```
 
 Every replica verifies its bundled files against the manifest before becoming serving-ready. The leader uses the manifest to select the default pair; followers use the accepted pair recorded in status. Serve the immutable bytes from a digest-addressed path, for example:
@@ -435,17 +457,19 @@ Every replica verifies its bundled files against the manifest before becoming se
 GET https://<cko-service>:18080/wasm/<64-hex-sha256>.wasm
 ```
 
-The proposed default is an HTTP asset route on the same TLS Service/listener as ECDS, using an explicit HTTP/gRPC dispatch. A separate binary listener is not required. A binary request returns raw module bytes with application/wasm content, not a manifest, archive, redirect, or generated rule payload. Allow only packaged manifest entries; no uploads, directory listing, arbitrary filesystem access, or remote-fetch fallback.
+Use one TLS Service/listener for ECDS and bundled assets, with ALPN for HTTP/2 and HTTP/1.1. HTTP/2 request dispatch must distinguish gRPC from ordinary asset requests: `/wasm/<digest>.wasm` must work over both HTTP versions, rather than routing every HTTP/2 request to gRPC. A separate binary listener is not required. A binary request returns raw module bytes with application/wasm content, not a manifest, archive, redirect, or generated rule payload. Allow only packaged manifest entries; no uploads, directory listing, arbitrary filesystem access, or remote-fetch fallback. Do not inline module bytes into ECDS resources.
 
 Bundled release WASM is a non-secret artifact. Its read-only route does not require an ECDS ServiceAccount bearer token; ECDS and rule content remain authenticated and authorized. Use TLS verification and the existing network-access policy. Keep binary requests in a distinct upstream cluster without ECDS credential injection, even when both clusters target the same CKO Service. Disabling the legacy HTTP rule server must not disable this separate asset route or expose /rules endpoints.
 
 No registry credentials, OCI resolution/extraction, dynamic binary cache, external artifact proxy, or persistent binary volume is introduced in CKO. The packaged module is available after CKO restarts without reaching an artifact host. Gateways use Envoy's native download, code-cache and warming behavior, verifying the raw-byte digest provided through ECDS.
 
-For HA and release rollover, ready replicas must serve the bundled digests referenced by active accepted configurations. Release packaging may need to carry overlapping module versions, and a new bundled default must not be promoted while ready backends cannot supply it. Verify mixed-replica asset fetching and retries during implementation. This is binary release packaging, not durable storage of historical Engine rules.
+For HA and release rollover, ready replicas must serve the bundled digests referenced by active accepted configurations. Release packaging may need to carry overlapping module versions, and a new bundled default must not be promoted while ready backends cannot supply it. Multi-module overlap and mixed-release rollover are post-MVP; the MVP bundles one default module and must not imply that it supplies this guarantee for arbitrary mixed-version upgrades. This is binary release packaging, not durable storage of historical Engine rules.
 
 Envoy's RemoteDataSource supports an HTTP code location and SHA-256 verification; raw WASM bytes, not an OCI manifest or tar layer, must be returned. See [RemoteDataSource][remote-code]. Stable VM identity, URI, and byte digest let rule-only updates reuse code. Binary changes update the ECDS code reference and use native fetch/warming; they must not change the Gateway pod template.
 
 ### Optional external/custom binary URL
+
+This is a post-MVP deployment profile. Presence of URL/digest fields in a prototype does not establish support for arbitrary external hosts. Complete the explicit CA trust and destination-policy requirements before advertising this profile; never assume system trust roots or forward ECDS credentials.
 
 An explicit URL/digest pair may target another raw HTTPS artifact host, for example https://wasm.example.net/coraza-proxy-wasm/v1.0.0/plugin.wasm. This is an override, not a requirement for the air-gapped default. Publish and test actual raw artifact URLs in the release workflow; do not assume a release-page link or redirecting URL works in the target fetcher.
 
@@ -457,18 +481,18 @@ Do not embed credentials or short-lived signed tokens in the URL. The fetch carr
 
 The leader creates a Gateway-scoped EnvoyFilter with the current derived workload selector and Istio revision targeting. This is the sole WAF attachment mechanism; CKO creates no WasmPlugin or TrafficExtension. The EnvoyFilter adds:
 
-- A TLS HTTP/2 cluster for CKO ECDS, including the chosen token credential mechanism.
+- A Google gRPC ECDS config source with the advertised CKO address, explicit server trust and file-based token credentials. No Envoy ECDS cluster is needed for this mechanism.
 - A separate TLS binary-fetch cluster, targeting CKO's bundled asset route by default or an explicit custom host, with server trust and no ECDS ServiceAccount credential injection.
 - One HTTP filter before envoy.filters.http.router, with config_discovery pointing to CKO and the Engine-instance resource name.
 - A minimal bootstrap behavior reflecting Engine.failurePolicy.
 
-The EnvoyFilter adds the upstream clusters directly, with DNS resolution for the configured Service/host and explicit transport settings. ECDS and binary downloads therefore do not require CKO-created ServiceEntry or DestinationRule resources. The old HTTP rule-server ServiceEntry and its TLS-disabled DestinationRule are not part of this path. See [EnvoyFilter cluster addition][envoy-filter]. Kubernetes NetworkPolicy and platform egress restrictions still apply; defining a cluster does not grant network access.
+The EnvoyFilter adds the binary-fetch cluster directly, with DNS resolution and explicit transport settings; Google gRPC handles its own ECDS connection. Neither path requires CKO-created ServiceEntry or DestinationRule resources. The old HTTP rule-server ServiceEntry and its TLS-disabled DestinationRule are not part of this path. See [EnvoyFilter cluster addition][envoy-filter]. Kubernetes NetworkPolicy and platform egress restrictions still apply; configuring an upstream does not grant network access.
 
 Istiod remains responsible for normal Gateway configuration and delivers these attachment changes over its ordinary control plane. CKO must not replace the proxy's discovery address or own unrelated routing. Use one attachment owner per Engine and owner references for generated namespace-local resources.
 
-Rule-only changes do not modify the EnvoyFilter attachment. Token rotation does not modify it either. Failure-policy changes update the ECDS resource and the small bootstrap default in the attachment, so a future cold start honors the policy even before ECDS is reachable. Those two changes converge asynchronously; existing requests retain their configuration.
+Rule-only changes do not require changing the filter subscription or cluster configuration, although a candidate-version annotation may change. Token rotation does not modify the attachment. Failure-policy changes update the ECDS resource and the small bootstrap default, so a future cold start honors the policy even before ECDS is reachable. Those two changes converge asynchronously; existing requests retain their configuration.
 
-Update order is part of the contract: never weaken the attachment's bootstrap default before the accepted ECDS resource carrying the new policy exists. During convergence the bootstrap stays at the stricter of the previous and desired policy, so a Gateway restarting in that window starts no weaker than the policy already in force. Once the new resource is accepted and active, converge the bootstrap to the new policy. This covers a Gateway restarting after the ECDS resource changes but before Istiod delivers the updated attachment: it starts with the stricter bootstrap policy and converges without a rollout. Acceptance scenario 26 tests this restart window. Binary URL/digest changes update the ECDS code reference; a change to host, port, or trust also updates the binary upstream cluster. Neither change modifies the Gateway pod template or requires a rollout. Provision the required cluster before publishing a reference to it.
+Update order is part of the contract: never weaken the attachment's bootstrap default before the configuration carrying the new policy has an accepted record. During that acceptance window, retain the stricter bootstrap policy; then converge to the accepted policy. This is an acceptance gate, not a proxy-ACK or fleet-activation gate. If a proxy restarts before attachment convergence, it may temporarily use the stricter old bootstrap; after convergence, explicit fail-open applies even if ECDS is unreachable. Acceptance scenario 26 must cover both windows. Binary URL/digest changes update the ECDS code reference; a change to host, port, or trust also updates the binary upstream cluster. Neither change modifies the Gateway pod template or requires a rollout. Provision the required cluster before publishing a reference to it.
 
 ### Bootstrap has to work without a binary
 
@@ -516,9 +540,11 @@ flowchart TB
 
 All replicas maintain their own snapshots; Kubernetes stores desired inputs and accepted hashes, not a distributed go-control-plane cache. No direct replica-to-replica replication protocol is introduced. Followers' TokenReview requests are authentication operations, not competing reconciliation writes.
 
-The serving process must start its publication, xDS and bundled-asset paths without waiting for leadership. Losing leadership stops reconciliation writes, not healthy established xDS streams or asset serving. Replica liveness means the process is functioning; serving readiness requires TLS/listeners, verified embedded assets and informer synchronization, plus initial reconstruction of active accepted records. A cold replica that cannot reconstruct an existing accepted record or serve its required bundled digest must not be advertised as ready and pretend it has equivalent state.
+The serving process must start its publication, xDS and bundled-asset paths without waiting for leadership. Losing leadership stops reconciliation writes, not healthy established xDS streams or asset serving. Replica liveness means the process is functioning; serving readiness requires TLS/listeners, verified embedded assets and informer synchronization. Initial reconstruction of compatible accepted records gates readiness for a bounded window, not indefinitely: one tenant's permanently unreconstructable record must not remove every replica from the Service.
 
-An already ready replica with an in-memory accepted snapshot remains able to serve it when newer desired inputs become invalid. A cold replacement without those bytes may remain unready until desired state becomes reconstructable. This can stall CKO scale-out or rolling replacement while inputs are invalid; it is an explicit consequence of the memory-only decision. The implementation must expose the reason, not return a false Ready or delete the missing snapshot globally.
+The MVP uses a two-minute reconstruction deadline, then reports the affected records through logs/metrics and permits the replica to serve the configurations it can reconstruct. Records from an incompatible rendering schema do not gate that startup window. This deliberately replaces the original indefinite cold-readiness rule. Ready is consequently not a claim of equivalent snapshots for every Engine, and deadline expiry neither authorizes a hash mismatch nor recovers missing historical bytes. It does not bypass asset verification or establish mixed-release digest availability.
+
+An already ready replica retains its previous snapshot on reconstruction mismatch while the accepted record remains eligible. Hard invalidation/record clearing follows Section 7 and can withdraw that snapshot. A cold replacement cannot serve bytes it never reconstructed, even after its readiness deadline. Existing proxies may still retain their WAF; a fresh proxy follows its delivered bootstrap policy. Expose this per-Engine availability limit instead of claiming that all invalid/missing inputs preserve historical distribution.
 
 When an xDS-serving replica disappears, Envoy keeps its active configuration and reconnects through the Service to another ready replica. Response nonces are local to the new stream, while content versions remain reproducible. A leader change does not create a new version for identical content. Authorization is performed again on the new stream.
 
@@ -534,13 +560,14 @@ HA replicas must use a compatible rendering schema and deployment configuration.
 | --- | --- | --- |
 | No effective content change | Keep active WAF; no rebuild | Serve the same stable version |
 | Valid rules, data, policy, or observability change | Activate new valid configuration per worker; old requests finish | Receive complete accepted configuration |
-| Referenced RuleSource/RuleData/RuleSet invalid or deleted | Keep last-known-good configuration | Reconstruct only if accepted content is still available; otherwise bootstrap policy |
-| One proxy NACKs a candidate | Retain its working configuration; report NACK | Do not automatically roll back other proxies or fabricate a new version |
+| Referenced RuleSource/RuleData/RuleSet invalid or deleted | Keep the WAF already held by the proxy | Retain or clear the accepted record under Section 7; distribute only reconstructable accepted content, otherwise follow the delivered bootstrap policy |
+| One proxy NACKs a candidate | Retain its working configuration, or bootstrap if none was active; report NACK | Bounded derived-version/VM-ID recovery is allowed; do not approve new content, roll back other proxies or retry indefinitely |
 | One CKO replica fails | Keep active configuration and reconnect | Service routes to another ready replica |
 | Leader fails but other replicas run | Serving streams continue; reconciliation pauses until election | Existing ready replicas keep serving snapshots |
 | All CKO replicas fail | Keep active configuration indefinitely | A Gateway created during the outage has no ECDS attachment, WASM, or failure policy until CKO returns and provisions it; only a bootstrap attachment preinstalled independently of CKO changes that |
 | CKO returns with valid resources | Reconnect and resume updates automatically | Reconstruct accepted state and serve |
 | CKO returns after all payload copies were lost and desired rules are invalid | Existing Envoy may retain its older WAF | Historical bytes cannot be recovered from hashes; bootstrap policy applies |
+| Startup reconstruction deadline expires | Existing Envoy keeps its WAF | Replica may serve other Engines, but must report missing configurations and never bypass their hash gates |
 | Token rotates | No WAF change; next stream uses renewed token | Reauthenticate without a pod rollout or resource-version change |
 | Token expires, is revoked, or identity loses authorization | End unauthorized stream; cached WAF still enforces | Deny new access until valid authorized credentials are presented |
 | TokenReview unavailable | No new authorization based on an unverified token | Retry with bounded backoff; no anonymous fallback |
@@ -556,7 +583,7 @@ Intentional authorization revocation stops distribution; it is not remote erasur
 
 ## 16. Examples
 
-The following examples describe interfaces and generated shapes. They are not an installer or an implementation: status fields are proposed, binary hosting URLs and digests are illustrative, and attachment snippets omit the still-unverified credential and TLS cluster wiring. Do not apply the snippets to a production Gateway as a complete configuration.
+The following examples describe proposed interfaces and generated shapes, not released functionality or an installer. Binary URLs, digests and trust material are illustrative; snippets omit complete binary-cluster and deployment wiring. They use the selected Google gRPC mechanism but do not establish support for every target image. Do not apply them to a production Gateway as a complete configuration.
 
 ### Desired user resources
 
@@ -593,6 +620,7 @@ spec:
     - name: checkout-rules
   data:
     - name: checkout-data
+  emptyRulesPolicy: Reject
 ---
 apiVersion: waf.k8s.coraza.io/v1alpha1
 kind: Engine
@@ -639,11 +667,12 @@ status:
     ruleSetContentHash: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
     binaryURL: https://coraza-controller-manager.coraza-system.svc:18080/wasm/cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc.wasm
     wasmSHA256: cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+    failurePolicy: fail
 ```
 
 ### Generated filter attachment
 
-This shows the fail-closed HTTP_FILTER patch only. The actual EnvoyFilter also needs the CKO ECDS cluster with selected credentials, a separate binary-fetch cluster without those credentials, trust material, owner reference, and appropriate Istio revision targeting. With the bundled default, both clusters target CKO's Service but serve distinct authenticated-gRPC and read-only-asset purposes.
+This shows the fail-closed HTTP_FILTER patch only. The complete attachment also needs a binary-fetch cluster without ECDS credentials, real trust material, owner reference, and appropriate Istio revision targeting. Google gRPC dials CKO directly; no Envoy ECDS cluster is required. With the bundled default, both connections target CKO's Service but serve distinct authenticated-gRPC and read-only-asset purposes.
 
 ```yaml
 apiVersion: networking.istio.io/v1alpha3
@@ -675,8 +704,23 @@ spec:
                 api_type: GRPC
                 transport_api_version: V3
                 grpc_services:
-                  - envoy_grpc:
-                      cluster_name: coraza_ecds
+                  - google_grpc:
+                      target_uri: coraza-controller-manager.coraza-system.svc:18080
+                      stat_prefix: coraza_ecds
+                      credentials_factory_name: envoy.grpc_credentials.file_based_metadata
+                      channel_credentials:
+                        ssl_credentials:
+                          root_certs:
+                            inline_string: "<public CA PEM from installation configuration>"
+                      call_credentials:
+                        - from_plugin:
+                            name: envoy.grpc_credentials.file_based_metadata
+                            typed_config:
+                              "@type": type.googleapis.com/envoy.config.grpc_credential.v3.FileBasedMetadataConfig
+                              secret_data:
+                                filename: /var/run/secrets/kubernetes.io/serviceaccount/token
+                              header_key: authorization
+                              header_prefix: "Bearer "
               resource_api_version: V3
             type_urls:
               - type.googleapis.com/envoy.extensions.filters.http.wasm.v3.Wasm
@@ -727,6 +771,7 @@ resources:
               "namespace": "shop",
               "engine_uid": "11111111-1111-4111-8111-111111111111",
               "driver_type": "wasm",
+              "empty_rules_policy": "Reject",
               "failure_policy": "fail",
               "enable_filter_state_logs": false,
               "rules": "SecRuleEngine On\nSecRule ARGS \"@pmFromFile blocked.txt\" \"id:1001,phase:2,deny,status:403\"",
@@ -734,11 +779,11 @@ resources:
             }
 ```
 
-The URI contains no token and its digest is the raw WASM hash. Do not set nack_on_code_cache_miss and assume an unchanged-version notification will automatically retry a rejected first download; the selected warming/retry behavior must be tested explicitly.
+The URI contains no token and its digest is the raw WASM hash. An unchanged-version notification is not a reliable retry of a rejected first download. The bounded derived-version/VM-ID recovery in Section 9 must be tested with a cold native code cache, not inferred from the `nack_on_code_cache_miss` setting.
 
-### Candidate file-based call credential
+### Selected file-based call credential
 
-The following is only a GoogleGrpc.CallCredentials fragment. It must not be inserted into native envoy_grpc configuration. The target image must first prove support, and the complete GoogleGrpc configuration still needs its credentials factory, server TLS trust, and target address.
+The following is only a GoogleGrpc.CallCredentials fragment. It must not be inserted into native envoy_grpc configuration. Use the matching credentials factory, server TLS trust, and target address shown above; target-image support remains a validation requirement.
 
 ```yaml
 from_plugin:
@@ -757,7 +802,7 @@ The filename uses the standard ServiceAccount mount and CKO's Kubernetes API aud
 
 The existing CRD model remains: Engine targets one Gateway and references a namespace-local RuleSet, which references ordered RuleSources and RuleData. Proposed interface changes are:
 
-- Do not use Engine.spec.ruleSetCacheServer or polling settings for ECDS delivery. Retention/removal of that legacy interface and any future rule-server enablement flag are deferred decisions; the field must not implicitly activate the disabled server.
+- Retain Engine.spec.ruleSetCacheServer unchanged but deprecated and ignored for ECDS delivery. The field must not activate the disabled server; any future rule-server enablement interface remains a separate decision.
 - Add accepted-content metadata to RuleSet and Engine status as described above.
 - Replace the WASM driver's image and imagePullSecret fields with the paired raw HTTPS url and sha256. Both are omitted to use CKO's bundled module and manifest, or both are supplied for a custom host. Validate HTTPS URLs and 64-character hexadecimal SHA-256 values; there is no OCI source or image pull credential interface in this model.
 - Keep the xDS/asset listener, advertised Service address, TLS configuration, and limits in operator installation configuration, not per-Engine control-plane networking knobs. Use the standard ServiceAccount token path and Kubernetes API audience policy above as defaults; any required platform exception belongs to installation configuration. The proposed asset route shares the TLS listener; a second binary port is not required.
@@ -767,7 +812,11 @@ ECDS is the delivery mode regardless of legacy polling settings. Bundling the WA
 
 ### WASM driver API migration
 
-Removing `Engine.spec.driver.wasm.image` and `imagePullSecret` is a breaking API change, not a rolling compatibility bridge. Introduce the paired `url`/`sha256` fields in a new API version that replaces them, and ship a preflight that lists every Engine still using the image fields and blocks the storage-version switch until each is migrated. There is no automatic conversion: CKO cannot turn an OCI reference into raw HTTPS bytes, so conversion may carry the fields across but cannot satisfy the new contract. An operator must set both `url` and `sha256`, or omit both to use CKO's bundled module. Until an Engine is migrated, the new version reports an explicit condition and never silently substitutes the bundled module for the requested image. This API migration is independent of the non-goal that excludes a rolling compatibility bridge for the old polling plugin.
+The agreed change is breaking **within `waf.k8s.coraza.io/v1alpha1`**, not a new API version or conversion webhook. Replace the active `image`/`imagePullSecret` provisioning interface with paired `url`/`sha256`, retaining the old schema fields only as CEL-rejected tombstones so an explicit legacy request cannot silently become a bundled-default request. CKO cannot convert OCI references into raw HTTPS bytes.
+
+Before provisioning, a startup preflight must identify stored Engines still using those fields and block the offending Engines with an explicit migration condition. The default must not stop serving unrelated Engines; installation may opt into process-wide failure (`--fail-on-legacy-engines=false` by default). Users must remove the legacy fields and either set both URL/digest fields or intentionally select the bundled module. This is not a rolling compatibility bridge for the polling plugin.
+
+The reviewed MVP removes the old Go/schema fields in place but has neither the tombstones nor this preflight. That is an outstanding upgrade-safety gap, not evidence that migration is automatic or that the requirement was dropped. Resolve it before claiming support for upgrading stored legacy Engines.
 
 ### Retained HTTP rule server: disabled
 
@@ -781,7 +830,7 @@ If a future consumer needs HTTP rules, decide its enablement flag, configuration
 
 | Existing area | Architectural change |
 | --- | --- |
-| api/v1alpha1 | Accepted metadata, URL/digest/default-bundle interface, updated descriptions/defaulting/validation; defer final treatment of legacy polling fields |
+| api/v1alpha1 | In-place breaking WASM interface, legacy-image rejection/preflight, accepted metadata, URL/digest/default-bundle interface, explicit empty-rules policy; retain the ignored legacy polling field |
 | internal/controller/rulesource_controller.go | Preserve fragment validation and generation-aware conditions |
 | RuleSet aggregation/validation/cache files | Reuse assembly and validation for ECDS acceptance; retain the cache/server types needed by the disabled HTTP rule server |
 | Engine controller and WASM driver | Replace WasmPlugin provisioning with EnvoyFilter-only attachment/bootstrap and complete ECDS configuration rendering |
@@ -823,9 +872,11 @@ Protocol ACK state is per stream/replica and may be lost on restart. It is diagn
 
 An operator should be able to answer: which version is accepted, which version this replica can serve, which version a connected proxy last ACKed, why a new candidate was rejected, and whether a new Gateway is still using bootstrap behavior.
 
+The MVP may expose ACK/NACK diagnostics through logs and bounded metrics without changing provisioning Ready. An Engine condition or event for persistent NACK/retry exhaustion remains a follow-on requirement; do not imply the prototype already provides that signal, or equate its absence with successful proxy activation.
+
 ## 19. Validation requirements for implementation
 
-These checks define evidence needed for the architecture. They are not completed work or an ordered implementation plan. Test against both supported upstream Istio and the actual OpenShift proxy image; documentation or a generic Envoy binary alone cannot establish target-image compatibility.
+These checks define evidence needed for the architecture, not a list of completed tests or an ordered implementation plan. The recorded upstream Istio prototype/demo does not establish that all scenarios passed. The MVP targets upstream Istio; verify the actual OpenShift proxy image before extending support to it. Documentation or a generic Envoy binary alone cannot establish target-image compatibility.
 
 ### Integration checks deferred by agreement
 
@@ -842,7 +893,7 @@ These checks define evidence needed for the architecture. They are not completed
 | Binary update/warming | Native binary replacement preserves existing traffic and requires no Gateway rollout | Revisit delivery details; do not silently weaken Q12's constraint |
 | WASM lifecycle | Configuration callback rejects invalid candidates, preserves in-flight state, and releases retired WAFs | Correct ownership/lifecycle before claiming uninterrupted updates |
 | Subscription/cache behavior | Standard ECDS requests and reconnects preserve per-Engine authorization and last-known-good behavior | Adapt the standard watch/cache profile without tenant-wide fallback |
-| Server TLS | Serving cert issuance, verification and rotation work without an Istio companion or new Gateway volume | Return the deferred trust-bundle delivery and CA rotation decision; do not add a Gateway volume or disable verification |
+| Server TLS | MVP issuance and verification use the configured Secret and injected CA; follow-on upgrades/rotation preserve trust without an Istio companion or new Gateway volume | Complete Secret reuse and coordinated trust refresh before claiming upgrade/CA-rotation support; do not add a Gateway volume or disable verification |
 
 Do these checks during implementation and raise questions only for concrete design-changing problems. Their existence is not a request for another approval round before development can start.
 
@@ -854,13 +905,13 @@ Do these checks during implementation and raise questions only for concrete desi
 4. An invalid source or missing data file leaves established traffic protected by the old WAF and marks desired state degraded.
 5. A source change arriving before its accepted status cannot be published through an older Ready condition.
 6. Reordered informer events and concurrent input edits cannot produce a mixed, unapproved payload.
-7. A proxy NACK retains its prior configuration, exposes the error, and does not create a version/republish loop.
+7. A proxy NACK retains its prior configuration or bootstrap, exposes the error, and only triggers the bounded recovery exception in Section 9. Derived wire versions/VM IDs do not alter accepted content; ACK clears the retry budget and exhaustion stops retries.
 8. Long-running requests complete under the old configuration while later requests use the replacement.
 9. Repeated reloads and code updates do not leak WAFs, transactions, streams, watches, or Envoy code-cache entries.
 10. Killing a follower serving an active stream causes reconnect to another replica and subsequent updates without a Gateway restart.
 11. Killing the leader leaves follower-served streams working; the next leader accepts later changes without gratuitous version changes.
 12. Stopping and restarting all CKO replicas with valid Kubernetes resources resumes updates to existing Gateways automatically.
-13. A cold replica does not become serving-ready while it cannot reconstruct active accepted records; another warm replica keeps serving them.
+13. A cold replica gates readiness on compatible accepted records for the bounded startup window, then reports any still-missing configurations and may serve other Engines. Deadline expiry never authorizes unaccepted content; a warm replica retains an eligible snapshot, while cleared records follow Section 7.
 14. Losing all historical payload copies while desired state is invalid exhibits the documented bootstrap/recovery limitation without false availability claims.
 15. A Gateway created while CKO is unavailable has no WAF and no failure policy unless a CKO-independent bootstrap attachment is preinstalled; with that bootstrap, fail-open (`rules.action: DENY`, empty `rules.policies`) allows traffic and fail-closed (`rules.action: ALLOW`, empty `rules.policies`) blocks it, and both transition to the accepted WASM configuration once CKO is reachable.
 16. A valid ServiceAccount token cannot request another identity's Engine by changing resource_names, node.id, namespace metadata, or the snapshot key.
@@ -873,11 +924,27 @@ Do these checks during implementation and raise questions only for concrete desi
 23. With external artifact access blocked, a fresh Gateway loads the bundled WASM from CKO and receives its rules through ECDS; no OCI or external WASM fetch occurs in CKO.
 24. The legacy HTTP rule-server unit tests remain available, while the default running deployment exposes no /rules endpoint and its bundled asset route still works.
 25. Bundled-asset verification and availability work on every ready replica, including restart and release rollover; default promotion does not strand requests on a backend missing the accepted digest.
-26. A Gateway restarting after a failure-policy change but before the updated attachment converges starts with the stricter of the previous and new policy and converges without a rollout.
+26. A Gateway restarting during a failure-policy change retains the stricter bootstrap until a matching record is accepted and the attachment converges; afterward it honors the accepted policy even if ECDS is unreachable. Do not treat acceptance as proof of a proxy ACK or fleet activation.
 27. Custom binary URLs containing userinfo, a query, or a fragment are rejected; fetches to private, link-local, or cluster-internal destinations and redirects are denied or blocked by equivalent egress policy.
-28. Upgrading with an Engine that still uses `image`/`imagePullSecret` is blocked by the preflight and, if attempted, reports an explicit condition instead of silently using the bundled module.
+28. The in-place v1alpha1 migration rejects legacy image fields and the preflight blocks offending stored Engines with an explicit condition, without silently using the bundled module or preventing unrelated Engines from serving by default.
 
 Use unit tests for canonicalization, rendering, hash comparison, authorization and stream state; envtest for conditions/watches/ownership; existing Scenario-based integration tests for real Gateway behavior; and CRS conformance for inspection parity. Tests must compile with the relevant build tags, and controller envtest uses the Makefile's ISTIO_VERSION. Generating a valid protobuf is necessary but does not prove native proxy behavior.
+
+### Follow-on work and deferred prototype findings
+
+Keep the MVP merge and subsequent fixes distinct. Publishing the companion plugin (the reviewed pin is local-only), pinning reproducible real-module builds, and validating the release bundle are delivery prerequisites, not proof supplied by this design PR. Replacing that plugin later must recheck payload, filesystem aliases, limits, validation parity and request-lifetime behavior; do not couple removal of temporary plugin code to removal of operator-side hardening.
+
+The five review findings below are recorded for work after the current MVP merge, not presented as fixes made by this proposal:
+
+| ID | Deferred finding | Required follow-up |
+| --- | --- | --- |
+| F1 | A literal `Include crs/<file>.conf` can pass the reference guard but cannot compile in the operator's validation filesystem; the consumer-contract text implies support. | Align validation and documentation: support it consistently or reject the form explicitly. This is over-rejection, not evidence of a delivered valid WAF. |
+| F2 | `SecDataset` backtick data can be scanned as SecLang directives/continuations and over-rejected. | Make validation follow the parser's data-block semantics without weakening checks on executable directives. |
+| F3 | The validation-trailer comment names `/dev/null` although the pin uses `/dev/stdout`. | Correct the stale explanation; keep host-file-write restrictions. |
+| F4 | The startup payload-envelope estimate assumes filenames that need no JSON escaping; legacy names can exceed the estimate. | Account for escaping or document the bound accurately; retain actual rendered-size checks at acceptance and publication. |
+| F5 | Typos in a literal `@owasp_crs/<file>.conf` Include or a `crs/<file>` target for `@pmFromFile`/`@pmf` can pass operator validation and NACK at the consumer, without an Engine-visible delivery signal. | Surface persistent rejection/exhaustion as an Engine condition or event, separate from provisioning Ready. Highest operational priority; a previous WAF or bootstrap is not proof the new rules are active. |
+
+Beyond those findings, complete the agreed upgrade preflight/tombstones and stable certificate/trust handling before claiming those profiles. Validate follower serving and leader failover, then the full HA/soak and target-image campaign. External module hosts require explicit custom CA/allowlist or equivalent egress policy; mixed-release module promotion requires overlapping digest availability. Final condition/metric naming can be reviewed post-MVP. None of these future claims follows merely from a successful single-replica demo.
 
 ## 20. Alternatives considered
 
@@ -949,14 +1016,17 @@ Peers should review the decisions and the proposed details, especially:
 - Whether accepting the standard Kubernetes API audience token and the per-ServiceAccount authorization boundary are acceptable for this endpoint.
 - Whether provisioning Ready plus separate delivery/runtime diagnostics gives operators enough visibility.
 - Whether the native bootstrap behavior and its proposed response semantics meet the fail-open/fail-closed requirement.
-- Whether trust-bundle delivery and CA rotation can remain a future decision, or must be specified before implementation.
+- Whether the selected Secret/inline-CA model and required rotation ordering are sufficient, and which trust-refresh checks must precede upgrade support.
+- Whether the bounded cold-readiness exception and derived-version/VM-ID recovery make their availability and observability trade-offs clear without weakening the acceptance gate.
 - Whether the documented future read-only ECDS deployment is an appropriate security separation to evaluate later, without expanding the current implementation scope.
 
 Approval of the architecture does not claim the deferred integration checks have passed. Implementation may refine field layout, cache adapter, limits, timeouts and exact credential wiring while preserving these contracts. A failed integration check that requires breaking a contract must return as an explicit architecture decision.
 
 ## 23. References and current-code anchors
 
-### Current implementation
+### Pre-ECDS baseline anchors
+
+These relative links describe the inspected pre-ECDS baseline on this proposal branch, not a claim that the MVP is merged on `main`. The unmerged prototype is identified at the top of the document.
 
 - [Controller initialization](../internal/controller/manager.go)
 - [RuleSet reconciliation](../internal/controller/ruleset_controller.go), [assembly](../internal/controller/ruleset_controller_rule_aggregation.go), and [current cache publication](../internal/controller/ruleset_controller_cache.go)
@@ -965,7 +1035,7 @@ Approval of the architecture does not claim the deferred integration checks have
 - [Manager startup/readiness](../cmd/manager/main.go), [chart replica warning](../charts/coraza-kubernetes-operator/values.yaml), and [Service selection](../charts/coraza-kubernetes-operator/templates/service.yaml)
 - [Engine interface](../api/v1alpha1/engine_types.go), [RuleSet interface](../api/v1alpha1/ruleset_types.go), and [driver metrics contract](../docs/driver-metrics-contract.md)
 
-The sibling coraza-proxy-wasm checkout is on a different revision and contains existing local changes. It is a source of integration context, not proof that a published binary has the same behavior. Pin the implementation and tested HTTPS URL/SHA-256 pair together.
+The reviewed companion plugin revision is local-only and is not a published artifact. Pin the tested consumer source and raw-module URL/SHA-256 together when publishing it; a local checkout or successful demo does not make that dependency reproducible for other users.
 
 ### Primary sources
 
@@ -1011,7 +1081,7 @@ An Engine configuration may aggregate many files from multiple RuleData resource
 
 For sizing, consider ten files containing 2 MB each: approximately 20 MB of raw data. This is an aggregate-size illustration, not an assertion that a 2 MB ConfigMap is valid. ConfigMaps have a documented 1 MiB data limit; this project's RuleData custom resources have their own schema and Kubernetes API/storage constraints. The aggregate-size issue exists independently of the exact per-object limit. See [ConfigMap limits][configmap-limits].
 
-The proposed inline JSON representation base64-encodes data bytes. Consequently, approximately 20 MB of raw data becomes 26.7 MB of base64 content before the rest of the resource and transport overhead. Compression can reduce bytes on the wire, but does not make unchanged content independently addressable or remove decoding, copying, validation and WAF construction costs.
+The proposed inline JSON representation base64-encodes data bytes. Consequently, approximately 20 MB of raw data becomes 26.7 MB of base64 content before the rest of the resource and transport overhead. This exceeds the reviewed MVP's message envelope and would be rejected, not delivered; the example motivates future measurement, not an implicit limit increase. Compression can reduce bytes on the wire, but does not make unchanged content independently addressable or remove decoding, copying, validation and WAF construction costs.
 
 The optimization question is whether rules and runtime settings should be distributed separately from independently versioned file content, so unchanged files do not travel again for every Engine update.
 
