@@ -32,12 +32,19 @@ make cluster.kind
 > could not find a log line that matches "Reached target .*Multi-User System.*|detected cgroup v1"
 > ```
 >
-> Use Podman instead by setting both `CONTAINER_TOOL` (for image build and load)
-> and `KIND_EXPERIMENTAL_PROVIDER` (for cluster creation):
+> Use Podman instead by setting `CONTAINER_TOOL`:
 >
 > ```bash
-> CONTAINER_TOOL=podman KIND_EXPERIMENTAL_PROVIDER=podman make cluster.kind
+> export CONTAINER_TOOL=podman
 > ```
+> or
+> ```bash
+> CONTAINER_TOOL=podman make cluster.kind
+> ```
+>
+> `KIND_EXPERIMENTAL_PROVIDER=podman` is derived automatically from the
+> container runtime, so you no longer need to set it yourself. Set it
+> explicitly only to override the detected provider.
 
 This will have built the operator with your current changes and loaded the
 operator image into the cluster, and started the operator in the
