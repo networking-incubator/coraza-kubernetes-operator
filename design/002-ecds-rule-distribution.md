@@ -61,7 +61,7 @@ The first delivery targets upstream Istio on KIND: complete rules and RuleData, 
 
 The MVP keeps one complete inline configuration per Engine. Module bytes remain a remote HTTPS reference with SHA-256 verification, never inline ECDS bytes or Gateway-mounted files. The current plugin's versioned JSON and embedded-CRS filesystem behavior are temporary: the team intends to replace that plugin. Preserve the operator's assembly/acceptance and ECDS boundaries while allowing the plugin-specific payload and build dependency to change.
 
-Custom external module-host trust/allowlists, multi-module release rollover, OpenShift service-serving certificates and proxy-image verification, HA chaos/soak hardening, and the full acceptance campaign are follow-on work. The all-replica architecture remains in scope; this cut does not turn a single-replica demo into a verified HA deployment. OLM packaging is outside this MVP. The separate serving deployment and incremental RuleData distribution remain future decisions in Sections 21 and 24.
+Custom external module-host trust/allowlists and authentication, multi-module release rollover, OpenShift service-serving certificates and proxy-image verification, HA chaos/soak hardening, and the full acceptance campaign are follow-on work. The all-replica architecture remains in scope; this cut does not turn a single-replica demo into a verified HA deployment. OLM packaging is outside this MVP. The separate serving deployment, incremental RuleData distribution and authenticated module downloads remain future decisions in Sections 21, 24 and 25.
 
 Distinguish revised decisions from unfinished deployment profiles. Bounded readiness, hard-invalidation handling, recovery versions and acceptance-gated bootstrap sequencing below supersede the original stronger guarantees in response to MVP findings; they are not promises to restore those guarantees later. Conversely, the legacy-image preflight/tombstones and certificate reuse are not present in the reviewed prototype, and custom URL/digest fields lack the complete external-host policy. Keep those as follow-on gaps before claiming the corresponding upgrade, release-rollover, or external-host support, not new blockers to merging the development MVP. See [follow-on work](#follow-on-work-and-deferred-prototype-findings) for next steps; merging the MVP and closing the recorded five review findings are separate work items.
 
@@ -475,7 +475,7 @@ An explicit URL/digest pair may target another raw HTTPS artifact host, for exam
 
 Validate scheme, authority and digest before rendering clusters, and reject URLs containing userinfo, a query, or a fragment before accepting them or rendering the ECDS `http_uri`. Restrict this Gateway-initiated fetch to an operator-controlled host allowlist: deny private, link-local, and cluster-internal destinations, and deny redirects and DNS rebinding, unless platform egress policy provides equivalent controls. Add denied-target cases to the acceptance scenarios.
 
-Do not embed credentials or short-lived signed tokens in the URL. The fetch carries no credentials, so an artifact host that requires authentication is out of scope and fails rather than falling back to anonymous or CKO credentials. CKO does not fetch, mirror or verify the remote bytes during reconciliation; Envoy performs content verification. Never forward CKO ServiceAccount credentials to an external host. Private binary-host authentication remains outside this first version.
+Do not embed credentials or short-lived signed tokens in the URL. The fetch carries no credentials, so an artifact host that requires authentication fails rather than falling back to anonymous or CKO credentials. CKO does not fetch, mirror or verify the remote bytes during reconciliation; Envoy performs content verification. Never forward CKO ServiceAccount credentials to an external host. Private binary-host authentication is not implemented in this MVP; [Section 25](#25-open-question-authenticating-wasm-module-downloads) records the unresolved interface and security requirements. Until it is resolved, do not advertise authenticated external-module support.
 
 ## 12. Istio attachment and bootstrap
 
@@ -1017,6 +1017,7 @@ Peers should review the decisions and the proposed details, especially:
 - Whether provisioning Ready plus separate delivery/runtime diagnostics gives operators enough visibility.
 - Whether the native bootstrap behavior and its proposed response semantics meet the fail-open/fail-closed requirement.
 - Whether the selected Secret/inline-CA model and required rotation ordering are sufficient, and which trust-refresh checks must precede upgrade support.
+- Whether an `imagePullSecret`-like Secret should authenticate private raw-WASM hosts, and which Envoy mechanism can carry it without a Gateway mount or secret material in generated configuration (Section 25).
 - Whether the bounded cold-readiness exception and derived-version/VM-ID recovery make their availability and observability trade-offs clear without weakening the acceptance gate.
 - Whether the documented future read-only ECDS deployment is an appropriate security separation to evaluate later, without expanding the current implementation scope.
 
@@ -1159,6 +1160,49 @@ If the future separate read-only ECDS controller is selected, file delivery must
 - Decide whether measured benefits justify a manifest/blob split, whether Delta is needed for the chosen resource model, and whether ADS provides any necessary sequencing benefit.
 
 Until that future decision is made, the complete inline Engine payload and the existing message-size/validation requirements remain the implementation target. No incremental-transfer benefit is claimed for the current design.
+
+## 25. Open question: authenticating WASM module downloads
+
+**Status: open; not implemented.** The verified MVP path uses the unauthenticated, read-only bundled asset route. A raw HTTPS module host that requires authentication is not supported. External/custom hosts remain post-MVP, and this question must be resolved before advertising authenticated private-host support.
+
+The old `imagePullSecret` is not directly reusable. It is an OCI registry credential (usually `kubernetes.io/dockerconfigjson`), while Envoy's native remote-code fetch retrieves a raw HTTPS URL through an Envoy cluster. `RemoteDataSource`/`HttpUri` has no generic pull-secret or arbitrary-request-header field, so renaming the field would imply a credential flow that does not exist.
+
+Any answer must preserve these constraints:
+
+- No credential or short-lived signed token in the module URL, ECDS payload, Engine/RuleSet status, generated annotations, logs or metrics.
+- No Gateway pod-template change, added volume, init container or rollout for credential provisioning or rotation.
+- No forwarding of the Gateway/CKO ServiceAccount token or ECDS credentials to an external host.
+- The bundled-module route stays unauthenticated and air-gapped; it must not become a credential broker or general artifact proxy.
+- CKO does not fetch, mirror or cache the remote module during reconciliation.
+- TLS server identity and raw-byte SHA-256 verification remain mandatory. A `401`, `403`, redirect or credential failure must fail rather than retry anonymously.
+- Rotation must not change the accepted content hash or reload an otherwise unchanged WAF. It may reconnect the module fetch or update the binary cluster.
+
+Candidate mechanisms to evaluate; none is selected:
+
+1. **TLS client certificate.** An optional Secret (`ca.crt`, `tls.crt`, `tls.key`) feeds the binary-fetch cluster's `UpstreamTlsContext`. This fits mutual-TLS artifact hosts and file-based rotation, but still needs a Gateway-invisible delivery path, watch/RBAC ownership, and a decision on installation versus per-Engine scope.
+2. **Header credential injection.** Envoy's `envoy.filters.http.injected_credentials/generic` or an equivalent supported upstream filter injects an `Authorization` header from a referenced Secret. Verify that the target proxy images expose the filter, that it applies to remote-code fetches, and how Secret data reaches Envoy without a Gateway mount or inline secret material in the EnvoyFilter.
+3. **Authenticated artifact proxy or mirror.** A platform-owned reachable endpoint handles authentication and serves raw bytes; CKO and Envoy keep the plain fetch contract. This needs explicit ownership, availability, TLS and air-gap semantics, and may overlap the future separate ECDS/serving deployment in Section 21.
+4. **Operator-side fetch or proxy.** Rejected for now: it turns CKO into an artifact service/cache and puts external credentials in the control plane. Revisit only if the mechanisms above cannot meet the contract.
+
+API and operational questions to settle:
+
+- Is trust/authentication installation-scoped (chart/operator configuration shared by all Engines) or per-Engine under `spec.driver.wasm`? Per-Engine Secrets need namespace, cross-namespace and RBAC rules.
+- Should the interface be a generic Secret reference with explicit key names rather than an `imagePullSecret`-shaped field? OCI credential types must not be silently interpreted as HTTP credentials.
+- Which mechanisms are in scope: mutual TLS, bearer/basic header, or both? Can a custom module host use a CA distinct from the ECDS listener CA, and where is that CA configured?
+- How are missing, expired, revoked or rejected credentials surfaced to the user? This must be CRD-visible, not another silent consumer NACK (see F5).
+- How is rotation coordinated and observed without a pod rollout? What proves the new credential is in use?
+- Does any header or certificate flow violate the no-ServiceAccount-token-to-third-parties rule or the no-secret-in-generated-configuration rule?
+
+Evidence required before enabling the feature:
+
+- A private host with valid credentials loads the module and the digest verifies.
+- Missing, invalid, expired or revoked credentials fail closed or retain last-known-good behavior; there is no anonymous fallback.
+- Rotation causes no accepted-content-hash or WAF change, and fetches use the new credential within a documented bound.
+- No credential appears in status, ECDS payload, EnvoyFilter/annotations, operator logs, metrics or the URL.
+- Secret deletion/revocation, host compromise, redirects and DNS rebinding have defined behavior.
+- The air-gapped bundled default and read-only asset route remain unaffected.
+
+Until these are resolved, keep the custom URL/digest fields unverified for authenticated hosts, do not implement `imagePullSecret` semantics for HTTP, and make unsupported authentication fail explicitly.
 
 [delta-discovery]: https://www.envoyproxy.io/docs/envoy/latest/api-v3/service/discovery/v3/discovery.proto
 [configmap-limits]: https://kubernetes.io/docs/concepts/configuration/configmap/#motivation
