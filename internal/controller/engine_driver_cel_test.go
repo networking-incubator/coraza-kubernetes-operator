@@ -21,11 +21,14 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 
 	wafv1alpha1 "github.com/networking-incubator/coraza-kubernetes-operator/api/v1alpha1"
+	"github.com/networking-incubator/coraza-kubernetes-operator/test/utils"
 )
 
 const testSHA256 = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
@@ -175,5 +178,27 @@ func TestEngineWasmDriverCELUpdate(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "sha256 must be 64 lowercase hexadecimal characters") {
 		t.Fatalf("Update() error = %q, want sha256 rejection", err)
+	}
+}
+
+func TestRuleDataCELRejectsReservedFileNames(t *testing.T) {
+	tests := []struct {
+		name     string
+		object   string
+		fileName string
+	}{
+		{name: "current directory", object: "cel-reserved-dot", fileName: "."},
+		{name: "parent directory", object: "cel-reserved-dotdot", fileName: ".."},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			data := utils.NewTestRuleData(tt.object, testNamespace, map[string]string{tt.fileName: "x"})
+
+			err := k8sClient.Create(ctx, data)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "not '.' or '..'")
+		})
 	}
 }

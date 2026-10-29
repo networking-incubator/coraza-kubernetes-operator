@@ -27,6 +27,7 @@ import (
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -34,6 +35,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+
+	wafv1alpha1 "github.com/networking-incubator/coraza-kubernetes-operator/api/v1alpha1"
 )
 
 // -----------------------------------------------------------------------------
@@ -423,4 +426,24 @@ func buildAcceptReadyMessage(namespace, name, unsupportedMsg string) string {
 	}
 
 	return msg
+}
+
+// -----------------------------------------------------------------------------
+// Engine Helpers
+// -----------------------------------------------------------------------------
+
+// engineMatchesLabels reports whether the Engine's derived workload selector
+// matches the given labels.
+func engineMatchesLabels(engine *wafv1alpha1.Engine, podLabels map[string]string) bool {
+	ws := targetLabelSelector(engine)
+	if ws == nil {
+		return false
+	}
+
+	selector, err := metav1.LabelSelectorAsSelector(ws)
+	if err != nil {
+		return false
+	}
+
+	return selector.Matches(labels.Set(podLabels))
 }

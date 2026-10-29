@@ -17,6 +17,7 @@ limitations under the License.
 package xds
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
@@ -26,6 +27,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -35,6 +37,8 @@ import (
 	"golang.org/x/net/netutil"
 	"google.golang.org/grpc"
 	"sigs.k8s.io/controller-runtime/pkg/certwatcher"
+
+	"github.com/networking-incubator/coraza-kubernetes-operator/internal/assets"
 )
 
 const (
@@ -546,4 +550,77 @@ func (l *connListener) push(connection net.Conn) bool {
 	case <-l.done:
 		return false
 	}
+}
+
+const (
+	assetPathPrefix   = "/wasm/"
+	assetPathSuffix   = ".wasm"
+	wasmContentType   = "application/wasm"
+	immutableCacheMax = "public, max-age=31536000, immutable"
+)
+
+var assetNamePattern = regexp.MustCompile(`^[0-9a-f]{64}\.wasm$`)
+
+// AssetHandler serves the single bundled WASM module by digest. Only manifest
+// entries are addressable; the handler never touches the filesystem, never
+// redirects, and requires no bearer token.
+type AssetHandler struct {
+	manifest *assets.Manifest
+	data     []byte
+	metrics  *Metrics
+}
+
+// NewAssetHandler returns a handler for the verified bundled module.
+func NewAssetHandler(manifest *assets.Manifest, data []byte, metrics *Metrics) *AssetHandler {
+	return &AssetHandler{manifest: manifest, data: data, metrics: metrics}
+}
+
+// ServeHTTP implements http.Handler.
+func (h *AssetHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	code := http.StatusNotFound
+	defer func() { h.metrics.AssetRequest(code) }()
+
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		code = http.StatusMethodNotAllowed
+		w.Header().Set("Allow", "GET, HEAD")
+		w.WriteHeader(code)
+		return
+	}
+
+	name, ok := assetNameFromPath(r.URL.Path)
+	if !ok || h.manifest == nil || name != h.manifest.SHA256+assetPathSuffix {
+		w.WriteHeader(code)
+		return
+	}
+
+	code = http.StatusOK
+	w.Header().Set("Content-Type", wasmContentType)
+	w.Header().Set("Cache-Control", immutableCacheMax)
+	recorder := &assetStatusWriter{ResponseWriter: w, status: code}
+	// ServeContent adds Range/If-Range support and Content-Length; the digest
+	// path remains the only addressable name.
+	http.ServeContent(recorder, r, name, time.Time{}, bytes.NewReader(h.data))
+	code = recorder.status
+}
+
+type assetStatusWriter struct {
+	http.ResponseWriter
+	status int
+}
+
+// WriteHeader records and forwards the response status.
+func (w *assetStatusWriter) WriteHeader(status int) {
+	w.status = status
+	w.ResponseWriter.WriteHeader(status)
+}
+
+func assetNameFromPath(path string) (string, bool) {
+	if !strings.HasPrefix(path, assetPathPrefix) {
+		return "", false
+	}
+	name := strings.TrimPrefix(path, assetPathPrefix)
+	if !assetNamePattern.MatchString(name) {
+		return "", false
+	}
+	return name, true
 }

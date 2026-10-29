@@ -29,8 +29,10 @@ import (
 	"math/big"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -519,5 +521,135 @@ func TestAcceptBacksOffOnTemporaryErrors(t *testing.T) {
 	}
 	if got := atomic.LoadInt32(&calls); got != 4 {
 		t.Fatalf("Accept() calls = %d, want 4 (temporary errors retried)", got)
+	}
+}
+
+func newAssetHandler(t *testing.T) (*AssetHandler, *assets.Manifest, []byte) {
+	t.Helper()
+	manifest, data, err := assets.ResolveDefault()
+	if err != nil {
+		t.Fatal(err)
+	}
+	metrics, err := NewMetrics(prometheus.NewRegistry())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return NewAssetHandler(manifest, data, metrics), manifest, data
+}
+
+func TestAssetHandlerServesManifestEntry(t *testing.T) {
+	handler, manifest, data := newAssetHandler(t)
+
+	request := httptest.NewRequest(http.MethodGet, assetPathPrefix+manifest.SHA256+assetPathSuffix, nil)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", recorder.Code)
+	}
+	if got := recorder.Header().Get("Content-Type"); got != wasmContentType {
+		t.Fatalf("Content-Type = %q, want %q", got, wasmContentType)
+	}
+	if got := recorder.Header().Get("Cache-Control"); got != immutableCacheMax {
+		t.Fatalf("Cache-Control = %q, want %q", got, immutableCacheMax)
+	}
+	if recorder.Body.String() != string(data) {
+		t.Fatal("body does not match the bundled module")
+	}
+}
+
+func TestAssetHandlerServesRange(t *testing.T) {
+	handler, manifest, data := newAssetHandler(t)
+
+	request := httptest.NewRequest(http.MethodGet, assetPathPrefix+manifest.SHA256+assetPathSuffix, nil)
+	request.Header.Set("Range", "bytes=0-3")
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusPartialContent {
+		t.Fatalf("status = %d, want 206", recorder.Code)
+	}
+	if got := recorder.Body.String(); got != string(data[:4]) {
+		t.Fatalf("body = %q, want first four module bytes", got)
+	}
+	if got := recorder.Header().Get("Content-Range"); got != "bytes 0-3/"+strconv.Itoa(len(data)) {
+		t.Fatalf("Content-Range = %q", got)
+	}
+	if got := recorder.Header().Get("Content-Type"); got != wasmContentType {
+		t.Fatalf("Content-Type = %q, want %q", got, wasmContentType)
+	}
+	if got := recorder.Header().Get("Cache-Control"); got != immutableCacheMax {
+		t.Fatalf("Cache-Control = %q, want %q", got, immutableCacheMax)
+	}
+}
+
+func TestAssetHandlerServesHead(t *testing.T) {
+	handler, manifest, data := newAssetHandler(t)
+
+	request := httptest.NewRequest(http.MethodHead, assetPathPrefix+manifest.SHA256+assetPathSuffix, nil)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", recorder.Code)
+	}
+	if got := recorder.Body.Len(); got != 0 {
+		t.Fatalf("HEAD body length = %d, want 0", got)
+	}
+	if got := recorder.Header().Get("Content-Length"); got != strconv.Itoa(len(data)) {
+		t.Fatalf("Content-Length = %q, want %d", got, len(data))
+	}
+}
+
+func TestAssetHandlerRejectsUnknownAndMalformedPaths(t *testing.T) {
+	handler, manifest, _ := newAssetHandler(t)
+
+	validDigest := manifest.SHA256
+	cases := map[string]string{
+		"unknown digest": assetPathPrefix + "0000000000000000000000000000000000000000000000000000000000000000" + assetPathSuffix,
+		"uppercase":      assetPathPrefix + "ABCDEF0000000000000000000000000000000000000000000000000000000000" + assetPathSuffix,
+		"short digest":   assetPathPrefix + "abcd" + assetPathSuffix,
+		"no suffix":      assetPathPrefix + validDigest,
+		"plain name":     assetPathPrefix + "plugin.wasm",
+		"legacy rules":   "/rules/shop/checkout",
+		"directory":      assetPathPrefix,
+		"traversal":      assetPathPrefix + "..%2f" + validDigest + assetPathSuffix,
+	}
+	for name, path := range cases {
+		t.Run(name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodGet, path, nil)
+			recorder := httptest.NewRecorder()
+			handler.ServeHTTP(recorder, request)
+			if recorder.Code != http.StatusNotFound {
+				t.Fatalf("status = %d, want 404", recorder.Code)
+			}
+			if location := recorder.Header().Get("Location"); location != "" {
+				t.Fatalf("Location = %q, want no redirect", location)
+			}
+		})
+	}
+}
+
+func TestAssetHandlerRejectsNonGet(t *testing.T) {
+	handler, manifest, _ := newAssetHandler(t)
+	request := httptest.NewRequest(http.MethodPost, assetPathPrefix+manifest.SHA256+assetPathSuffix, nil)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("status = %d, want 405", recorder.Code)
+	}
+}
+
+func TestAssetHandlerRequiresNoAuthorization(t *testing.T) {
+	handler, manifest, _ := newAssetHandler(t)
+	request := httptest.NewRequest(http.MethodGet, assetPathPrefix+manifest.SHA256+assetPathSuffix, nil)
+	if request.Header.Get("Authorization") != "" {
+		t.Fatal("test request unexpectedly carries credentials")
+	}
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", recorder.Code)
 	}
 }

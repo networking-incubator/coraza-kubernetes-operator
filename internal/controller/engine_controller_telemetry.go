@@ -26,6 +26,8 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/event"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	wafv1alpha1 "github.com/networking-incubator/coraza-kubernetes-operator/api/v1alpha1"
@@ -139,4 +141,22 @@ func gatewayClassWAFCollectorProvider(gatewayClass *gatewayv1.GatewayClass) (str
 	}
 	collectorEndpoint := gatewayClass.GetAnnotations()[wafCollectorAnnotation]
 	return wafLogCollectorProvider, collectorEndpoint != ""
+}
+
+// gatewayClassWatchPredicate reacts to lifecycle changes and to updates of the
+// collector declaration, which is metadata and therefore does not change
+// GatewayClass generation.
+func gatewayClassWatchPredicate() predicate.Predicate {
+	return predicate.Funcs{
+		CreateFunc:  func(event.CreateEvent) bool { return true },
+		DeleteFunc:  func(event.DeleteEvent) bool { return true },
+		GenericFunc: func(event.GenericEvent) bool { return false },
+		UpdateFunc: func(e event.UpdateEvent) bool {
+			if e.ObjectOld == nil || e.ObjectNew == nil {
+				return false
+			}
+			return e.ObjectOld.GetGeneration() != e.ObjectNew.GetGeneration() ||
+				e.ObjectOld.GetAnnotations()[wafCollectorAnnotation] != e.ObjectNew.GetAnnotations()[wafCollectorAnnotation]
+		},
+	}
 }

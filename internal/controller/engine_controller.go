@@ -22,6 +22,7 @@ import (
 	"sync"
 	"time"
 
+	rbacv3 "github.com/envoyproxy/go-control-plane/envoy/config/rbac/v3"
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
@@ -388,4 +389,43 @@ func (r *EngineReconciler) isRuleSetDegraded(ctx context.Context, log logr.Logge
 	}
 
 	return true, nil
+}
+
+// Bootstrap policies. A fail-closed bootstrap denies traffic until the first
+// accepted configuration arrives; fail-open allows it.
+const (
+	bootstrapPolicyFail  = "fail"
+	bootstrapPolicyAllow = "allow"
+
+	rbacActionDeny = "DENY"
+)
+
+// bootstrapPolicy returns the policy to apply now, given the previous applied
+// policy, the desired policy, and whether a matching accepted configuration is
+// already active. It implements the stricter-of rule.
+//
+// Tightening applies immediately. Weakening from fail to allow is deferred
+// until the matching configuration is accepted and active, so a Gateway can
+// never run with the weaker default before its WAF is live. Unknown values
+// fail closed.
+func bootstrapPolicy(previous, desired string, acceptedActive bool) string {
+	if desired == bootstrapPolicyAllow {
+		// Weakening requires either an already-weakened filter or an existing
+		// filter plus an active accepted configuration. With no previous filter
+		// the first attachment must be fail-closed, even if the Engine status
+		// already records the accepted configuration.
+		if previous == bootstrapPolicyAllow || (previous != "" && acceptedActive) {
+			return bootstrapPolicyAllow
+		}
+	}
+	return bootstrapPolicyFail
+}
+
+// bootstrapRBACActionEnum returns the typed action. ALLOW with no matching
+// policy denies; DENY with no matching policy allows.
+func bootstrapRBACActionEnum(policy string) rbacv3.RBAC_Action {
+	if policy == bootstrapPolicyAllow {
+		return rbacv3.RBAC_DENY
+	}
+	return rbacv3.RBAC_ALLOW
 }

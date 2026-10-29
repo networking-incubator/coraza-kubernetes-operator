@@ -30,6 +30,8 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 	"k8s.io/apimachinery/pkg/types"
+
+	"github.com/networking-incubator/coraza-kubernetes-operator/internal/ecds/render"
 )
 
 // SnapshotStore publishes one ECDS snapshot per Engine into go-control-plane's
@@ -178,4 +180,28 @@ func (s *SnapshotStore) Get(engineKey string) (*Snapshot, bool) {
 // when it resolves a reconcile request to a snapshot key.
 func namespacedNameKey(namespace, name string) string {
 	return types.NamespacedName{Namespace: namespace, Name: name}.String()
+}
+
+// resourceNamePrefix is the shared CKO/plugin resource naming prefix; it must
+// match the prefix render.ResourceName builds.
+const resourceNamePrefix = "coraza.waf."
+
+// Snapshot is one immutable published Engine configuration. Callers must not
+// mutate any field after Replace hands it to the store.
+type Snapshot struct {
+	ResourceName string
+	Namespace    string
+	EngineName   string
+	EngineUID    types.UID
+	RuleSetHash  string
+	Version      string // "sha256:<64hex>"
+	Resource     *corev3.TypedExtensionConfig
+}
+
+// ResourceName returns the ECDS resource name for an Engine. The naming
+// contract is owned by internal/ecds/render, which serves the name; xds
+// delegates to it because the same string is also the authorization key, and
+// two implementations could drift apart and fail every Gateway closed.
+func ResourceName(namespace, engineName string, uid types.UID) string {
+	return render.ResourceName(namespace, engineName, uid)
 }

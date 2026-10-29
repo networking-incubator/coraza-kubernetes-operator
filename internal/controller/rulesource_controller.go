@@ -21,6 +21,8 @@ import (
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/tools/events"
 	"k8s.io/client-go/util/workqueue"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -147,4 +149,27 @@ func (r *RuleSourceReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		r.Metrics.ObserveRuleSourceValidation(req.Namespace, "valid", validationDuration)
 	}
 	return ctrl.Result{}, nil
+}
+
+// RuleSource status condition reasons (RuleSourceReconciler and RuleSet gating).
+const (
+	ruleSourceReadyReasonValidated         = "Validated"
+	ruleSourceReadyReasonValidationSkipped = "ValidationSkipped"
+	ruleSourceDegradedReasonInvalidRules   = "InvalidRules"
+)
+
+// ruleSourceInvalidForGeneration reports whether the RuleSource is degraded
+// for invalid rules at the given spec generation.
+func ruleSourceInvalidForGeneration(conditions []metav1.Condition, generation int64) bool {
+	c := apimeta.FindStatusCondition(conditions, conditionDegraded)
+	return c != nil && c.Status == metav1.ConditionTrue && c.Reason == ruleSourceDegradedReasonInvalidRules && c.ObservedGeneration == generation
+}
+
+// ruleSourceValidatedForGeneration reports whether RuleSource validation (or
+// explicit skip) has completed for the current spec generation.
+func ruleSourceValidatedForGeneration(conditions []metav1.Condition, generation int64, skipFragmentValidation bool) bool {
+	if skipFragmentValidation {
+		return isConditionCurrent(conditions, conditionReady, ruleSourceReadyReasonValidationSkipped, generation)
+	}
+	return isConditionCurrent(conditions, conditionReady, ruleSourceReadyReasonValidated, generation)
 }

@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
+	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -32,9 +33,11 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	wafv1alpha1 "github.com/networking-incubator/coraza-kubernetes-operator/api/v1alpha1"
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/ecds/render"
@@ -399,4 +402,86 @@ func (r *RuleSetReconciler) patchRuleSetAwaitingRuleSources(ctx context.Context,
 	}
 	logConditionTransitions(log, req, "RuleSet", before, ruleset.Status.Conditions)
 	return nil
+}
+
+// -----------------------------------------------------------------------------
+// RuleSet Controller - Watch Predicates
+// -----------------------------------------------------------------------------
+
+// findRuleSetsForRuleSource maps a RuleSource to the RuleSets that reference it
+// using the spec.sources.name field index registered in SetupWithManager.
+func (r *RuleSetReconciler) findRuleSetsForRuleSource(ctx context.Context, ruleSource client.Object) []reconcile.Request {
+	return r.findRuleSetsBy(ctx, ruleSource.GetNamespace(), "spec.sources.name", ruleSource.GetName())
+}
+
+// findRuleSetsForRuleData maps a RuleData to the RuleSets that reference it
+// using the spec.data.name field index registered in SetupWithManager.
+func (r *RuleSetReconciler) findRuleSetsForRuleData(ctx context.Context, ruleData client.Object) []reconcile.Request {
+	return r.findRuleSetsBy(ctx, ruleData.GetNamespace(), "spec.data.name", ruleData.GetName())
+}
+
+// enqueueForRuleDataChange maps RuleData events to RuleSet reconciles when
+// referenced, and refreshes namespace-level ruledata totals when not.
+func (r *RuleSetReconciler) enqueueForRuleDataChange(ctx context.Context, ruleData client.Object) []reconcile.Request {
+	reqs := r.findRuleSetsForRuleData(ctx, ruleData)
+	if len(reqs) > 0 {
+		return reqs
+	}
+	r.reconcileRuleDataMetrics(ctx, ruleData.GetNamespace())
+	return nil
+}
+
+// findRuleSetsBy lists RuleSets matching a field index value and returns
+// reconcile requests for each.
+func (r *RuleSetReconciler) findRuleSetsBy(ctx context.Context, namespace, indexKey, indexValue string) []reconcile.Request {
+	log := logf.FromContext(ctx)
+
+	var ruleSetList wafv1alpha1.RuleSetList
+	if err := r.List(ctx, &ruleSetList,
+		client.InNamespace(namespace),
+		client.MatchingFields{indexKey: indexValue},
+	); err != nil {
+		log.Error(err, "RuleSet: Failed to list RuleSets", "namespace", namespace, "index", indexKey, "value", indexValue)
+		return nil
+	}
+
+	return collectRequests(ruleSetList.Items, func(_ *wafv1alpha1.RuleSet) bool { return true })
+}
+
+// ruleSourceWatchPredicate enqueues referencing RuleSets when a RuleSource's
+// spec changes (generation), validation annotation changes, or status changes
+// (e.g. RuleSourceReconciler validation outcome) without a spec bump.
+func ruleSourceWatchPredicate() predicate.Predicate {
+	statusChanged := predicate.Funcs{
+		CreateFunc: func(event.CreateEvent) bool { return true },
+		DeleteFunc: func(event.DeleteEvent) bool { return true },
+		UpdateFunc: func(e event.UpdateEvent) bool {
+			oldRS, ok1 := e.ObjectOld.(*wafv1alpha1.RuleSource)
+			newRS, ok2 := e.ObjectNew.(*wafv1alpha1.RuleSource)
+			if !ok1 || !ok2 {
+				return false
+			}
+			return !apiequality.Semantic.DeepEqual(oldRS.Status, newRS.Status)
+		},
+		GenericFunc: func(event.GenericEvent) bool { return false },
+	}
+	return predicate.Or(
+		predicate.GenerationChangedPredicate{},
+		annotationChangedPredicate(wafv1alpha1.AnnotationSkipValidation),
+		statusChanged,
+	)
+}
+
+// ruleDataWatchPredicate enqueues referencing RuleSets (or refreshes namespace
+// ruledata totals) when RuleData is created, updated, or deleted.
+func ruleDataWatchPredicate() predicate.Predicate {
+	return predicate.Or(
+		predicate.GenerationChangedPredicate{},
+		predicate.Funcs{
+			CreateFunc:  func(event.CreateEvent) bool { return true },
+			DeleteFunc:  func(event.DeleteEvent) bool { return true },
+			UpdateFunc:  func(event.UpdateEvent) bool { return false },
+			GenericFunc: func(event.GenericEvent) bool { return false },
+		},
+	)
 }

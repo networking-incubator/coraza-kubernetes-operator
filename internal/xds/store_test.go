@@ -27,6 +27,9 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
+	"k8s.io/apimachinery/pkg/types"
+
+	"github.com/networking-incubator/coraza-kubernetes-operator/internal/ecds/render"
 )
 
 func TestSnapshotStoreLifecycle(t *testing.T) {
@@ -138,4 +141,32 @@ func mustWasm(t *testing.T, vmID string) *anypb.Any {
 	}})
 	require.NoError(t, err)
 	return typed
+}
+
+// The shared authorization/cache key must remain exactly namespace/name.
+func TestNamespacedNameKey(t *testing.T) {
+	const namespace, name = "shop", "checkout"
+	want := types.NamespacedName{Namespace: namespace, Name: name}.String()
+	if got := namespacedNameKey(namespace, name); got != want || got != "shop/checkout" {
+		t.Fatalf("namespacedNameKey = %q, want %q (shop/checkout)", got, want)
+	}
+	if got := namespacedNameKey("", name); got != "/checkout" {
+		t.Fatalf("empty namespace key = %q, want /checkout", got)
+	}
+}
+
+// The name xds authorizes on must be the name render serves; a drift would
+// fail every subscription closed with no error anywhere.
+func TestResourceNameMatchesRender(t *testing.T) {
+	cases := []struct{ namespace, engine string }{
+		{"shop", "checkout"},
+		{"x.a", "b"},
+		{"x", "a.b"},
+	}
+	for _, c := range cases {
+		uid := types.UID("engine-uid")
+		if got, want := ResourceName(c.namespace, c.engine, uid), render.ResourceName(c.namespace, c.engine, uid); got != want {
+			t.Fatalf("ResourceName(%q, %q) = %q, want %q", c.namespace, c.engine, got, want)
+		}
+	}
 }

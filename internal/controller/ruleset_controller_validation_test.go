@@ -17,13 +17,16 @@ limitations under the License.
 package controller
 
 import (
+	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	wafv1alpha1 "github.com/networking-incubator/coraza-kubernetes-operator/api/v1alpha1"
@@ -123,4 +126,36 @@ func TestRuleSetValidationMetricsOnlyOnSentinel(t *testing.T) {
 		m.IncRuleSetValidation("default", "invalid")
 	}
 	assert.Equal(t, float64(1), gatherRuleSetValidationCounter(t, reg, "invalid"))
+}
+
+func newRuleSetWithPolicy(namespace, name string, policy wafv1alpha1.EmptyRulesPolicy) *wafv1alpha1.RuleSet {
+	return &wafv1alpha1.RuleSet{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
+		Spec: wafv1alpha1.RuleSetSpec{
+			Sources:          []wafv1alpha1.SourceReference{{Name: "source"}},
+			EmptyRulesPolicy: policy,
+		},
+	}
+}
+
+func TestRuleSetEmptyRulesPolicyRejectsUnknownValue(t *testing.T) {
+	ctx := context.Background()
+	name := "policy-invalid"
+	t.Cleanup(func() {
+		rs := &wafv1alpha1.RuleSet{ObjectMeta: metav1.ObjectMeta{Namespace: testNamespace, Name: name}}
+		if err := k8sClient.Delete(ctx, rs); err != nil && !apierrors.IsNotFound(err) {
+			t.Logf("Failed to delete RuleSet: %v", err)
+		}
+	})
+
+	err := k8sClient.Create(ctx, newRuleSetWithPolicy(testNamespace, name, "Deny"))
+	if err == nil {
+		t.Fatal("Create() error = nil, want rejection")
+	}
+	if !apierrors.IsInvalid(err) {
+		t.Fatalf("Create() error = %v, want Invalid", err)
+	}
+	if !strings.Contains(err.Error(), "Unsupported value") {
+		t.Fatalf("Create() error = %q, want enum rejection", err)
+	}
 }
