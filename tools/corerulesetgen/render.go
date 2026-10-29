@@ -25,7 +25,6 @@ func baseRulesYAML(normalizedVersion, crsSetupVersion string, includeTest bool) 
 	inner := fmt.Sprintf(`    SecRuleEngine On
     SecRequestBodyAccess On
     SecRequestBodyLimit 13107200
-    SecRequestBodyInMemoryLimit 131072
     SecRequestBodyLimitAction Reject
     SecResponseBodyAccess On
     SecResponseBodyMimeType text/plain text/html text/xml application/json
@@ -35,7 +34,6 @@ func baseRulesYAML(normalizedVersion, crsSetupVersion string, includeTest bool) 
     SecResponseBodyLimitAction ProcessPartial
     SecAuditEngine RelevantOnly
     SecAuditLogType Serial
-    SecAuditLog /dev/stdout
     SecAuditLogFormat JSON
     SecAuditLogParts ABIJDEFHZ
     SecAuditLogRelevantStatus "^(40[0-3]|40[5-9]|4[1-9][0-9]|5[0-9][0-9])$"
