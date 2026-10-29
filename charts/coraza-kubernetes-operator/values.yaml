@@ -9,7 +9,8 @@ image:
 replicas: 1
 
 cache:
-  # Interval between cache garbage-collection sweeps.
+  # Deprecated and ignored: the legacy RuleSet cache server is not started, so
+  # no garbage collection runs.
   gcInterval: "5m"
 
 resources:
@@ -118,8 +119,35 @@ istio:
   # When empty, the operator does not set an Istio revision label on managed resources.
   revision: ""
 
-# Default WASM plugin OCI URL when an Engine omits spec.driver.wasm.image.
-# When empty, the operator's built-in default (internal/defaults.DefaultCorazaWasmOCIReference) is used.
+# Serving certificate for the ECDS and WASM asset endpoint. When existingSecret
+# is empty and generate is true, `helm install`/`helm upgrade` create a
+# self-signed CA and certificate valid for 365 days and reuse the generated
+# Secret across upgrades via `lookup`.
+#
+# IMPORTANT: the reuse is a `helm install`/`helm upgrade` behavior only.
+# `helm template`, `--dry-run`, and GitOps renderers (Argo CD, Flux) cannot
+# read the cluster, so they mint a fresh CA on every render, which breaks the
+# trust bundle inlined into EnvoyFilters. For those flows set generate=false
+# and provide existingSecret (or provision the certificate with cert-manager).
+#
+# Rotation: delete the generated Secret and re-run `helm upgrade`.
+tls:
+  # Name of an existing Secret in the release namespace with keys
+  # ca.crt, tls.crt, and tls.key.
+  existingSecret: ""
+  # Generate a self-signed serving certificate (365-day CA and leaf) when
+  # existingSecret is empty. Only safe for helm-managed installs; set to
+  # false for static manifests and GitOps pipelines: no private key is
+  # published, and the referenced Secret must already exist.
+  generate: true
+  certName: "tls.crt"
+  keyName: "tls.key"
+  caName: "ca.crt"
+  # Extra DNS SANs appended to the generated certificate.
+  sans: []
+
+# Deprecated and ignored. The Engine API no longer has spec.driver.wasm.image.
+# Use the bundled module, or set spec.driver.wasm.url with sha256.
 defaultWasmImage: ""
 
 openshift:

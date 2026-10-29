@@ -30,6 +30,8 @@ helm template coraza-kubernetes-operator \
   --include-crds
 ```
 
+> **GitOps / static renders:** `helm template` cannot reuse the generated serving certificate (see [Serving certificate](#serving-certificate) below) — it mints a fresh CA on every render. Add `--set tls.generate=false` and provide `tls.existingSecret`.
+
 ### OpenShift
 
 ```bash
@@ -71,7 +73,10 @@ When `openshift.enabled=true`, `runAsUser`, `fsGroup`, and `fsGroupChangePolicy`
 | `logging.stacktraceLevel`                             | string | `error`                                                   | Minimum level for stack traces (`info`, `error`, `panic`). Only used when `development=false`               |
 | `logging.timeEncoding`                                | string | `rfc3339nano`                                             | Timestamp format (`epoch`, `millis`, `nano`, `iso8601`, `rfc3339`, `rfc3339nano`). Only used when `development=false` |
 | `istio.revision`                                      | string | `""`                                                      | Istio control plane revision label; empty means no revision label on managed resources                      |
-| `defaultWasmImage`                                    | string | `""`                                                      | Default WASM plugin OCI URL when an Engine omits `spec.driver.wasm.image`; empty uses operator built-in default |
+| `tls.existingSecret`                                  | string | `""`                                                      | Existing Secret with `ca.crt`, `tls.crt`, and `tls.key` for the ECDS/WASM endpoint. Required for GitOps and static-manifest installs |
+| `tls.generate`                                        | bool   | `true`                                                    | Generate a self-signed serving certificate (365-day CA and leaf) when `tls.existingSecret` is empty. Reuse across upgrades via `lookup` works only with `helm install`/`helm upgrade`; set to `false` for `helm template` and GitOps (Argo CD, Flux) |
+| `tls.sans`                                            | list   | `[]`                                                      | Extra DNS SANs appended to the generated serving certificate                                                |
+| `defaultWasmImage`                                    | string | `""`                                                      | Deprecated and ignored. Use the bundled module or `spec.driver.wasm.url` with `sha256`. |
 | `createNamespace`                                     | bool   | `true`                                                    | Manage the release namespace with Pod Security Standard labels. Requires `--create-namespace` on first install |
 | `openshift.enabled`                                   | bool   | `false`                                                   | Omit UID/fsGroup from pod security context for OpenShift SCC compatibility                                  |
 | `podSecurityStandard.version`                         | string | `latest`                                                  | Kubernetes version for Pod Security Standard labels (`latest` or `vX.YZ`)                                    |
@@ -80,6 +85,28 @@ When `openshift.enabled=true`, `runAsUser`, `fsGroup`, and `fsGroupChangePolicy`
 | `tolerations`                                         | list   | `[]`                                                      | Tolerations                                                                                                 |
 | `affinity`                                            | object | `{}`                                                      | Affinity rules                                                                                              |
 | `topologySpreadConstraints`                           | list   | `[]`                                                      | Topology spread constraints for pod scheduling                                                              |
+
+### Serving certificate
+
+The ECDS and WASM asset endpoint is served over TLS. The chart has two modes:
+
+- **`helm install` / `helm upgrade` (default, `tls.generate=true`):** Helm generates a self-signed CA and leaf certificate, both valid for **365 days**, into `<release>-serving-cert`, and reuses that Secret on later upgrades via `lookup`. Reuse — and therefore a stable CA — is a `helm install`/`helm upgrade` behavior only.
+- **`tls.existingSecret` / `tls.generate=false`:** the chart creates no certificate; the named Secret (keys `ca.crt`, `tls.crt`, `tls.key`) must already exist in the release namespace.
+
+#### GitOps (Argo CD, Flux) and static renders
+
+`lookup` returns nothing under `helm template`, `--dry-run`, and the server-side renders performed by Argo CD and Flux. With `tls.generate=true` such a pipeline takes the generate branch and **mints a fresh CA on every sync**. The Gateway trust bundle is inlined into the EnvoyFilter and only updates when the CA hash changes, so proxies end up trusting the old CA while the operator serves the new leaf: every ECDS stream fails TLS and, with the fail-closed bootstrap, Gateways return 503s.
+
+GitOps and static-manifest installs must instead:
+
+1. Set `tls.generate=false` (and `tls.existingSecret` to the Secret's name).
+2. Provide the Secret out-of-band — created manually, by your platform tooling, or by a certificate manager such as cert-manager (a `Certificate` + `Issuer`, not a chart-managed resource; the chart adds no cert-manager dependency).
+
+#### Rotation
+
+The generated certificate is reused until the Secret is deleted, so it expires after 365 days even across upgrades. To rotate a helm-managed installation, delete `<release>-serving-cert` and re-run `helm upgrade`. For `tls.existingSecret`, a leaf renewed under the same CA can be rotated by replacing the Secret contents. The operator reads `ca.crt` only at startup and inlines it into every EnvoyFilter, so after a CA change restart the operator (`kubectl rollout restart deployment/<release>`) to publish the new trust bundle.
+
+Static manifests built with `make build.installer` or `make release.manifests` disable generation (`tls.generate=false`) so no private key is published. Before applying one of those manifests, create the serving Secret yourself as described above.
 
 ## Metrics
 
