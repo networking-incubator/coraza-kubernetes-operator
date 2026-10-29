@@ -109,7 +109,28 @@ type RuleSetSpec struct {
 	// +kubebuilder:validation:MaxItems=256
 	// +listType=atomic
 	Data []DataReference `json:"data,omitempty"`
+
+	// emptyRulesPolicy controls how an assembled RuleSet with no rules is
+	// treated. Reject fails acceptance; Allow accepts and renders an explicit
+	// no-op payload. Empty rules are never treated as missing.
+	//
+	// +optional
+	// +default="Reject"
+	// +kubebuilder:validation:Enum=Reject;Allow
+	EmptyRulesPolicy EmptyRulesPolicy `json:"emptyRulesPolicy,omitempty"`
 }
+
+// EmptyRulesPolicy controls how an empty assembled RuleSet is treated.
+type EmptyRulesPolicy string
+
+const (
+	// EmptyRulesPolicyReject rejects an empty assembled RuleSet.
+	EmptyRulesPolicyReject EmptyRulesPolicy = "Reject"
+
+	// EmptyRulesPolicyAllow accepts an empty assembled RuleSet and renders an
+	// explicit no-op payload.
+	EmptyRulesPolicyAllow EmptyRulesPolicy = "Allow"
+)
 
 // -----------------------------------------------------------------------------
 // RuleSet - Cache Server
@@ -183,4 +204,29 @@ type RuleSetStatus struct {
 	// +kubebuilder:validation:MaxItems=16
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty" patchStrategy:"merge" patchMergeKey:"type" protobuf:"bytes,1,rep,name=conditions"`
+
+	// acceptedContent records the last accepted assembled content. It survives
+	// desired-input degradation.
+	//
+	// +optional
+	//nolint:kubeapilinter // optional pointer distinguishes absence from an accepted record
+	AcceptedContent *RuleSetAcceptedContent `json:"acceptedContent,omitempty"`
+}
+
+// RuleSetAcceptedContent records the assembled content accepted for a RuleSet
+// generation.
+type RuleSetAcceptedContent struct {
+	// observedGeneration is the RuleSet generation whose content was accepted.
+	//
+	// +required
+	// +kubebuilder:validation:Minimum=1
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+
+	// contentHash is the deterministic hash of the accepted assembled content,
+	// in the form sha256:<64 lowercase hexadecimal characters>.
+	//
+	// +required
+	// +kubebuilder:validation:MinLength=71
+	// +kubebuilder:validation:MaxLength=71
+	ContentHash string `json:"contentHash,omitempty"`
 }

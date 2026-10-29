@@ -80,28 +80,33 @@ spec:
                       driver.
                     minProperties: 0
                     properties:
-                      image:
+                      sha256:
                         description: |-
-                          image is the OCI image reference for the Coraza WASM plugin.
-                          If omitted the operator uses its configured default WASM OCI reference
-                          (--default-wasm-image / CORAZA_DEFAULT_WASM_IMAGE).
-                        maxLength: 1024
-                        minLength: 1
+                          sha256 is the lowercase hexadecimal SHA-256 of the raw WASM bytes
+                          served at url. It must be set together with url.
+                        maxLength: 64
+                        minLength: 64
                         type: string
-                      imagePullSecret:
+                      url:
                         description: |-
-                          imagePullSecret is the name of a Kubernetes Secret in the same namespace
-                          as the Engine that contains Docker registry credentials for pulling the
-                          WASM OCI image.
-                        maxLength: 253
+                          url is an HTTPS URL serving raw WASM bytes. It must be set together
+                          with sha256. When both url and sha256 are omitted, the operator uses its
+                          bundled module.
+                        maxLength: 2048
                         minLength: 1
                         type: string
                     type: object
                     x-kubernetes-validations:
-                    - message: image must start with oci:// when set
-                      rule: '!has(self.image) || self.image.matches(''^oci://'')'
-                    - message: image must be at most 1024 characters when set
-                      rule: '!has(self.image) || size(self.image) <= 1024'
+                    - message: url and sha256 must be set together; omit both to use
+                        the bundled module
+                      rule: (has(self.url) && has(self.sha256)) || (!has(self.url)
+                        && !has(self.sha256))
+                    - message: url must be an https URL without query or fragment;
+                        userinfo is rejected by Go URL parsing
+                      rule: '!has(self.url) || (self.url.matches(''^https://'') &&
+                        !self.url.contains(''?'') && !self.url.contains(''#''))'
+                    - message: sha256 must be 64 lowercase hexadecimal characters
+                      rule: '!has(self.sha256) || self.sha256.matches(''^[0-9a-f]{64}$'')'
                 required:
                 - type
                 type: object
@@ -159,11 +164,9 @@ spec:
                 type: object
               ruleSetCacheServer:
                 description: |-
-                  ruleSetCacheServer contains configuration for the ruleset cache server.
-
-                  When omitted, no cache server will be used and no rulesets will be
-                  dynamically loaded. This implies that your Engine will be deployed with
-                  all rules statically embedded.
+                  ruleSetCacheServer is deprecated and ignored. The operator distributes
+                  rules through ECDS and does not start the legacy HTTP rule server, so
+                  this field has no effect.
                 minProperties: 0
                 properties:
                   pollIntervalSeconds:
@@ -265,6 +268,134 @@ spec:
             description: status defines the observed state of Engine.
             minProperties: 0
             properties:
+              acceptedConfiguration:
+                description: |-
+                  acceptedConfiguration records the last accepted complete Engine
+                  configuration. It survives desired-input degradation and is not a payload
+                  store.
+                properties:
+                  binaryURL:
+                    description: |-
+                      binaryURL is the URL of the raw WASM binary used by the accepted
+                      configuration.
+                    maxLength: 2048
+                    minLength: 1
+                    type: string
+                  driverType:
+                    description: |-
+                      driverType is the resolved driver type of the accepted configuration.
+                      Publication requires it; records written before this field existed
+                      mismatch and wait for re-acceptance.
+                    enum:
+                    - wasm
+                    type: string
+                  emptyRulesPolicy:
+                    description: |-
+                      emptyRulesPolicy is the resolved empty-rules policy of the accepted
+                      configuration. Publication requires it; records written before this
+                      field existed mismatch and wait for re-acceptance.
+                    enum:
+                    - Reject
+                    - Allow
+                    type: string
+                  failurePolicy:
+                    description: failurePolicy is the failure policy of the accepted
+                      configuration.
+                    enum:
+                    - fail
+                    - allow
+                    type: string
+                  filterStateLogs:
+                    description: |-
+                      filterStateLogs reports whether the accepted configuration renders WAF
+                      filter-state logging. Publication requires it; records written before
+                      this field existed mismatch and wait for re-acceptance.
+                    enum:
+                    - Enabled
+                    - Disabled
+                    type: string
+                  observedGeneration:
+                    description: |-
+                      observedGeneration is the Engine generation whose configuration was
+                      accepted.
+                    format: int64
+                    minimum: 1
+                    type: integer
+                  renderingSchemaVersion:
+                    description: |-
+                      renderingSchemaVersion is the schema version of the rendered runtime
+                      configuration.
+                    format: int32
+                    minimum: 1
+                    type: integer
+                  ruleSetContentHash:
+                    description: |-
+                      ruleSetContentHash is the accepted RuleSet content hash, in the form
+                      sha256:<64 lowercase hexadecimal characters>.
+                    maxLength: 71
+                    minLength: 71
+                    type: string
+                  ruleSetUID:
+                    description: ruleSetUID is the UID of the RuleSet used for the
+                      accepted configuration.
+                    maxLength: 36
+                    minLength: 36
+                    type: string
+                  version:
+                    description: |-
+                      version is the content-addressed version of the accepted configuration,
+                      in the form sha256:<64 lowercase hexadecimal characters>.
+                    maxLength: 71
+                    minLength: 71
+                    type: string
+                  vm:
+                    description: |-
+                      vm records the resolved WASM VM settings of the accepted configuration.
+                      Publication requires it; records written before this field existed
+                      mismatch and wait for re-acceptance.
+                    properties:
+                      codeTimeout:
+                        description: |-
+                          codeTimeout is the resolved WASM code fetch and execution timeout of
+                          the accepted configuration, as a Go duration string (for example
+                          "10s").
+                        maxLength: 32
+                        minLength: 1
+                        type: string
+                      runtime:
+                        description: runtime is the resolved WASM runtime of the accepted
+                          configuration.
+                        maxLength: 253
+                        minLength: 1
+                        type: string
+                      vmID:
+                        description: vmID is the resolved WASM VM ID of the accepted
+                          configuration.
+                        maxLength: 253
+                        minLength: 1
+                        type: string
+                    required:
+                    - codeTimeout
+                    - runtime
+                    - vmID
+                    type: object
+                  wasmSHA256:
+                    description: |-
+                      wasmSHA256 is the lowercase hexadecimal SHA-256 of the WASM binary used
+                      by the accepted configuration.
+                    maxLength: 64
+                    minLength: 64
+                    type: string
+                required:
+                - binaryURL
+                - failurePolicy
+                - observedGeneration
+                - renderingSchemaVersion
+                - ruleSetContentHash
+                - ruleSetUID
+                - version
+                - wasmSHA256
+                type: object
               conditions:
                 description: |-
                   conditions represent the current state of the Engine resource.

@@ -6,8 +6,8 @@ spec:
   rules: |
     SecRuleEngine On
     SecRequestBodyAccess On
+    SecRequestBodyLimit 13107200
     SecResponseBodyAccess Off
-    SecAuditLog /dev/stdout
     SecAuditLogFormat JSON
     SecAuditEngine RelevantOnly
 ---

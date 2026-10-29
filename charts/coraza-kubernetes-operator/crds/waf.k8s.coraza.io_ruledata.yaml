@@ -139,9 +139,9 @@ spec:
         - message: files must be non-empty
           rule: has(self.spec.files) && size(self.spec.files) > 0
         - message: files keys must be valid data file names (alphanumeric, '-', '_',
-            '.'; max 253 chars)
+            '.'; not '.' or '..'; max 253 chars)
           rule: 'has(self.spec.files) ? self.spec.files.all(k, k.matches(''^[-._a-zA-Z0-9]+$'')
-            && size(k) <= 253) : true'
+            && size(k) <= 253 && k != ''.'' && k != ''..'') : true'
     served: true
     storage: true
     subresources:
