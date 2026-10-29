@@ -21,7 +21,7 @@ KIND_CLUSTER_NAME ?= coraza-kubernetes-operator-integration
 # Default coraza matches kind + operator Helm in hack/kind_cluster.py. For OpenShift,
 # use openshift-gateway (match operator istio.revision) or empty for default-revision Istio.
 ISTIO_GATEWAY_REVISION ?= coraza
-ISTIO_VERSION ?= 1.30.3
+ISTIO_VERSION ?= 1.31.1
 # Pin kube-prometheus-stack chart version (https://artifacthub.io/packages/helm/prometheus-community/kube-prometheus-stack).
 # Override at install time: make observability.prometheus.deploy KUBE_PROM_STACK_VERSION=x.y.z
 KUBE_PROM_STACK_VERSION ?= 86.2.3
@@ -119,9 +119,12 @@ all: build
 # Build
 # ------------------------------------------------------------------------------
 
+# coraza.no_memoize: validation compiles untrusted rule text, and a failed parse
+# returns a nil WAF that cannot release the memoizer it registered, so it leaks.
+# The operator runs no WAF transactions, so nothing benefits from the cache.
 .PHONY: build.binaries
 build.binaries:
-	go build -o bin/manager -tags no_fs_access ./cmd/manager
+	go build -o bin/manager -tags 'no_fs_access coraza.no_memoize' ./cmd/manager
 	go build -o bin/kubectl-coraza ./cmd/kubectl-coraza
 
 .PHONY: build
@@ -137,9 +140,15 @@ build.installer: manifests generate helm.sync ## Build a single install manifest
 	helm template $(HELM_RELEASE_NAME) $(HELM_CHART_DIR) \
 		--namespace $(HELM_RELEASE_NAMESPACE) \
 		--include-crds \
+		--set tls.generate=false \
 		--set image.repository=$(CONTROLLER_MANAGER_CONTAINER_IMAGE_BASE) \
 		--set image.tag=$(CONTROLLER_MANAGER_CONTAINER_IMAGE_TAG) \
 		> dist/install.yaml
+	@if grep -q '^  tls.key:' dist/install.yaml; then \
+		echo "ERROR: dist/install.yaml contains a generated serving private key; create the serving Secret separately" >&2; \
+		rm -f dist/install.yaml; \
+		exit 1; \
+	fi
 
 .PHONY: release.manifests
 release.manifests: manifests generate helm.sync ## Build release manifest bundles (crds, operator, samples)
@@ -150,9 +159,15 @@ release.manifests: manifests generate helm.sync ## Build release manifest bundle
 	@echo "Building operator bundle..."
 	helm template $(HELM_RELEASE_NAME) $(HELM_CHART_DIR) \
 		--namespace $(HELM_RELEASE_NAMESPACE) \
+		--set tls.generate=false \
 		--set image.repository=$(CONTROLLER_MANAGER_CONTAINER_IMAGE_BASE) \
 		--set image.tag=$(VERSION) \
 		> dist/operator.yaml
+	@if grep -q '^  tls.key:' dist/operator.yaml; then \
+		echo "ERROR: dist/operator.yaml contains a generated serving private key; create the serving Secret separately" >&2; \
+		rm -f dist/operator.yaml; \
+		exit 1; \
+	fi
 	@echo "Building samples bundle..."
 	cat config/samples/gateway.yaml > dist/samples.yaml
 	echo "---" >> dist/samples.yaml
@@ -175,6 +190,111 @@ release.kubectl-plugin: ## Cross-build kubectl-coraza binaries into dist/ (linux
 .PHONY: release.operatorhub
 release.operatorhub: ## Submit OLM bundle to OperatorHub community-operators
 	hack/publish_operatorhub.sh --version $(VERSION:v%=%)
+
+# ------------------------------------------------------------------------------
+# Bundled WASM assets
+# ------------------------------------------------------------------------------
+
+ASSETS_DIR ?= internal/assets
+# Raw plugin.wasm to bundle; required by wasm.bundle.
+WASM_MODULE ?=
+WASM_MODULE_NAME ?= envoy-coraza
+# Optional manifest metadata (git SHA and linked versions of the real module).
+WASM_GIT_SHA ?= $(CORAZA_RS_VERSION)
+WASM_CORAZA_VERSION ?= 0.1.0
+WASM_PROXY_WASM_SDK_VERSION ?= 6ceedbbdd07a048a65d197c9bbb1f950884561fb
+# Embed the pinned OWASP CRS tree in the module (coraza-rs embed-crs feature).
+# The release bundle does not embed CRS; the demo and wasm.crs do.
+WASM_CRS ?= 0
+WASM_CRS_VERSION ?= $(if $(filter 1,$(WASM_CRS)),$(or $(shell awk 'NR==1{print $$1}' '$(CORAZA_RS_DIR)/envoy-coraza/crs.pin' 2>/dev/null),dev),none)
+
+.PHONY: wasm.bundle
+wasm.bundle: ## Bundle WASM_MODULE=<path> (raw plugin.wasm) and rewrite its manifest
+	@test -n "$(WASM_MODULE)" || { echo "WASM_MODULE is required: path to a raw plugin.wasm" >&2; exit 1; }
+	@test -f "$(WASM_MODULE)" || { echo "WASM_MODULE not found: $(WASM_MODULE)" >&2; exit 1; }
+	cp "$(WASM_MODULE)" "$(ASSETS_DIR)/plugin.wasm"
+	@# Metadata is written as YAML plain scalars: git SHAs and versions are safe unquoted.
+	@sum=$$(sha256sum "$(ASSETS_DIR)/plugin.wasm" | cut -d' ' -f1); \
+		printf 'schema_version: 1\nmodule: %s\nfile: plugin.wasm\nsha256: %s\ngit_sha: %s\ncoraza_version: %s\nproxy_wasm_sdk_version: %s\ncrs_version: %s\n' \
+			'$(WASM_MODULE_NAME)' "$$sum" '$(WASM_GIT_SHA)' '$(WASM_CORAZA_VERSION)' '$(WASM_PROXY_WASM_SDK_VERSION)' '$(WASM_CRS_VERSION)' \
+			> "$(ASSETS_DIR)/plugin.manifest.yaml"; \
+		echo "wasm.bundle: $$sum $(ASSETS_DIR)/plugin.wasm"
+
+.PHONY: wasm.verify
+wasm.verify: ## Verify the bundled module digest against plugin.manifest.yaml
+	@want=$$(awk '/^sha256:/{print $$2; exit}' "$(ASSETS_DIR)/plugin.manifest.yaml"); \
+	got=$$(sha256sum "$(ASSETS_DIR)/plugin.wasm" | cut -d' ' -f1); \
+	if [ -z "$$want" ]; then echo "wasm.verify: no sha256 in $(ASSETS_DIR)/plugin.manifest.yaml" >&2; exit 1; fi; \
+	if [ "$$want" != "$$got" ]; then echo "wasm.verify: digest mismatch: manifest $$want, $(ASSETS_DIR)/plugin.wasm $$got" >&2; exit 1; fi; \
+	echo "wasm.verify: $$got $(ASSETS_DIR)/plugin.wasm ok"
+
+# envoy-coraza built from coraza-rs. The default build has no embedded CRS;
+# wasm.crs (and the demo) adds the pinned CRS tree. Point CORAZA_RS_DIR at a
+# local checkout to build a branch without publishing anything:
+#   make demo CORAZA_RS_DIR=/path/to/coraza-rs
+# The build runs from an archive of CORAZA_RS_VERSION inside a temporary
+# directory, so a user-provided checkout is read-only for this target (no clone,
+# fetch, checkout, or new files).
+#
+# Istio 1.31 ships Envoy 1.39, which does not provide the WASI functions Rust
+# std imports. The artifact is therefore linked with hack/wasi-stub.wat using
+# the pinned Binaryen release; Envoy 1.40+ ignores the stubs.
+CORAZA_RS_REPO ?= https://github.com/networking-incubator/coraza-rs
+CORAZA_RS_VERSION ?= e1442ee3dc516a022a687a2bc9e239e39b629e03
+CORAZA_RS_DIR ?= $(CURDIR)/.cache/coraza-rs
+# Raw module produced by wasm.plugin (ignored by git, outside the source repo).
+WASM_MODULE_OUT ?= $(CURDIR)/.cache/wasm/envoy_coraza.wasm
+WASI_STUB ?= $(CURDIR)/hack/wasi-stub.wat
+BINARYEN_VERSION ?= 123
+BINARYEN_DIR ?= $(CURDIR)/.cache/binaryen
+
+.PHONY: wasm.plugin
+wasm.plugin: ## Build envoy-coraza from the pinned coraza-rs commit (skipped when WASM_MODULE is set)
+	@set -e; \
+	if [ -n "$(WASM_MODULE)" ]; then \
+		echo "wasm.plugin: reusing $(WASM_MODULE)"; \
+		exit 0; \
+	fi; \
+	default_dir="$(CURDIR)/.cache/coraza-rs"; \
+	if [ "$(CORAZA_RS_DIR)" = "$$default_dir" ]; then \
+		if [ ! -e "$$default_dir/.git" ]; then \
+			echo "wasm.plugin: cloning $(CORAZA_RS_REPO)"; \
+			git clone --quiet "$(CORAZA_RS_REPO)" "$$default_dir"; \
+		fi; \
+		if ! git -C "$$default_dir" rev-parse --verify --quiet "$(CORAZA_RS_VERSION)^{commit}" >/dev/null; then \
+			echo "wasm.plugin: fetching $(CORAZA_RS_VERSION)"; \
+			git -C "$$default_dir" fetch --quiet --all --tags; \
+		fi; \
+	fi; \
+	if ! git -C "$(CORAZA_RS_DIR)" rev-parse --verify --quiet "$(CORAZA_RS_VERSION)^{commit}" >/dev/null; then \
+		echo "wasm.plugin: pinned coraza-rs commit $(CORAZA_RS_VERSION) is not available in $(CORAZA_RS_REPO); pass CORAZA_RS_DIR=<checkout>" >&2; \
+		exit 1; \
+	fi; \
+	work=$$(mktemp -d); \
+	trap 'rm -rf "$$work"' EXIT; \
+	git -C "$(CORAZA_RS_DIR)" archive --format=tar "$(CORAZA_RS_VERSION)" | tar -x -C "$$work"; \
+	if [ "$(WASM_CRS)" = "1" ]; then \
+		echo "wasm.plugin: fetching the pinned OWASP CRS"; \
+		( cd "$$work" && ./envoy-coraza/crs-fetch.sh ); \
+	fi; \
+	echo "wasm.plugin: building $(CORAZA_RS_VERSION) with Rust"; \
+	feat=""; \
+	if [ "$(WASM_CRS)" = "1" ]; then feat="--features envoy-coraza/embed-crs"; fi; \
+	( cd "$$work" && rustup target add wasm32-wasip1 >/dev/null && \
+		cargo build --locked --release --target wasm32-wasip1 -p envoy-coraza $$feat ); \
+	module="$$work/target/wasm32-wasip1/release/envoy_coraza.wasm"; \
+	test -f "$$module" || { echo "wasm.plugin: build did not produce $$module" >&2; exit 1; }; \
+	bin=$$(BINARYEN_VERSION="$(BINARYEN_VERSION)" BINARYEN_DIR="$(BINARYEN_DIR)" "$(CURDIR)/hack/install-binaryen.sh"); \
+	"$$bin/wasm-as" "$(WASI_STUB)" -o "$$work/wasi-stub.wasm"; \
+	mkdir -p "$(dir $(WASM_MODULE_OUT))"; \
+	"$$bin/wasm-merge" "$$work/wasi-stub.wasm" wasi_snapshot_preview1 "$$module" envoy-coraza \
+		-o "$(WASM_MODULE_OUT)" --rename-export-conflicts --all-features; \
+	echo "wasm.plugin: $(WASM_MODULE_OUT)"
+
+.PHONY: wasm.crs
+wasm.crs: ## Build and bundle a CRS-enabled module (demo only; the release bundle omits CRS)
+	$(MAKE) wasm.plugin WASM_CRS=1
+	$(MAKE) wasm.bundle WASM_CRS=1 WASM_MODULE=$(WASM_MODULE_OUT)
 
 # ------------------------------------------------------------------------------
 # Deployment
@@ -589,14 +709,17 @@ observability.operator.monitoring: ## Enable ServiceMonitor, PrometheusRule, and
 	kubectl --context "$$ctx" -n "$(HELM_RELEASE_NAMESPACE)" wait --for=condition=Available \
 		deployment/"$(HELM_RELEASE_NAME)" --timeout=300s
 
-.PHONY: observability.demo.workload
-observability.demo.workload: ## Apply demo CRs and seed traffic for dashboard metrics
+# Server-side apply with forced conflicts keeps the demo idempotent after a
+# manual edit of a sample object.
+.PHONY: demo.workload
+demo.workload: ## Apply the demo CRs (config/samples) and wait for acceptance
 	@set -e; \
 	ctx="kind-$(KIND_CLUSTER_NAME)"; \
 	kubectl --context "$$ctx" cluster-info >/dev/null; \
 	echo "=== Applying demo workload (config/samples) to $(DEMO_NAMESPACE) ==="; \
 	kubectl --context "$$ctx" create namespace "$(DEMO_NAMESPACE)" 2>/dev/null || true; \
-	kubectl --context "$$ctx" apply -n "$(DEMO_NAMESPACE)" -k "$(CURDIR)/config/samples"; \
+	kubectl --context "$$ctx" apply --server-side --force-conflicts \
+		-n "$(DEMO_NAMESPACE)" -k "$(CURDIR)/config/samples"; \
 	kubectl --context "$$ctx" -n "$(DEMO_NAMESPACE)" wait --for=condition=Available \
 		deployment/echo --timeout=300s; \
 	echo "=== Waiting for Engine Ready ==="; \
@@ -614,11 +737,56 @@ observability.demo.workload: ## Apply demo CRs and seed traffic for dashboard me
 		ruleset/default-ruleset --timeout=300s 2>/dev/null; then \
 		echo "ERROR: RuleSet default-ruleset not Ready within timeout" >&2; exit 1; \
 	fi
+
+.PHONY: observability.demo.workload
+observability.demo.workload: demo.workload ## Apply demo CRs and seed traffic for dashboard metrics
 	KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) DEMO_NAMESPACE=$(DEMO_NAMESPACE) \
 		hack/observability/seed-traffic.sh
 
 .PHONY: observability.demo
 observability.demo: observability.prometheus.deploy observability.operator.monitoring observability.demo.workload observability.grafana.url ## Full observability demo on existing KIND cluster
+
+.PHONY: demo
+demo: ## Single command: build the CRS-enabled WASM module, create KIND, deploy the operator and the demo rules
+	$(MAKE) wasm.crs
+	$(MAKE) wasm.verify
+	$(MAKE) cluster.kind
+	@# The chart reuses imagePullPolicy IfNotPresent, so restart the operator to run the image just loaded.
+	kubectl --context kind-$(KIND_CLUSTER_NAME) -n $(HELM_RELEASE_NAMESPACE) rollout restart deployment/$(HELM_RELEASE_NAME)
+	$(MAKE) demo.workload
+	$(MAKE) demo.verify
+	@echo "note: $(ASSETS_DIR)/plugin.wasm now holds the built module; restore the committed fixture with: git checkout $(ASSETS_DIR)"
+
+.PHONY: demo.verify
+demo.verify: ## Assert the demo Gateway passes normal traffic and blocks the demo attack
+	@set -e; \
+	ctx="kind-$(KIND_CLUSTER_NAME)"; \
+	addr=""; \
+	deadline=$$(($$(date +%s) + 300)); \
+	while [ "$$(date +%s)" -lt "$$deadline" ]; do \
+		addr=$$(kubectl --context "$$ctx" -n "$(DEMO_NAMESPACE)" get gateway coraza-gateway \
+			-o jsonpath='{.status.addresses[0].value}' 2>/dev/null || true); \
+		[ -n "$$addr" ] && break; \
+		sleep 5; \
+	done; \
+	[ -n "$$addr" ] || { echo "ERROR: Gateway coraza-gateway has no address" >&2; exit 1; }; \
+	echo "=== Sending demo traffic to http://$$addr/ ==="; \
+	allowed=""; blocked=""; data=""; \
+	deadline=$$(($$(date +%s) + 240)); \
+	while [ "$$(date +%s)" -lt "$$deadline" ]; do \
+		allowed=$$(curl -s --max-time 5 -o /dev/null -w '%{http_code}' "http://$$addr/" || true); \
+		blocked=$$(curl -s --max-time 5 -o /dev/null -w '%{http_code}' "http://$$addr/?q=evilmonkey" || true); \
+		data=$$(curl -s --max-time 5 -o /dev/null -w '%{http_code}' "http://$$addr/?q=evildata" || true); \
+		[ "$$allowed" = "200" ] && [ "$$blocked" = "403" ] && [ "$$data" = "403" ] && break; \
+		sleep 5; \
+	done; \
+	echo "  allowed  GET /                      -> $$allowed (want 200)"; \
+	echo "  blocked  GET /?q=evilmonkey         -> $$blocked (want 403)"; \
+	echo "  blocked  GET /?q=evildata           -> $$data (want 403, @pmFromFile RuleData)"; \
+	[ "$$allowed" = "200" ] && [ "$$blocked" = "403" ] && [ "$$data" = "403" ] || { \
+		echo "ERROR: the WAF is not enforcing (is the WASM module loaded?)" >&2; exit 1; }; \
+	echo "=== Demo verified: rules from the cluster block the request ==="
+
 
 .PHONY: observability.grafana.port-forward
 observability.grafana.port-forward: ## Port-forward Grafana to http://localhost:3000
