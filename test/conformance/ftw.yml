@@ -1,5 +1,7 @@
 # The overrides for logs and IP are set during FTW execution
 # This file was generated based on previous https://github.com/corazawaf/coraza-proxy-wasm/blob/main/ftw/ftw.yml
+# Baseline: the expected failures below were measured against the previous Go
+# coraza-proxy-wasm plugin. Re-run against envoy-coraza before changing them.
 # and additionally with investigation of violating rules.
 # Additionally Claude was used to verify and refine the failures vs Coreruleset and WASM behavior
 ---
