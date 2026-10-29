@@ -8,8 +8,68 @@ description: "Generate and deploy OWASP CoreRuleSet rules using the kubectl-cora
 The [OWASP CoreRuleSet (CRS)](https://coreruleset.org/) is a widely used set of attack detection rules for ModSecurity-compatible WAFs. The `kubectl-coraza` plugin can generate **RuleSource**, **RuleData**, and **RuleSet** manifests from CRS rule files.
 
 {{% alert title="Important" color="warning" %}}
-This project does not provide, maintain, or support CoreRuleSet rules. Users must supply their own rules. The tools described here are provided for convenience.
+This project does not maintain CoreRuleSet rules. The bundled module embeds an upstream CRS release; rule behavior and support follow that release.
 {{% /alert %}}
+
+## Use the embedded CoreRuleSet
+
+`make wasm.crs` (used by `make demo`) builds `envoy-coraza` with the CRS release pinned by the operator (`v4.30.0`; recorded as `crs_version` in `plugin.manifest.yaml`). The default and release builds do **not** embed CRS, so `crs/...` includes require a CRS-enabled module. Reference the embedded tree directly:
+
+```yaml
+apiVersion: waf.k8s.coraza.io/v1alpha1
+kind: RuleSource
+metadata:
+  name: crs
+  namespace: my-namespace
+spec:
+  rules: |
+    SecRuleEngine On
+    SecRequestBodyAccess On
+    SecRequestBodyLimit 13107200
+    Include crs/crs-setup.conf
+    Include crs/rules/*.conf
+---
+apiVersion: waf.k8s.coraza.io/v1alpha1
+kind: RuleSet
+metadata:
+  name: crs
+  namespace: my-namespace
+spec:
+  sources:
+    - name: crs
+```
+
+Point the Engine at the RuleSet:
+
+```yaml
+spec:
+  ruleSet:
+    name: crs
+```
+
+`crs/crs-setup.conf`, `crs/rules/*.conf`, a literal `crs/rules/<file>.conf`, and `@pmFromFile crs/...` resolve inside the module. They are not RuleData files: `crs/` paths cannot be supplied through `spec.data`.
+
+Verify enforcement:
+
+```bash
+kubectl -n my-namespace wait --for=condition=Ready ruleset/crs --timeout=300s
+
+ADDR=$(kubectl -n my-namespace get gateway <gateway-name> \
+  -o jsonpath='{.status.addresses[0].value}')
+
+# normal request
+curl -s -o /dev/null -w '%{http_code}\n' "http://$ADDR/"
+
+# SQLi probe; expect 403
+curl -s -o /dev/null -w '%{http_code}\n' \
+  "http://$ADDR/?q=1%27%20OR%20%271%27=%271"
+```
+
+The previous Go plugin's aliases (`@owasp_crs/...`, `@recommended-conf`, `@demo-conf`, `@ftw-conf`, `@crs-setup-conf`) are not supported. Rewrite them to `crs/...`.
+
+## Generate manifests for a different CRS release
+
+Use the generator when you need a different CRS version or per-rule exclusions. To match the embedded release, set `--version 4.30.0`.
 
 ## Install the kubectl-coraza Plugin
 

@@ -299,120 +299,81 @@ make NAMESPACE=my-namespace coraza.coreruleset
 
 # Building Custom WASM Plugins
 
-The operator uses the [coraza-proxy-wasm](https://github.com/networking-incubator/coraza-proxy-wasm)
-plugin, which runs inside Envoy/Istio.
-
-This section describes how to build **the WASM plugin itself** in the separate
-[`coraza-proxy-wasm`](https://github.com/networking-incubator/coraza-proxy-wasm) repository.
-It does **not** change the Go version required to build this operator. For the operator,
-always use the Go version declared in this repository's `go.mod`.
+The operator uses the `envoy-coraza` Proxy-Wasm filter built from
+[`coraza-rs`](https://github.com/networking-incubator/coraza-rs), which runs inside
+Envoy/Istio. The operator itself stays a Go project; building the plugin does not
+change the Go version required to build the operator.
 
 ## Prerequisites
 
-> **Critical**: The toolchain versions in this section apply to the
-> **coraza-proxy-wasm** repository. Using versions other than those required by that
-> repository may result in build failures or runtime incompatibilities for the plugin.
-
-- **TinyGo**: `0.34.0` (plugin build requirement; see the coraza-proxy-wasm docs for updates)
-- **Go toolchain**: declared in the coraza-proxy-wasm `go.work` file. TinyGo checks the
-  host Go version independently of `go run`, so the build step below sets `GOTOOLCHAIN`
-  from `go.work` explicitly.
+- **Rust**: the `coraza-rs` commit pins its toolchain in `rust-toolchain.toml`
+  (currently 1.99.1); `rustup` installs it on first build.
+- **Rust target**: `wasm32-wasip1` (`rustup target add wasm32-wasip1`).
+- **Binaryen**: `make wasm.plugin` downloads the pinned release into `.cache/` and
+  verifies its published SHA-256. It links the WASI stubs in `hack/wasi-stub.wat`,
+  which Envoy releases before 1.40 need (Istio 1.31 ships Envoy 1.39).
+- **CRS (demo only)**: `make wasm.crs` fetches the OWASP CRS release pinned in
+  coraza-rs's `envoy-coraza/crs.pin` and builds with `embed-crs`. This needs
+  `curl`, `tar`, and `sha256sum` (or `shasum`). The release build uses
+  `WASM_CRS=0` and has no embedded CRS; `crs/...` includes then fail.
 
 ## Building from Source
 
-To build a custom WASM plugin:
+The pinned commit is `CORAZA_RS_VERSION` in the `Makefile`. Build it with:
 
-1. Clone the coraza-proxy-wasm repository:
+```bash
+make wasm.plugin
+```
 
-   ```bash
-   git clone https://github.com/networking-incubator/coraza-proxy-wasm.git
-   cd coraza-proxy-wasm
-   ```
+This clones or fetches the pinned commit into `.cache/coraza-rs`, builds
+`envoy-coraza` with Cargo for `wasm32-wasip1`, links the WASI stubs, and writes
+`.cache/wasm/envoy_coraza.wasm`. It does not embed CRS. To build the demo module
+with CRS, use `make wasm.crs`. To build a local checkout instead:
 
-2. Install TinyGo 0.34.0 (exact version required):
+```bash
+make wasm.plugin CORAZA_RS_DIR=/path/to/coraza-rs
+make wasm.crs CORAZA_RS_DIR=/path/to/coraza-rs
+```
 
-   ```bash
-   wget https://github.com/tinygo-org/tinygo/releases/download/v0.34.0/tinygo0.34.0.linux-amd64.tar.gz
-   sudo tar -xzf tinygo0.34.0.linux-amd64.tar.gz -C /usr/local
-   export PATH=$PATH:/usr/local/tinygo/bin
-   tinygo version  # Must show: tinygo version 0.34.0
-   ```
+The targets read the checkout through `git archive` and never modify it.
 
-   For other platforms, see the [TinyGo v0.34.0 release page](https://github.com/tinygo-org/tinygo/releases/tag/v0.34.0).
+Bundle the artifact into the operator and verify it:
 
-3. Build the WASM module:
+```bash
+make wasm.bundle WASM_MODULE=.cache/wasm/envoy_coraza.wasm
+make wasm.verify
+```
 
-   ```bash
-   GOTOOLCHAIN=go$(sed -n 's/^go //p' go.work) go run mage.go build
-   ```
+`wasm.bundle` overwrites `internal/assets/plugin.wasm` and
+`internal/assets/plugin.manifest.yaml`; the committed fixture is restored with
+`git checkout internal/assets`. Do not commit the built module.
 
-   The `sed` expression reads the Go version from `go.work` and `GOTOOLCHAIN`
-   forces that toolchain so TinyGo's version check succeeds when the system Go
-   is newer. The WASM binary is generated in the build directory.
+## Using a Custom Module
 
-4. Build the Docker image with your custom tag:
+Serve the built module from a plain HTTPS endpoint that does not redirect (Envoy
+rejects redirecting asset URLs), then set both fields on the Engine:
 
-   ```bash
-   docker build -t ghcr.io/YOUR_ORG/coraza-proxy-wasm:custom-tag .
-   ```
+```yaml
+spec:
+  driver:
+    type: wasm
+    wasm:
+      url: "https://files.example.com/coraza-rs/envoy-coraza-custom.wasm"
+      sha256: "<64 lowercase hex characters>"
+```
 
-5. Authenticate with GitHub Container Registry (GHCR):
-
-   ```bash
-   # Create a GitHub Personal Access Token (PAT) with 'write:packages' scope at:
-   # https://github.com/settings/tokens
-
-   # Login to GHCR
-   echo $GITHUB_TOKEN | docker login ghcr.io -u YOUR_GITHUB_USERNAME --password-stdin
-   ```
-
-6. Push the image to GHCR:
-
-   ```bash
-   docker push ghcr.io/YOUR_ORG/coraza-proxy-wasm:custom-tag
-   ```
-
-7. Update your Engine resource to use the custom image:
-
-   Edit `config/samples/engine.yaml` (or your Engine manifest):
-
-   ```yaml
-   apiVersion: waf.k8s.coraza.io/v1alpha1
-   kind: Engine
-   metadata:
-     name: coraza
-   spec:
-     ruleSet:
-       name: default-ruleset
-     target:
-       type: Gateway
-       name: coraza-gateway
-       provider: Istio
-     failurePolicy: fail
-     driver:
-       type: wasm
-       wasm:
-         image: "oci://ghcr.io/YOUR_ORG/coraza-proxy-wasm:custom-tag"
-   ```
-
-8. Apply the updated Engine to your cluster:
-
-   ```bash
-   kubectl apply -f config/samples/engine.yaml
-   ```
+The URL must be HTTPS and the digest must match the served bytes.
 
 ## Testing Custom WASM Plugins
 
-You can override the WASM image used by tests:
+`make demo` builds and bundles the pinned module before creating the cluster. To
+test a locally built artifact instead, bundle it first and run the deployment
+targets without `wasm.plugin`:
 
 ```bash
-# Set the image for integration/conformance tests
-export CORAZA_WASM_IMAGE="oci://ghcr.io/YOUR_ORG/coraza-proxy-wasm:custom-tag"
-
-# Run tests with your custom image
-make test.integration
-# or
-make test.conformance
+make wasm.bundle WASM_MODULE=/path/to/envoy_coraza.wasm
+make wasm.verify
+make cluster.kind
 ```
 
 # Additional Development Workflows

@@ -5,7 +5,7 @@ weight: 25
 description: "Create an Engine resource to attach a WAF to a Kubernetes Gateway."
 ---
 
-An Engine resource references a RuleSet and attaches the Coraza WAF to a Gateway via an Istio WasmPlugin.
+An Engine resource references a RuleSet and attaches the Coraza WAF to a Gateway. The operator renders an Istio `EnvoyFilter` for the Gateway and delivers the compiled rules to it over ECDS (Envoy Configuration Discovery Service).
 
 ## Creating an Engine
 
@@ -53,44 +53,28 @@ spec:
 
 See [Configuring Failure Policies]({{< relref "configuring-failure-policies" >}}) for guidance on choosing.
 
-## Configuring the Poll Interval
+## Rule Set Delivery
 
-The `ruleSetCacheServer.pollIntervalSeconds` field controls how often the WASM plugin checks the cache for updated rules. The default is 15 seconds. Valid range: 1 to 3600.
+Rules are delivered to the Gateway over ECDS, and the operator pushes updates as soon as they are accepted. The Gateway does not poll. The `spec.ruleSetCacheServer` field is retained for API compatibility but is ignored.
 
-```yaml
-spec:
-  ruleSetCacheServer:
-    pollIntervalSeconds: 30
-```
+## Selecting the WASM Module
 
-Lower values mean faster rule updates but slightly more network traffic between the WASM plugin and the cache server.
-
-## Using a Custom WASM Image
-
-By default, the operator uses its built-in WASM plugin image. To use a custom image, specify it in the Engine:
+By default, the operator serves its own bundled WASM module over its HTTPS asset route and
+references it in the ECDS configuration; no module reference is needed. To use a custom
+module, specify an HTTPS URL together with its SHA-256 digest, and Envoy fetches it:
 
 ```yaml
 spec:
   driver:
     type: wasm
     wasm:
-      image: "oci://ghcr.io/my-org/coraza-proxy-wasm:v1.0.0"
+      url: "https://files.example.com/coraza-rs/envoy-coraza-<version>.wasm"
+      sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 ```
 
-The image must use the `oci://` URI scheme.
+The `url` and `sha256` fields must be set together: `url` must be an HTTPS URL without query or fragment, and `sha256` must be the 64-character lowercase hexadecimal SHA-256 of the raw WASM bytes served at `url`. Omit both fields (or set `wasm: {}`) to use the bundled module.
 
-If the image is in a private registry, provide an image pull secret:
-
-```yaml
-spec:
-  driver:
-    type: wasm
-    wasm:
-      image: "oci://my-registry.example.com/coraza-proxy-wasm:v1.0.0"
-      imagePullSecret: my-registry-credentials
-```
-
-The Secret must exist in the same namespace as the Engine.
+The custom URL host must present a certificate that chains to the CA configured with `--xds-ca-path` (the operator serving CA). Public certificate hosts are not supported by this MVP, so use an internal host with a matching certificate or keep the bundled module.
 
 ## Verifying the Engine
 
@@ -113,8 +97,8 @@ For detailed status conditions and events:
 kubectl describe engine my-engine -n my-namespace
 ```
 
-To verify that the WAF is attached, check for the WasmPlugin and NetworkPolicy created by the operator:
+To verify that the WAF is attached, check for the EnvoyFilter and NetworkPolicy created by the operator:
 
 ```bash
-kubectl get wasmplugin,networkpolicy -n my-namespace
+kubectl get envoyfilter,networkpolicy -n my-namespace
 ```

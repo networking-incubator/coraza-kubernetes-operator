@@ -29,13 +29,13 @@ Only provide minor feedback when the user explicitly requests it with `/copilot 
 - Understand controller-runtime reconciliation patterns (idempotence, requeue strategies, finalizers)
 - Know Kubernetes API conventions (status conditions, owner references, RBAC, webhooks)
 - Recognize WAF-specific concerns (rule syntax validation, cache consistency, rule reload performance)
-- Identify cross-repo impacts between this operator and `coraza-proxy-wasm`
+- Identify cross-repo impacts between this operator and `coraza-rs`
 
 ## Project Overview
 
-This is a Kubernetes operator (controller-runtime) that manages two CRDs: **Engine** and **RuleSet** (group `waf.k8s.coraza.io`, version `v1alpha1`). Engine creates Istio `WasmPlugin` resources. RuleSet aggregates SecLang WAF rules from RuleSource objects into an in-memory cache served over HTTP.
+This is a Kubernetes operator (controller-runtime) that manages four CRDs: **RuleSource**, **RuleData**, **RuleSet**, and **Engine** (group `waf.k8s.coraza.io`, version `v1alpha1`). Engine renders an `EnvoyFilter` that attaches the WASM filter and points it at the operator's ECDS service. RuleSet aggregates SecLang rules and RuleData and records an accepted content hash for the Engine to render.
 
-The operator is one half of a two-repo system. The other half is a WASM plugin (`coraza-proxy-wasm`) that runs inside Envoy/Istio and polls the operator's cache server for rules. Changes to WasmPlugin config fields (`cache_server_instance`, `cache_server_cluster`, `rule_reload_interval_seconds`) directly affect WASM plugin behavior. Flag any PR that changes these field names or the cache server HTTP API paths (`/rules/<key>`, `/rules/<key>/latest`) as a **Critical cross-repo breaking change**.
+The operator is one half of a two-repo system. The other half is the `envoy-coraza` WASM filter built from [`coraza-rs`](https://github.com/networking-incubator/coraza-rs), which runs inside Envoy/Istio and receives its configuration over ECDS (`/wasm/<digest>.wasm` for the module). The payload contract is `directives_map`, `default_directives`, and `rule_data`; the previous Go plugin's `rules`/`data_files` payload and its `@owasp_crs` alias filesystem are gone. Flag any PR that changes the ECDS resource name, the payload keys, the module asset path, or the EnvoyFilter shape as a **Critical cross-repo breaking change**.
 
 ## API Stability
 
@@ -114,7 +114,7 @@ When reviewing PRs, systematically check:
 4. **Breaking changes:** Will this break existing users? Is there a migration path?
 5. **Security:** Could this introduce vulnerabilities? (input validation, secrets, DoS, injection)
 6. **Performance:** Could this cause excessive reconciliations, memory leaks, or cache thrashing?
-7. **Cross-repo impact:** Does this affect the contract with `coraza-proxy-wasm`?
+7. **Cross-repo impact:** Does this affect the contract with `coraza-rs` (`envoy-coraza`)?
 8. **Status conditions:** Are all three condition types properly set with accurate messages?
 
 Focus your review on items that could cause **Critical** or **Major** issues per the severity definitions above.
