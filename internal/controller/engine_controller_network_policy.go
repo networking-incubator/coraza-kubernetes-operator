@@ -219,7 +219,11 @@ func (r *EngineReconciler) cleanupNetworkPolicy(ctx context.Context, log logr.Lo
 
 func (r *EngineReconciler) buildNetworkPolicy(engine *wafv1alpha1.Engine) *networkingv1.NetworkPolicy {
 	protocol := corev1.ProtocolTCP
-	port := intstr.FromInt32(int32(DefaultRuleSetCacheServerPort))
+	listenPort := r.xdsConfig.ListenPort
+	if listenPort <= 0 {
+		listenPort = DefaultRuleSetCacheServerPort
+	}
+	port := intstr.FromInt32(listenPort)
 
 	ws := targetLabelSelector(engine)
 	if ws == nil {

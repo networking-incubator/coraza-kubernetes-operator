@@ -30,7 +30,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/events"
@@ -46,6 +45,7 @@ import (
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	wafv1alpha1 "github.com/networking-incubator/coraza-kubernetes-operator/api/v1alpha1"
+	"github.com/networking-incubator/coraza-kubernetes-operator/internal/xds"
 )
 
 // -----------------------------------------------------------------------------
@@ -72,13 +72,18 @@ type EngineReconciler struct {
 	Metrics  *CorazaMetrics
 
 	client.Client
-	kubeClient                kubernetes.Interface
-	ruleSetCacheServerCluster string
-	istioRevision             string
-	// defaultWasmImage is the OCI URL used for Istio WasmPlugin spec.url when the
-	// Engine omits spec.driver.wasm.image.
-	defaultWasmImage  string
+	kubeClient    kubernetes.Interface
+	istioRevision string
+	// xdsConfig carries the ECDS endpoint and CA material injected into the
+	// EnvoyFilter.
+	xdsConfig ECDSConfig
+	// assetBaseURL is the base URL Envoy fetches the WASM asset from. The
+	// bundled module is served at <assetBaseURL>/wasm/<sha256>.wasm.
+	assetBaseURL      string
 	operatorNamespace string
+	// Limits bounds the configuration an Engine may accept. Acceptance must
+	// reject content the ECDS serving plane could not deliver.
+	Limits xds.Limits
 
 	// tokenStore is a thread-safe store for cache client tokens, keyed by
 	// "namespace/engineName/rulesetName". Uses sync.Map for simple concurrent access.
@@ -110,18 +115,16 @@ func (r *EngineReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		return fmt.Errorf("index %s: %w", engineTargetIndex, err)
 	}
 
-	wasmPlugin := &unstructured.Unstructured{}
-	wasmPlugin.SetGroupVersionKind(schema.GroupVersionKind{
-		Group:   "extensions.istio.io",
-		Version: "v1alpha1",
-		Kind:    "WasmPlugin",
-	})
+	envoyFilter := &unstructured.Unstructured{}
+	envoyFilter.SetGroupVersionKind(envoyFilterGVK)
 	telemetry := &unstructured.Unstructured{}
 	telemetry.SetGroupVersionKind(telemetryGVK)
 
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&wafv1alpha1.Engine{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
-		Owns(wasmPlugin).
+		// A no-op server-side apply does not bump generation, so this reacts
+		// to external spec drift without looping on the operator's own apply.
+		Owns(envoyFilter, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		Owns(telemetry, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		// GenerationChanged only: status/managedFields updates must not requeue Engines.
 		Watches(&gatewayv1.Gateway{}, handler.EnqueueRequestsFromMapFunc(r.findEnginesForGateway),
@@ -354,7 +357,7 @@ func (r *EngineReconciler) isRuleSetDegraded(ctx context.Context, log logr.Logge
 		if apierrors.IsNotFound(err) {
 			msg := fmt.Sprintf("RuleSet %s not found", engine.Spec.RuleSet.Name)
 			logInfo(log, req, "Engine", "RuleSet not found; marking Engine degraded", "ruleSet", engine.Spec.RuleSet.Name)
-			if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "Engine", engine, &engine.Status.Conditions, engine.Generation, "RuleSetNotFound", msg); patchErr != nil {
+			if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "Engine", engine, &engine.Status.Conditions, engine.Generation, "RuleSetNotFound", msg, func() { clearAcceptedConfiguration(engine) }); patchErr != nil {
 				return true, patchErr
 			}
 			return true, nil
@@ -364,13 +367,23 @@ func (r *EngineReconciler) isRuleSetDegraded(ctx context.Context, log logr.Logge
 	}
 
 	degradedCond := apimeta.FindStatusCondition(ruleSet.Status.Conditions, conditionDegraded)
-	if degradedCond == nil || degradedCond.Status != metav1.ConditionTrue {
+	if degradedCond == nil || degradedCond.Status != metav1.ConditionTrue || degradedCond.ObservedGeneration != ruleSet.Generation {
 		return false, nil
 	}
 
 	msg := fmt.Sprintf("RuleSet %s is degraded: %s", engine.Spec.RuleSet.Name, degradedCond.Message)
 	logInfo(log, req, "Engine", "RuleSet is degraded; marking Engine degraded", "ruleSet", engine.Spec.RuleSet.Name)
-	if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "Engine", engine, &engine.Status.Conditions, engine.Generation, "RuleSetDegraded", msg); patchErr != nil {
+	// A degraded RuleSet is usually a wait state (RuleData not found yet). Keep
+	// the accepted record: the previous snapshot keeps serving and the
+	// publication readiness deadline is the safety net if it never recovers.
+	// A recreated RuleSet (new UID) or one whose rules this build rejects is not
+	// a wait state: the accepted record cannot be reconstructed, so it must be
+	// dropped even though the RuleSet is Degraded.
+	var clear []func()
+	if acceptedRecordUnjustified(engine, &ruleSet) {
+		clear = append(clear, func() { clearAcceptedConfiguration(engine) })
+	}
+	if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "Engine", engine, &engine.Status.Conditions, engine.Generation, "RuleSetDegraded", msg, clear...); patchErr != nil {
 		return true, patchErr
 	}
 

@@ -27,15 +27,15 @@ import (
 	wafv1alpha1 "github.com/networking-incubator/coraza-kubernetes-operator/api/v1alpha1"
 )
 
-func TestBuildCacheReadyMessage(t *testing.T) {
+func TestBuildAcceptReadyMessage(t *testing.T) {
 	t.Run("without unsupported message", func(t *testing.T) {
-		msg := buildCacheReadyMessage("ns", "my-rules", "")
-		assert.Equal(t, "Successfully cached rules for ns/my-rules", msg)
+		msg := buildAcceptReadyMessage("ns", "my-rules", "")
+		assert.Equal(t, "Successfully accepted rules for ns/my-rules", msg)
 	})
 
 	t.Run("with unsupported message", func(t *testing.T) {
-		msg := buildCacheReadyMessage("ns", "my-rules", "found unsupported rule 950150")
-		assert.Contains(t, msg, "Successfully cached rules for ns/my-rules")
+		msg := buildAcceptReadyMessage("ns", "my-rules", "found unsupported rule 950150")
+		assert.Contains(t, msg, "Successfully accepted rules for ns/my-rules")
 		assert.Contains(t, msg, "[annotation override]")
 		assert.Contains(t, msg, "950150")
 	})

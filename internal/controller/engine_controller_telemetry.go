@@ -50,7 +50,7 @@ var telemetryGVK = schema.GroupVersionKind{
 }
 
 func telemetryName(engineName string) string {
-	return boundedName(wasmPluginName(engineName)+telemetryNameSuffix, maxTelemetryNameLength)
+	return boundedName(envoyFilterName(engineName)+telemetryNameSuffix, maxTelemetryNameLength)
 }
 
 func boundedName(value string, maxLength int) string {
