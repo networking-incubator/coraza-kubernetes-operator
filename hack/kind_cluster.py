@@ -10,6 +10,7 @@ import json
 import os
 import re
 import sys
+import time
 
 from lib import (
     HELM_CHART_DIR, HELM_RELEASE_NAME,
@@ -192,7 +193,17 @@ spec:
   ipAddressPools:
   - kube-services
 """
-    run(f"echo '{manifests}' | kubectl --context {context} apply --server-side -f -")
+    # The MetalLB validating webhook can lag behind the controller rollout on a
+    # fresh cluster; retry until it accepts the pool.
+    for attempt in range(1, 7):
+        if run(
+            f"echo '{manifests}' | kubectl --context {context} apply --server-side -f -",
+            check=False,
+        ).returncode == 0:
+            return
+        print(f"MetalLB webhook not ready (attempt {attempt}), retrying in 5s", file=sys.stderr)
+        time.sleep(5)
+    die("Failed to create the MetalLB IPAddressPool after 6 attempts")
 
 
 # ---------------------------------------------------------------------------
@@ -202,7 +213,11 @@ spec:
 
 def deploy_istio_sail(context: str) -> None:
     """Install the Sail operator via Helm and wait for readiness."""
-    istio_version = require_env("ISTIO_VERSION")
+    # Sail chart releases track Istio minor versions; the operator version is
+    # independent of the Istio patch version installed by the Istio CR.
+    sail_version = os.environ.get("SAIL_OPERATOR_VERSION", "1.31.1")
+    if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", sail_version):
+        die(f"invalid SAIL_OPERATOR_VERSION: {sail_version!r} (expected X.Y.Z)")
 
     print("Deploying Istio Sail Operator")
     run(f"helm repo add sail-operator {SAIL_REPO}")
@@ -217,7 +232,7 @@ def deploy_istio_sail(context: str) -> None:
     if result.returncode != 0:
         run(
             f"helm install sail-operator sail-operator/sail-operator "
-            f"--version {istio_version} "
+            f"--version {sail_version} "
             f"--namespace sail-operator --kube-context {context}"
         )
     else:

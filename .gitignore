@@ -95,3 +95,6 @@ catalog/bundles/
 # tool binaries
 tools/github_project_manager/github_project_manager
 /kubectl-coraza
+
+# Local checkouts and build inputs fetched by the demo (upstream coraza-rs)
+.cache/
