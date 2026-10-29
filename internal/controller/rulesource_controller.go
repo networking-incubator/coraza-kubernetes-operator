@@ -115,25 +115,24 @@ func (r *RuleSourceReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	}
 
 	patchOnly := validation.IsPatchOnlyFragment(rs.Spec.Rules)
-	// Patch-only fragments skip Coraza; aggregate RuleSet validation is authoritative.
+	// Patch-only fragments skip Coraza (aggregate RuleSet validation is
+	// authoritative) but not the directive and Include guard.
 	var validationDuration time.Duration
 
-	if !patchOnly {
-		validationStart := time.Now()
-		if err := validation.ValidateRuleSourceRules(rs.Spec.Rules, rs.Name, nil); err != nil {
-			validationDuration = time.Since(validationStart)
-			if isConditionCurrent(rs.Status.Conditions, conditionDegraded, ruleSourceDegradedReasonInvalidRules, rs.Generation) {
-				return ctrl.Result{}, nil
-			}
-			if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "RuleSource", &rs, &rs.Status.Conditions, rs.Generation, ruleSourceDegradedReasonInvalidRules, err.Error()); patchErr != nil {
-				return ctrl.Result{}, patchErr
-			}
-			r.Metrics.IncRuleSourceValidation(req.Namespace, "invalid")
-			r.Metrics.ObserveRuleSourceValidation(req.Namespace, "invalid", validationDuration)
+	validationStart := time.Now()
+	if err := validation.ValidateRuleSourceRules(rs.Spec.Rules, rs.Name, nil); err != nil {
+		validationDuration = time.Since(validationStart)
+		if isConditionCurrent(rs.Status.Conditions, conditionDegraded, ruleSourceDegradedReasonInvalidRules, rs.Generation) {
 			return ctrl.Result{}, nil
 		}
-		validationDuration = time.Since(validationStart)
+		if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "RuleSource", &rs, &rs.Status.Conditions, rs.Generation, ruleSourceDegradedReasonInvalidRules, err.Error()); patchErr != nil {
+			return ctrl.Result{}, patchErr
+		}
+		r.Metrics.IncRuleSourceValidation(req.Namespace, "invalid")
+		r.Metrics.ObserveRuleSourceValidation(req.Namespace, "invalid", validationDuration)
+		return ctrl.Result{}, nil
 	}
+	validationDuration = time.Since(validationStart)
 
 	if isConditionCurrent(rs.Status.Conditions, conditionReady, ruleSourceReadyReasonValidated, rs.Generation) {
 		return ctrl.Result{}, nil
