@@ -10,6 +10,8 @@ spec:
     SecResponseBodyAccess Off
     SecAuditLogFormat JSON
     SecAuditEngine RelevantOnly
+    SecRule REQUEST_HEADERS:Content-Type "@rx application/json" \
+      "id:900,phase:1,pass,nolog,ctl:requestBodyProcessor=JSON"
 ---
 apiVersion: waf.k8s.coraza.io/v1alpha1
 kind: RuleSource

@@ -217,7 +217,7 @@ func TestPublicationReconcilerStatusBeforeInput(t *testing.T) {
 
 	result, err := reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Namespace: namespace, Name: engine.Name}})
 	require.NoError(t, err)
-	require.False(t, result.Requeue)
+	require.Equal(t, ctrl.Result{}, result)
 	_, ok := reconciler.Store.Get(engineKey)
 	require.False(t, ok, "a missing RuleSource must not be published")
 
