@@ -135,7 +135,21 @@ testoverride:
     '980170-3': 'INVESTIGATE: retry_once mechanism not working in environment'
 
     # =============================================================================
-    # Summary of Ignored Tests by Category (Total: 60 tests):
+    # CATEGORY 5: coraza-rs parity (9 tests) - tracked in #556
+    # Confirmed after fixing marker-log lag; re-run before changing.
+    # =============================================================================
+    '920100-4': 'PARITY: Envoy/protocol enforcement differs under envoy-coraza (#556)'
+    '920290-1': 'PARITY: Envoy/protocol enforcement differs under envoy-coraza (#556)'
+    '920300-1': 'PARITY: Envoy/protocol enforcement differs under envoy-coraza (#556)'
+    '920310-1': 'PARITY: Envoy/protocol enforcement differs under envoy-coraza (#556)'
+    '920310-4': 'PARITY: Envoy/protocol enforcement differs under envoy-coraza (#556)'
+    '920311-1': 'PARITY: Envoy/protocol enforcement differs under envoy-coraza (#556)'
+    '920320-1': 'PARITY: Envoy/protocol enforcement differs under envoy-coraza (#556)'
+    '920330-1': 'PARITY: Envoy/protocol enforcement differs under envoy-coraza (#556)'
+    '942521-17': 'PARITY: SQLi body detection differs under envoy-coraza (#556)'
+
+    # =============================================================================
+    # Summary of Ignored Tests by Category (Total: 69 tests):
     #
     # NOTE: 43 ENHANCED SECURITY tests moved to .ftw-overrides.yml as platform
     # overrides (they now run with adjusted expectations instead of being skipped).
@@ -164,5 +178,10 @@ testoverride:
     #   - PL4 false positives: 2 tests
     #   - retry_once: 5 tests
     #
-    # Test Pass Rate: ~98% (60 ignored + 43 overridden out of ~4,600 total tests)
+    # CATEGORY 5: CORAZA-RS PARITY (9 tests)
+    #   - Tracked in #556; confirmed after the marker-log fix
+    #   - Envoy/protocol: 8 tests
+    #   - SQLi body: 1 test
+    #
+    # Test Pass Rate: ~98% (69 ignored + 43 overridden out of ~4,600 total tests)
     # =============================================================================
