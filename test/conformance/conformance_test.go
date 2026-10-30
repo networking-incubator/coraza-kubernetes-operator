@@ -160,11 +160,13 @@ func TestCoreRuleSetConformance(t *testing.T) {
 	s.Step("wait for WASM plugin to load rules")
 	gw := s.ProxyToGateway(ns, gwName)
 	require.Eventually(t, func() bool {
-		resp := gw.Get("/probe-cko-readiness")
-		s.T.Logf("received response when checking for WASM readiness: %+v", resp)
-		return resp.Err == nil && resp.StatusCode == 403
+		// Fail-closed bootstrap also returns 403, so require a safe request to reach the backend.
+		allowed := gw.Get("/")
+		probe := gw.Get("/probe-cko-readiness")
+		s.T.Logf("received responses when checking for WASM readiness: allowed=%+v probe=%+v", allowed, probe)
+		return allowed.Err == nil && allowed.StatusCode == 200 && probe.Err == nil && probe.StatusCode == 403
 	}, framework.WasmEnforcementTimeout, framework.DefaultInterval,
-		"CRS-triggering payload not blocked; WASM plugin may not have loaded rules")
+		"normal traffic did not pass and readiness probe was not blocked; WASM plugin may not have loaded rules")
 
 	// -------------------------------------------------------------------------
 	// Step 5: Start logstreaming and proxy, and fix FTW configuration
