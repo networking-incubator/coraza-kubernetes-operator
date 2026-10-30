@@ -12,18 +12,17 @@ By the end, you will have a working WAF protecting a sample application behind a
 ## Local demo in one command
 
 To see the whole flow on a local [KIND](https://kind.sigs.k8s.io/) cluster — operator,
-Gateway, demo rules, and the real `envoy-coraza` module built from `coraza-rs` — run from
-the repository root:
+Gateway, demo rules, and the CRS-enabled `envoy-coraza` module built from `coraza-rs` —
+run from the repository root:
 
 ```bash
 make demo
 ```
 
-It builds the pinned `coraza-rs` commit with Cargo (Rust `wasm32-wasip1`), embeds the
-pinned OWASP CRS, links the WASI stubs with the pinned Binaryen release, bundles the
-artifact into the operator image, creates the cluster with Istio (Sail operator),
-installs the operator, applies `config/samples`, and asserts that a normal request
-passes while the demo attacks are blocked:
+By default, `make demo` downloads the published CRS-enabled `coraza-rs` v0.0.2 artifact,
+verifies its SHA-256 digest, and bundles it into the operator image. It then creates the
+cluster with Istio (Sail operator), installs the operator, applies `config/samples`, and
+asserts that a normal request passes while the demo attacks are blocked:
 
 ```
   allowed  GET /                      -> 200 (want 200)
@@ -31,11 +30,13 @@ passes while the demo attacks are blocked:
   blocked  GET /?q=evildata           -> 403 (want 403, @pmFromFile RuleData)
 ```
 
-Requirements: Docker, `kind`, `helm`, `kubectl`, Rust with `rustup`, `curl`, `tar`,
-and network access.
-The first run installs the `coraza-rs` toolchain (1.99.1), the `wasm32-wasip1` target, the
-pinned Binaryen release, and the `coraza-rs` checkout into `.cache/`. The built module
-replaces the fixture in `internal/assets`; restore it with
+Requirements: Docker, `kind`, `helm`, `kubectl`, `curl`, `sha256sum`, and network access.
+Rust, `rustup`, Cargo, and Binaryen are **not** needed for the default demo. To build the
+module from source instead, run `make demo WASM_SOURCE=build`; that path installs the
+pinned Rust toolchain and `wasm32-wasip1` target, fetches CRS, and links the WASI stubs
+with Binaryen.
+
+The downloaded module replaces the fixture in `internal/assets`; restore it with
 `git checkout internal/assets`. The demo overwrites both `plugin.wasm` and
 `plugin.manifest.yaml`, and the suggested checkout discards any other local edits in that
 directory. Save or stash them first. That is the only directory `make demo` changes in
