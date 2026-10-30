@@ -387,14 +387,15 @@ func TestStreamNackRepublishesUnderNewVersion(t *testing.T) {
 	}
 }
 
-func TestStreamNackRetryBudgetExpires(t *testing.T) {
+func TestStreamNackRetryContinuesAfterManyRejections(t *testing.T) {
 	fixture := newStreamFixture(t)
 	fixture.server.RetryDelay = 0
 	require.NoError(t, fixture.store.Replace(fixture.snapshot(t, "v1")))
 	stream := fixture.open(t, validToken, fixture.resourceName)
 	first := recv(t, stream)
-	// A retry budget that already ran out its window must not bump again.
-	fixture.exhaustNackBudget(t, 1, time.Now().Add(-time.Hour))
+	// A stream that already rejected this configuration many times must keep
+	// retrying: giving up strands a fail-closed proxy.
+	fixture.seedNackBudget(t, 100)
 
 	if err := stream.Send(&discoveryv3.DiscoveryRequest{
 		ResourceNames: []string{fixture.resourceName},
@@ -405,13 +406,15 @@ func TestStreamNackRetryBudgetExpires(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// No close, no bump: the proxy stays on the rejected configuration.
-	expectNoResult(t, startRecv(stream))
-	cached, err := fixture.store.cache.GetSnapshot(testNamespace + "/" + streamEngine)
-	require.NoError(t, err)
-	if got := cached.GetVersion(resource.ExtensionConfigType); got != "sha256:v1" {
-		t.Fatalf("cached version = %q, want sha256:v1 (no retry published)", got)
+	// The retry ladder continues: the stream is reset and a derived version
+	// is published for the resubscribe.
+	if code := recvCode(t, stream); code != codes.Unavailable {
+		t.Fatalf("code = %v, want Unavailable", code)
 	}
+	require.Eventually(t, func() bool {
+		cached, err := fixture.store.cache.GetSnapshot(testNamespace + "/" + streamEngine)
+		return err == nil && cached.GetVersion(resource.ExtensionConfigType) == "sha256:v1.retry1"
+	}, time.Second, 5*time.Millisecond)
 }
 
 func TestStreamNackRepublishFailureKeepsStream(t *testing.T) {
@@ -446,10 +449,10 @@ func TestStreamAckResetsNackBudget(t *testing.T) {
 	fixture.server.RetryDelay = 0
 	require.NoError(t, fixture.store.Replace(fixture.snapshot(t, "v1")))
 
-	// The stream's own budget is exhausted for this configuration.
+	// The stream has already rejected this configuration many times.
 	stream := fixture.open(t, validToken, fixture.resourceName)
 	first := recv(t, stream)
-	key := fixture.exhaustNackBudget(t, nackRetryLimit+1, time.Now())
+	key := fixture.seedNackBudget(t, 20)
 
 	if err := stream.Send(&discoveryv3.DiscoveryRequest{
 		ResourceNames: []string{fixture.resourceName},
@@ -500,6 +503,33 @@ func TestStreamNackBeforeSubscriptionStillResubscribes(t *testing.T) {
 	if code := recvCode(t, stream); code != codes.Unavailable {
 		t.Fatalf("code = %v, want Unavailable", code)
 	}
+}
+
+func TestStreamNackWithoutResourceNamesStillResubscribes(t *testing.T) {
+	fixture := newStreamFixture(t)
+	fixture.server.RetryDelay = 0
+	require.NoError(t, fixture.store.Replace(fixture.snapshot(t, "v1")))
+
+	// Envoy may replay the NACK as the first message of a reconnected stream
+	// carrying no resource_names: the identity's single authorized resource
+	// identifies the rejected configuration.
+	ctx := metadata.AppendToOutgoingContext(context.Background(), "authorization", "Bearer "+validToken)
+	stream, err := fixture.client.StreamExtensionConfigs(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := stream.Send(&discoveryv3.DiscoveryRequest{
+		ErrorDetail: status.New(codes.InvalidArgument, "rejected by Envoy").Proto(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if code := recvCode(t, stream); code != codes.Unavailable {
+		t.Fatalf("code = %v, want Unavailable", code)
+	}
+	require.Eventually(t, func() bool {
+		cached, err := fixture.store.cache.GetSnapshot(testNamespace + "/" + streamEngine)
+		return err == nil && cached.GetVersion(resource.ExtensionConfigType) == "sha256:v1.retry1"
+	}, time.Second, 5*time.Millisecond)
 }
 
 func TestStreamRejectsWildcardAndMultipleResources(t *testing.T) {
@@ -636,6 +666,28 @@ func TestFirstNackCannotBumpAnotherEngine(t *testing.T) {
 	}
 }
 
+func TestNackDelayGrowsAndIsCapped(t *testing.T) {
+	base := 2 * time.Second
+	if got := nackDelay(base, 1); got != base {
+		t.Fatalf("nackDelay(attempt 1) = %v, want %v", got, base)
+	}
+	if got := nackDelay(base, 2); got != 4*time.Second {
+		t.Fatalf("nackDelay(attempt 2) = %v, want 4s", got)
+	}
+	if got := nackDelay(base, 4); got != 16*time.Second {
+		t.Fatalf("nackDelay(attempt 4) = %v, want 16s", got)
+	}
+	for _, attempt := range []int{5, 20, 1000} {
+		if got := nackDelay(base, attempt); got != nackRetryMaxDelay {
+			t.Fatalf("nackDelay(attempt %d) = %v, want %v", attempt, got, nackRetryMaxDelay)
+		}
+	}
+	// Tests that shrink the base keep running instantly.
+	if got := nackDelay(0, 7); got != 0 {
+		t.Fatalf("nackDelay(base 0, attempt 7) = %v, want 0", got)
+	}
+}
+
 func TestRecordNackLosesNoConcurrentAttempts(t *testing.T) {
 	fixture := newStreamFixture(t)
 	key := nackKey(fixture.resourceName, 1)
@@ -655,10 +707,10 @@ func TestRecordNackLosesNoConcurrentAttempts(t *testing.T) {
 	require.Equal(t, workers, raw.(nackState).attempts)
 }
 
-// exhaustNackBudget marks the fixture's one subscribed stream as having an
-// exhausted retry budget, the way resubscribeRejected would have tracked it,
-// and returns the stream's budget key.
-func (f *streamFixture) exhaustNackBudget(t *testing.T, attempts int, first time.Time) string {
+// seedNackBudget pre-loads the fixture's one subscribed stream's retry
+// accounting, the way resubscribeRejected would have tracked it, and returns
+// the stream's budget key.
+func (f *streamFixture) seedNackBudget(t *testing.T, attempts int) string {
 	t.Helper()
 	var key string
 	f.server.streams.Range(func(_, value any) bool {
@@ -668,7 +720,7 @@ func (f *streamFixture) exhaustNackBudget(t *testing.T, attempts int, first time
 			entry.mu.Lock()
 			entry.nackKey = key
 			entry.mu.Unlock()
-			f.server.nacks.Store(key, nackState{version: "sha256:v1", attempts: attempts, first: first})
+			f.server.nacks.Store(key, nackState{version: "sha256:v1", attempts: attempts})
 		}
 		return true
 	})
@@ -683,26 +735,13 @@ func TestNackBudgetIsPerStream(t *testing.T) {
 	fixture.server.RetryDelay = 0
 	require.NoError(t, fixture.store.Replace(fixture.snapshot(t, "v1")))
 
-	// Stream A exhausts its own budget for the resource: no bump, no close.
+	// Stream A has already rejected the configuration many times; its
+	// accounting must not stop another stream's retry.
 	streamA := fixture.open(t, validToken, fixture.resourceName)
-	first := recv(t, streamA)
-	keyA := fixture.exhaustNackBudget(t, nackRetryLimit+1, time.Now())
-	if err := streamA.Send(&discoveryv3.DiscoveryRequest{
-		ResourceNames: []string{fixture.resourceName},
-		VersionInfo:   first.GetVersionInfo(),
-		ResponseNonce: first.GetNonce(),
-		ErrorDetail:   status.New(codes.InvalidArgument, "rejected by Envoy").Proto(),
-	}); err != nil {
-		t.Fatal(err)
-	}
-	expectNoResult(t, startRecv(streamA))
-	cached, err := fixture.store.cache.GetSnapshot(testNamespace + "/" + streamEngine)
-	require.NoError(t, err)
-	if got := cached.GetVersion(resource.ExtensionConfigType); got != "sha256:v1" {
-		t.Fatalf("cached version = %q, want sha256:v1 (A must not trigger a retry)", got)
-	}
+	_ = recv(t, streamA)
+	keyA := fixture.seedNackBudget(t, 100)
 
-	// Stream B subscribes to the same resource: A's exhausted budget must not
+	// Stream B subscribes to the same resource: A's attempt count must not
 	// block B's retry.
 	streamB := fixture.open(t, validToken, fixture.resourceName)
 	second := recv(t, streamB)
@@ -723,7 +762,7 @@ func TestNackBudgetIsPerStream(t *testing.T) {
 	}, time.Second, 5*time.Millisecond)
 
 	// B's closed stream reclaims its budget entry; only A's open stream keeps
-	// its exhausted entry.
+	// its own.
 	require.Eventually(t, func() bool {
 		count := 0
 		fixture.server.nacks.Range(func(_, _ any) bool { count++; return true })

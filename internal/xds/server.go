@@ -43,11 +43,11 @@ const (
 	// retryVersionSuffix marks a republished configuration.
 	retryVersionSuffix = ".retry"
 
-	// nackRetryLimit caps how many times one rejected configuration is retried.
-	nackRetryLimit = 10
-	// nackRetryWindow bounds the retries by time as well, so a slow module fetch
-	// gets more attempts than a fast one without allowing an endless loop.
-	nackRetryWindow = 20 * time.Second
+	// nackRetryMaxDelay caps the exponential NACK backoff. The cap exists so
+	// a persistently rejected configuration keeps a steady retry cadence
+	// instead of stalling; there is no attempt or time bound because giving
+	// up strands a fail-closed proxy.
+	nackRetryMaxDelay = 30 * time.Second
 	// authenticationDeadline bounds an unauthenticated stream that never sends
 	// its first request, so idle clients cannot occupy every stream slot.
 	authenticationDeadline = 10 * time.Second
@@ -57,7 +57,6 @@ const (
 type nackState struct {
 	version  string
 	attempts int
-	first    time.Time
 }
 
 // nackKey scopes a retry budget to one stream. Every replica of a Gateway
@@ -324,11 +323,17 @@ func (s *Server) onStreamRequest(streamID int64, req *discoveryv3.DiscoveryReque
 		// A proxy that rejects a configuration because the remote module is not
 		// cached yet only re-applies it on a new subscription, so end the
 		// stream with a retryable status. Envoy can send the NACK as the first
-		// message of a reconnected stream, before any subscription was recorded.
-		// The resource is still client-controlled, so authorize it before it can
-		// change a retry version or consume a retry budget.
-		rejected := rejectedResourceName(entry, req)
-		if rejected != "" && !s.Authz.Authorize(rejected, entry.identity) {
+		// message of a reconnected stream, before any subscription was recorded
+		// and possibly without resource_names. The resource is still
+		// client-controlled, so authorize it before it can change a retry
+		// version or consume a retry budget.
+		rejected := s.rejectedResourceName(entry, req)
+		if rejected == "" {
+			s.Logger.Info("ECDS NACK without a resolvable resource",
+				"session", entry.session.ID, "nonce", req.GetResponseNonce(), "version", req.GetVersionInfo())
+			return nil
+		}
+		if !s.Authz.Authorize(rejected, entry.identity) {
 			s.Metrics.AuthFailure("unauthorized")
 			s.Logger.Info("ECDS rejected resource not authorized", "resource", rejected, "identity", entry.identity.Key(), "uid", entry.identity.UID)
 			return status.Error(codes.Unavailable, "authorization is not ready")
@@ -398,9 +403,12 @@ func (s *Server) onStreamRequest(streamID int64, req *discoveryv3.DiscoveryReque
 // the remote module is not cached yet, and Envoy never asks for that resource
 // again on its own; the reconnect gives it the configuration once the fetch has
 // completed.
-// rejectedResourceName returns the resource a NACK refers to. Envoy may send it
-// before the stream recorded its subscription.
-func rejectedResourceName(entry *serverStream, req *discoveryv3.DiscoveryRequest) string {
+// rejectedResourceName returns the resource a NACK refers to. Envoy may send
+// it before the stream recorded its subscription, and a NACK replayed on a
+// reconnected stream may carry no resource_names at all: fall back to the
+// only resource the identity is authorized for, so the retry ladder cannot be
+// dropped silently.
+func (s *Server) rejectedResourceName(entry *serverStream, req *discoveryv3.DiscoveryRequest) string {
 	if entry.resourceName != "" {
 		return entry.resourceName
 	}
@@ -409,9 +417,17 @@ func rejectedResourceName(entry *serverStream, req *discoveryv3.DiscoveryRequest
 			return name
 		}
 	}
+	if len(req.GetResourceNames()) == 0 {
+		return s.Authz.soleResource(entry.identity)
+	}
 	return ""
 }
 
+// resubscribeRejected republishes the rejected configuration under a derived
+// version and ends the stream so the proxy resubscribes. A cold proxy rejects
+// the first push because the remote module is not cached yet, and Envoy never
+// asks for that resource again on its own; the reconnect gives it the
+// configuration once the fetch has completed.
 func (s *Server) resubscribeRejected(entry *serverStream, resourceName, rejectedVersion string) {
 	if resourceName == "" || s.Store == nil || entry.session == nil {
 		return
@@ -429,28 +445,44 @@ func (s *Server) resubscribeRejected(entry *serverStream, resourceName, rejected
 
 	// The budget is per stream: replicas of a Gateway must not spend each
 	// other's attempts. Retries of the same content carry a derived version;
-	// count them against the version the Engine accepted.
+	// count them against the version the Engine accepted. Giving up is not an
+	// option: a stranded pod stays fail-closed forever, and the entry is
+	// reclaimed on ACK and stream close.
 	key := nackKey(resourceName, entry.session.ID)
 	s.trackNack(entry, key)
 	state := s.recordNack(key, base)
-	if state.attempts > nackRetryLimit || time.Since(state.first) > nackRetryWindow || attempt > nackRetryLimit {
-		s.Logger.Info("ECDS retry budget exhausted",
-			"resource", resourceName, "version", rejectedVersion, "attempts", state.attempts)
-		return
-	}
 	s.Logger.Info("resubscribing proxy after rejected configuration",
-		"resource", resourceName, "version", rejectedVersion, "attempt", attempt)
+		"resource", resourceName, "version", rejectedVersion, "attempt", attempt, "rejections", state.attempts)
 
 	// Envoy never re-applies a version it rejected, and the remote module fetch
 	// it started needs to finish first: publish a derived version and close the
 	// stream so the proxy resubscribes and applies it from the code cache.
-	time.AfterFunc(s.RetryDelay, func() {
+	time.AfterFunc(nackDelay(s.RetryDelay, attempt), func() {
 		if err := s.Store.BumpRejected(resourceName, base, attempt); err != nil {
 			s.Logger.Error(err, "republish rejected configuration", "resource", resourceName)
 			return
 		}
 		s.Streams.ResetStream(entry.session.ID)
 	})
+}
+
+// nackDelay doubles the base delay for every retry rung of the same content,
+// starting at the configured RetryDelay. A rung, not the per-stream budget,
+// sets the backoff: each retry closes the stream, so only the published
+// version survives a reconnect and can remember how often the content was
+// rejected.
+func nackDelay(base time.Duration, attempt int) time.Duration {
+	if base <= 0 || attempt <= 1 {
+		return base
+	}
+	delay := base
+	for range attempt - 1 {
+		delay *= 2
+		if delay >= nackRetryMaxDelay {
+			return nackRetryMaxDelay
+		}
+	}
+	return delay
 }
 
 // trackNack records the stream's budget entry so its ACK and close can reclaim
@@ -483,10 +515,9 @@ func (s *Server) clearNack(entry *serverStream) {
 // loop.
 func (s *Server) recordNack(key, version string) nackState {
 	for {
-		now := time.Now()
 		prev, ok := s.nacks.Load(key)
 		if !ok {
-			state := nackState{version: version, attempts: 1, first: now}
+			state := nackState{version: version, attempts: 1}
 			actual, loaded := s.nacks.LoadOrStore(key, state)
 			if !loaded {
 				return state
@@ -494,7 +525,7 @@ func (s *Server) recordNack(key, version string) nackState {
 			prev = actual
 		}
 		current := prev.(nackState)
-		state := nackState{version: version, first: now}
+		state := nackState{version: version}
 		if current.version == version {
 			state = current
 		}

@@ -380,6 +380,26 @@ func (a *AuthzIndex) Authorize(resourceName string, id Identity) bool {
 	return true
 }
 
+// soleResource returns the single resource id is currently authorized for,
+// or "" when id is authorized for none or several. It resolves NACKs that
+// carry no resource name; the result is still subject to Authorize.
+func (a *AuthzIndex) soleResource(id Identity) string {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	var sole string
+	for resourceName, entry := range a.entries {
+		uid, ok := entry.Identities[id.Key()]
+		if !ok || (uid != "" && id.UID != "" && uid != id.UID) {
+			continue
+		}
+		if sole != "" {
+			return ""
+		}
+		sole = resourceName
+	}
+	return sole
+}
+
 // RevokeAndNotify removes an entry and closes its live streams immediately.
 func (a *AuthzIndex) RevokeAndNotify(resourceName string) {
 	a.mu.Lock()
