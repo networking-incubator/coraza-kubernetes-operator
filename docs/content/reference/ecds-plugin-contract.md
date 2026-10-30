@@ -8,7 +8,8 @@ description: "How the Coraza Kubernetes Operator delivers rules and data files t
 This page is the shared contract between the Coraza Kubernetes Operator (CKO) and the
 `envoy-coraza` Proxy-Wasm filter built from
 [`coraza-rs`](https://github.com/networking-incubator/coraza-rs). It is versioned
-independently of either repository. `schema_version` gates compatibility.
+independently of either repository. `schema_version` is an operator-side marker;
+`envoy-coraza` ignores it and does not use it to gate compatibility.
 
 ## Runtime configuration JSON
 
@@ -37,7 +38,7 @@ The ECDS resource carries this JSON in `PluginConfig.configuration`
 
 | Field | Type | Rules |
 | --- | --- | --- |
-| `schema_version` | integer | Must be `2`. It is the operator's contract marker; `envoy-coraza` ignores unknown keys. |
+| `schema_version` | integer | CKO emits `2` as its contract marker. `envoy-coraza` ignores this key and does not reject other values. |
 | `engine`, `namespace` | string | Engine identity; informational. |
 | `engine_uid` | string | UID of the Engine; prevents recreate/snapshot confusion. |
 | `driver_type` | string | `wasm`. |
@@ -54,16 +55,23 @@ Rules for both sides:
   per-pod identifier appears in the payload.
 - `envoy-coraza` validates and compiles the configuration in `on_configure`. A
   configuration that fails to parse or compile is rejected; the proxy keeps its
-  previous configuration, or its bootstrap policy, and the operator logs the retry
-  budget.
+  previous configuration, or its bootstrap policy. The operator republishes NACKed
+  configurations with exponential backoff.
 - Failure policy mapping: `fail` -> native `FAIL_CLOSED`; `allow` -> native
   `FAIL_OPEN`. The operator also records the rendered bootstrap policy in the
   EnvoyFilter so a proxy is never left without a policy.
-- Size limits are enforced before delivery: the plugin caps one configuration at
-  8 MiB, with at most 1024 `rule_data` files, 1 MiB per file, and 8 MiB of rule data
-  total. The operator defaults to 6 MiB of RuleData and 1024 files, rejects larger
-  flags at startup, and rejects a rendered payload above the 8 MiB configuration cap.
-  These caps are not part of the payload.
+- The operator checks the supplied RuleData file count and aggregate bytes (defaults:
+  1024 files and 6 MiB), and rejects a rendered configuration over the plugin's 8 MiB
+  configuration cap. The plugin separately caps its compiled `rule_data` at 1024 files,
+  1 MiB per file, and 8 MiB total.
+- In a CRS-enabled build, `envoy-coraza` adds the embedded CRS files to `rule_data` before
+  compiling and counts them against those same file and byte limits. This reduces the
+  capacity left for user-supplied RuleData; the operator's pre-delivery checks do not
+  subtract the embedded files, so a payload can pass operator checks and still be
+  rejected by the plugin. Verify proxy acceptance: Engine `Ready=True` reflects operator
+  acceptance, not proxy acknowledgement. Check the Gateway
+  Envoy logs for NACK/configuration errors and the operator log for
+  `ECDS configuration accepted by proxy`.
 - `SecRequestBodyAccess On` requires an explicit `SecRequestBodyLimit` at or
   below 16 MiB: the engine default (128 MiB) exceeds the WASM ceiling. If
   `SecRequestBodyInMemoryLimit` is set, it must be `0` or at least the request
@@ -132,12 +140,13 @@ Known trades of this contract:
 A proxy caches the module by `sha256` and fetches it only when it first applies a
 configuration. A proxy whose cache is empty rejects that first push and never asks for the
 resource again on its own, so the operator ends the stream with a retryable `Unavailable`
-(at most ten times per version within a 20-second window, per stream). Envoy
-resubscribes after the fetch has finished, applies
-the same configuration, and acknowledges it; the module is not sent again after that. A
-proxy that keeps rejecting retains its previous working configuration, or its bootstrap
-policy if it never had one. With a fail-open bootstrap it may allow traffic without WAF;
-with fail-closed it denies. The operator logs `ECDS retry budget exhausted`.
+and republishes a versioned retry. Each resolvable NACK is retried without an attempt or
+time limit; exponential backoff starts at 2 seconds and is capped at 30 seconds. Envoy
+resubscribes after the fetch has finished, applies the same configuration, and acknowledges
+it; the module is not sent again after that. A proxy that keeps rejecting retains its
+previous working configuration, or its bootstrap policy if it never had one. With a
+fail-open bootstrap it may allow traffic without WAF; with fail-closed it denies. Persistent
+NACKs can be diagnosed from the operator retry logs and Gateway Envoy logs.
 
 ## ECDS resource shape
 
@@ -153,9 +162,11 @@ typed_config:
     name: coraza.waf.shop.checkout.11111111-1111-4111-8111-111111111111
     root_id: coraza.waf.shop.checkout.11111111-1111-4111-8111-111111111111
     failure_policy: FAIL_CLOSED
+    allow_on_headers_stop_iteration: true
     vm_config:
       vm_id: coraza-11111111-1111-4111-8111-111111111111
       runtime: envoy.wasm.runtime.v8
+      nack_on_code_cache_miss: true
       code:
         remote:
           # The bundled module is served by the operator; a custom
