@@ -147,9 +147,12 @@ testoverride:
     '920320-1': 'PARITY: Envoy/protocol enforcement differs under envoy-coraza (#556)'
     '920330-1': 'PARITY: Envoy/protocol enforcement differs under envoy-coraza (#556)'
     '942521-17': 'PARITY: SQLi body detection differs under envoy-coraza (#556)'
+    '932220-4': 'PARITY: header/RCE detection differs under envoy-coraza (#556)'
+    '934140-35': 'PARITY: Node.js/RCE detection differs under envoy-coraza (#556)'
+    '942550-25': 'PARITY: SQLi body detection differs under envoy-coraza (#556)'
 
     # =============================================================================
-    # Summary of Ignored Tests by Category (Total: 69 tests):
+    # Summary of Ignored Tests by Category (Total: 72 tests):
     #
     # NOTE: 43 ENHANCED SECURITY tests moved to .ftw-overrides.yml as platform
     # overrides (they now run with adjusted expectations instead of being skipped).
@@ -178,10 +181,12 @@ testoverride:
     #   - PL4 false positives: 2 tests
     #   - retry_once: 5 tests
     #
-    # CATEGORY 5: CORAZA-RS PARITY (9 tests)
+    # CATEGORY 5: CORAZA-RS PARITY (12 tests)
     #   - Tracked in #556; confirmed after the marker-log fix
     #   - Envoy/protocol: 8 tests
-    #   - SQLi body: 1 test
+    #   - Header/RCE: 2 tests
+    #   - HTTP/2: 1 test
+    #   - SQLi body: 2 tests
     #
-    # Test Pass Rate: ~98% (69 ignored + 43 overridden out of ~4,600 total tests)
+    # Test Pass Rate: ~98% (72 ignored + 43 overridden out of ~4,600 total tests)
     # =============================================================================
