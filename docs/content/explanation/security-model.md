@@ -17,15 +17,13 @@ The operator requires two sets of RBAC permissions:
 |----------|-------|---------|
 | `waf.k8s.coraza.io` **rulesources**, **ruledata** | get, list, watch | Read SecLang and data file content for RuleSet reconciliation. |
 | Pods | list, watch | Discover Gateway pods matching Engine target names. |
-| ServiceAccounts | create, get, list, patch, update, watch | Manage service accounts for cache authentication. |
-| ServiceAccounts/token | create | Issue tokens for WASM plugin authentication. |
+| ServiceAccounts | get | Resolve the Gateway identity that dials ECDS. |
 | Events | create, patch | Record events on managed resources. |
 | Deployments | get | Read operator deployment metadata. |
 | TokenReviews, SubjectAccessReviews | create | Authenticate and authorize metrics endpoint access. |
 | Leases | create, delete, get, list, patch, update, watch | Leader election. |
 | WasmPlugins (Istio) | create, delete, get, list, patch, update, watch | Manage Istio WASM plugin resources. |
 | Gateways (Gateway API) | get, list, watch | Discover and validate Gateways for Engine target resolution. |
-| ServiceEntries, DestinationRules (Istio) | create, get, patch, update | Create Istio prerequisites for cache server mesh connectivity. |
 
 ### Namespace-Scoped Permissions (Role)
 
