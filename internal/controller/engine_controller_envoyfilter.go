@@ -118,10 +118,10 @@ func buildEnvoyFilter(
 
 	assetURL, err := url.Parse(binary.URL)
 	if err != nil {
-		return nil, fmt.Errorf("parse wasm binary url: %w", err)
+		return nil, errors.New("parse wasm binary URL: invalid URL")
 	}
 	if assetURL.Scheme != "https" || assetURL.Host == "" {
-		return nil, fmt.Errorf("wasm binary url %q must be an absolute https URL with a host", binary.URL)
+		return nil, errors.New("WASM binary URL must be an absolute https URL with a host")
 	}
 	if len(cfg.CAPEM) == 0 {
 		return nil, errors.New("CA PEM is required")

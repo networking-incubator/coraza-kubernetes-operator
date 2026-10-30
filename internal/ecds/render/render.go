@@ -480,10 +480,10 @@ func validateBinaryRef(binary BinaryRef) error {
 	}
 	parsed, err := url.Parse(binary.URL)
 	if err != nil {
-		return fmt.Errorf("parse WASM binary URL: %w", err)
+		return errors.New("parse WASM binary URL: invalid URL")
 	}
 	if parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
-		return fmt.Errorf("WASM binary URL %q must be an https URL without userinfo, query, or fragment", binary.URL)
+		return errors.New("WASM binary URL must be an https URL without userinfo, query, or fragment")
 	}
 	if !sha256HexPattern.MatchString(binary.SHA256) {
 		return fmt.Errorf("WASM sha256 %q must be 64 lowercase hex characters", binary.SHA256)

@@ -333,6 +333,7 @@ func TestRenderRejectsInvalidInput(t *testing.T) {
 		{name: "content hash mismatch", mutate: func(in *render.EngineInput) { in.RuleSet.ContentHash = "sha256:" + strings.Repeat("0", 64) }, wantErr: "does not match accepted RuleSet content hash"},
 		{name: "http binary URL", mutate: func(in *render.EngineInput) { in.Binary.URL = strings.Replace(testBinaryURL, "https://", "http://", 1) }, wantErr: "must be an https URL"},
 		{name: "binary URL query", mutate: func(in *render.EngineInput) { in.Binary.URL += "?v=1" }, wantErr: "must be an https URL"},
+		{name: "binary URL userinfo", mutate: func(in *render.EngineInput) { in.Binary.URL = "https://user:secret@example.com/plugin.wasm" }, wantErr: "without userinfo, query, or fragment"},
 		{name: "uppercase digest", mutate: func(in *render.EngineInput) { in.Binary.SHA256 = strings.Repeat("C", 64) }, wantErr: "must be 64 lowercase hex characters"},
 		{name: "short digest", mutate: func(in *render.EngineInput) { in.Binary.SHA256 = "abc" }, wantErr: "must be 64 lowercase hex characters"},
 		{name: "unknown driver", mutate: func(in *render.EngineInput) { in.DriverType = "sidecar" }, wantErr: `unsupported driver type "sidecar"`},
@@ -346,6 +347,7 @@ func TestRenderRejectsInvalidInput(t *testing.T) {
 			tt.mutate(&input)
 			_, err := render.Render(input)
 			require.ErrorContains(t, err, tt.wantErr)
+			assert.NotContains(t, err.Error(), "secret")
 		})
 	}
 }

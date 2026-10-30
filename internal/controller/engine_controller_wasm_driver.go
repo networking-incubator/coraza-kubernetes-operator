@@ -580,13 +580,13 @@ func (r *EngineReconciler) resolveBinaryRef(engine *wafv1alpha1.Engine) (render.
 func validateBinaryRefBasic(ref render.BinaryRef) error {
 	parsed, err := url.Parse(ref.URL)
 	if err != nil {
-		return fmt.Errorf("parse WASM binary URL: %w", err)
+		return errors.New("parse WASM binary URL: invalid URL")
 	}
 	if parsed.Scheme != "https" || parsed.Host == "" {
-		return fmt.Errorf("WASM binary URL %q must be an absolute https URL with a host", ref.URL)
+		return errors.New("WASM binary URL must be an absolute https URL with a host")
 	}
 	if parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
-		return fmt.Errorf("WASM binary URL %q must not contain userinfo, query, or fragment", ref.URL)
+		return errors.New("WASM binary URL must not contain userinfo, query, or fragment")
 	}
 	if !binarySHA256Pattern.MatchString(ref.SHA256) {
 		return fmt.Errorf("WASM sha256 %q must be 64 lowercase hex characters", ref.SHA256)

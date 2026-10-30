@@ -209,6 +209,17 @@ func TestResolveBinaryRef(t *testing.T) {
 		_, err = reconciler.resolveBinaryRef(engine)
 		require.Error(t, err)
 	})
+
+	t.Run("userinfo is redacted from validation errors", func(t *testing.T) {
+		engine := utils.NewTestEngine(utils.EngineOptions{
+			WasmURL:    "https://user:secret@example.com/plugin.wasm",
+			WasmSHA256: utils.DefaultTestWasmSHA256,
+		})
+		_, err := reconciler.resolveBinaryRef(engine)
+		require.Error(t, err)
+		assert.NotContains(t, err.Error(), "user:secret")
+		assert.NotContains(t, err.Error(), "secret")
+	})
 }
 
 // -----------------------------------------------------------------------------
