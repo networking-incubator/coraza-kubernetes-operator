@@ -7,6 +7,9 @@
 ---
 # TODO: https://github.com/networking-incubator/coraza-kubernetes-operator/issues/266
 maxmarkerretries: 500
+# The real module logs every matched rule; the default 500-line window is too
+# small once a full CRS run produces tens of MB of gateway logs.
+maxmarkerloglines: 500000
 testoverride:
   ignore:
     # =============================================================================
@@ -132,70 +135,7 @@ testoverride:
     '980170-3': 'INVESTIGATE: retry_once mechanism not working in environment'
 
     # =============================================================================
-    # CATEGORY 5: coraza-rs parity (23 tests) - tracked in #556
-    # These pass with the previous Go plugin but differ under envoy-coraza.
-    # Re-run and classify each one before changing or removing it.
-    # =============================================================================
-
-    # Envoy/protocol enforcement differences (10 tests)
-    '920100-4': 'PARITY: Envoy/protocol enforcement differs under envoy-coraza (#556)'
-    '920272-3': 'PARITY: Envoy/protocol enforcement differs under envoy-coraza (#556)'
-    '920290-1': 'PARITY: Envoy/protocol enforcement differs under envoy-coraza (#556)'
-    '920300-1': 'PARITY: Envoy/protocol enforcement differs under envoy-coraza (#556)'
-    '920310-1': 'PARITY: Envoy/protocol enforcement differs under envoy-coraza (#556)'
-    '920310-4': 'PARITY: Envoy/protocol enforcement differs under envoy-coraza (#556)'
-    '920311-1': 'PARITY: Envoy/protocol enforcement differs under envoy-coraza (#556)'
-    '920320-1': 'PARITY: Envoy/protocol enforcement differs under envoy-coraza (#556)'
-    '920330-1': 'PARITY: Envoy/protocol enforcement differs under envoy-coraza (#556)'
-    '921422-8': 'PARITY: Envoy/protocol enforcement differs under envoy-coraza (#556)'
-
-    # Header and RCE detection differences (6 tests)
-    '932210-4': 'PARITY: header/RCE detection differs under envoy-coraza (#556)'
-    '932236-98': 'PARITY: header/RCE detection differs under envoy-coraza (#556)'
-    '932239-9': 'PARITY: header/RCE detection differs under envoy-coraza (#556)'
-    '932239-40': 'PARITY: header/RCE detection differs under envoy-coraza (#556)'
-    '932281-1': 'PARITY: header/RCE detection differs under envoy-coraza (#556)'
-    '932290-8': 'PARITY: header/RCE detection differs under envoy-coraza (#556)'
-
-    # HTTP/2 normalization (1 test)
-    '934120-17': 'PARITY: HTTP/2 enclosed alphanumerics differ under envoy-coraza (#556)'
-
-    # SQLi body detection (3 tests)
-    '942140-6': 'PARITY: SQLi body detection differs under envoy-coraza (#556)'
-    '942362-25': 'PARITY: SQLi body detection differs under envoy-coraza (#556)'
-    '942440-21': 'PARITY: SQLi body detection differs under envoy-coraza (#556)'
-
-    # Java/XML detection (3 tests)
-    '944130-151': 'PARITY: Java/XML detection differs under envoy-coraza (#556)'
-    '944300-31': 'PARITY: Java/XML detection differs under envoy-coraza (#556)'
-    '944300-57': 'PARITY: Java/XML detection differs under envoy-coraza (#556)'
-
-    # Additional parity failures exposed after the body-inspection fix (22 tests)
-    '920200-9': 'PARITY: Envoy/protocol enforcement differs under envoy-coraza (#556)'
-    '932140-10': 'PARITY: header/RCE detection differs under envoy-coraza (#556)'
-    '932140-40': 'PARITY: header/RCE detection differs under envoy-coraza (#556)'
-    '932140-94': 'PARITY: header/RCE detection differs under envoy-coraza (#556)'
-    '932140-102': 'PARITY: header/RCE detection differs under envoy-coraza (#556)'
-    '932140-156': 'PARITY: header/RCE detection differs under envoy-coraza (#556)'
-    '932175-14': 'PARITY: header/RCE detection differs under envoy-coraza (#556)'
-    '932230-53': 'PARITY: header/RCE detection differs under envoy-coraza (#556)'
-    '932237-9': 'PARITY: header/RCE detection differs under envoy-coraza (#556)'
-    '932239-8': 'PARITY: header/RCE detection differs under envoy-coraza (#556)'
-    '932340-11': 'PARITY: header/RCE detection differs under envoy-coraza (#556)'
-    '932390-6': 'PARITY: header/RCE detection differs under envoy-coraza (#556)'
-    '933160-40': 'PARITY: PHP/RCE detection differs under envoy-coraza (#556)'
-    '934101-11': 'PARITY: Node.js/RCE detection differs under envoy-coraza (#556)'
-    '934120-35': 'PARITY: HTTP/2 enclosed alphanumerics differ under envoy-coraza (#556)'
-    '941120-10': 'PARITY: XSS detection differs under envoy-coraza (#556)'
-    '941160-13': 'PARITY: XSS detection differs under envoy-coraza (#556)'
-    '941370-5': 'PARITY: XSS detection differs under envoy-coraza (#556)'
-    '942101-10': 'PARITY: SQLi body detection differs under envoy-coraza (#556)'
-    '942410-16': 'PARITY: SQLi body detection differs under envoy-coraza (#556)'
-    '944130-187': 'PARITY: Java/XML detection differs under envoy-coraza (#556)'
-    '944300-245': 'PARITY: Java/XML detection differs under envoy-coraza (#556)'
-
-    # =============================================================================
-    # Summary of Ignored Tests by Category (Total: 105 tests):
+    # Summary of Ignored Tests by Category (Total: 60 tests):
     #
     # NOTE: 43 ENHANCED SECURITY tests moved to .ftw-overrides.yml as platform
     # overrides (they now run with adjusted expectations instead of being skipped).
@@ -224,14 +164,5 @@ testoverride:
     #   - PL4 false positives: 2 tests
     #   - retry_once: 5 tests
     #
-    # CATEGORY 5: CORAZA-RS PARITY (45 tests)
-    #   - Tracked in #556; re-run and classify before changing
-    #   - Envoy/protocol: 11 tests
-    #   - Header/RCE: 19 tests
-    #   - HTTP/2: 2 tests
-    #   - SQLi body: 5 tests
-    #   - XSS: 3 tests
-    #   - Java/XML: 5 tests
-    #
-    # Test Pass Rate: ~98% (105 ignored + 43 overridden out of ~4,600 total tests)
+    # Test Pass Rate: ~98% (60 ignored + 43 overridden out of ~4,600 total tests)
     # =============================================================================
