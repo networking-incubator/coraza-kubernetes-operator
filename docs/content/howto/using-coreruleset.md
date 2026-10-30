@@ -13,7 +13,7 @@ This project does not maintain CoreRuleSet rules. A CRS-enabled `envoy-coraza` b
 
 ## Use the embedded CoreRuleSet
 
-`make wasm.crs` (used by `make demo`) builds `envoy-coraza` with the CRS release pinned by the operator (`v4.30.0`; recorded as `crs_version` in `plugin.manifest.yaml`). The default and release builds do **not** embed CRS, so `crs/...` includes require a CRS-enabled module. Reference the embedded tree directly:
+`make wasm.crs` (used by `make demo`) builds `envoy-coraza` with the CRS release pinned by the operator (`v4.30.0`; recorded as `crs_version` in `plugin.manifest.yaml`). The default and release builds do **not** embed CRS, so `crs/...` includes require a CRS-enabled module: the operator rejects a RuleSet that uses them while the bundled module reports `crs_version: none`. Reference the embedded tree directly:
 
 ```yaml
 apiVersion: waf.k8s.coraza.io/v1alpha1

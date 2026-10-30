@@ -32,6 +32,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	wafv1alpha1 "github.com/networking-incubator/coraza-kubernetes-operator/api/v1alpha1"
+	"github.com/networking-incubator/coraza-kubernetes-operator/internal/rulesets/validation"
 	"github.com/networking-incubator/coraza-kubernetes-operator/test/utils"
 )
 
@@ -176,6 +177,12 @@ func TestMissingIncludedRuleDataIsDegraded(t *testing.T) {
 }
 
 func TestRuleSetValidationRejectsLegacyAliasesAndAcceptsCRS(t *testing.T) {
+	// The committed fixture module embeds no CRS; simulate the CRS-enabled
+	// build (make wasm.crs) for the acceptance case.
+	orig := validation.BundledCRSVersion
+	validation.BundledCRSVersion = "v4.30.0"
+	t.Cleanup(func() { validation.BundledCRSVersion = orig })
+
 	tests := []struct {
 		name      string
 		rules     string
@@ -246,4 +253,53 @@ SecRule ARGS "@pmFromFile crs/restricted-files.data" "id:1,phase:1,pass"`,
 			assert.NotContains(t, degraded.Message, "@owasp_crs")
 		})
 	}
+}
+
+// TestRuleSetValidationRejectsCRSWithoutBundledCRS covers the release build
+// (crs_version: none): a RuleSet with crs/ includes must be Degraded instead
+// of accepted while the compiled WAF has zero CRS rules.
+func TestRuleSetValidationRejectsCRSWithoutBundledCRS(t *testing.T) {
+	ctx := context.Background()
+	source := utils.NewTestRuleSource("no-crs-source", testNamespace,
+		"SecRuleEngine On\nInclude crs/crs-setup.conf\nInclude crs/rules/*.conf")
+	source.UID = "no-crs-source-uid"
+	apimeta.SetStatusCondition(&source.Status.Conditions, metav1.Condition{
+		Type:               conditionReady,
+		Status:             metav1.ConditionTrue,
+		ObservedGeneration: source.Generation,
+		Reason:             ruleSourceReadyReasonValidated,
+		LastTransitionTime: metav1.Now(),
+	})
+	ruleset := utils.NewTestRuleSet(utils.RuleSetOptions{
+		Name:      "no-crs-ruleset",
+		Namespace: testNamespace,
+		Sources:   []wafv1alpha1.SourceReference{{Name: source.Name}},
+	})
+	ruleset.UID = "no-crs-ruleset-uid"
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithStatusSubresource(&wafv1alpha1.RuleSet{}, &wafv1alpha1.RuleData{}, &wafv1alpha1.Engine{}, &wafv1alpha1.RuleSource{}).
+		WithObjects(ruleset, source).
+		Build()
+	metrics, err := NewCorazaMetrics(prometheus.NewRegistry())
+	require.NoError(t, err)
+	reconciler := &RuleSetReconciler{
+		Client:   c,
+		Scheme:   scheme,
+		Recorder: utils.NewTestRecorder(),
+		Metrics:  metrics,
+	}
+	req := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(ruleset)}
+	_, err = reconciler.Reconcile(ctx, req)
+	require.NoError(t, err)
+
+	var updated wafv1alpha1.RuleSet
+	require.NoError(t, c.Get(ctx, req.NamespacedName, &updated))
+	assert.Nil(t, updated.Status.AcceptedContent)
+	degraded := apimeta.FindStatusCondition(updated.Status.Conditions, conditionDegraded)
+	require.NotNil(t, degraded)
+	assert.Equal(t, ruleSetDegradedReasonInvalidRuleSet, degraded.Reason)
+	assert.Contains(t, degraded.Message, "does not include OWASP CRS")
+	assert.Contains(t, degraded.Message, "make wasm.crs")
 }

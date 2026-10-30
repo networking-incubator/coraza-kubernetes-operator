@@ -360,6 +360,7 @@ func TestValidateRuleSourceRulesDefersIncludedRuleData(t *testing.T) {
 // file that itself includes embedded CRS data: Coraza parses the included file
 // as rule text, so the stubs must be collected from it too.
 func TestBuildWAFConfigStubsCRSInIncludedRuleData(t *testing.T) {
+	useCRSModule(t)
 	dataFiles := map[string][]byte{
 		"extra.conf": []byte("Include crs/crs-setup.conf\n" +
 			`SecRule ARGS "@pmFromFile crs/restricted-files.data" "id:1,phase:1,pass"` + "\n"),
@@ -463,6 +464,11 @@ func TestValidateIncludes(t *testing.T) {
 		"SecAuditLogType Serial",
 	} {
 		t.Run(rules, func(t *testing.T) {
+			// The crs/ forms need a module built with embed-crs; the rest
+			// never depends on the capability.
+			if strings.Contains(rules, "crs/") {
+				useCRSModule(t)
+			}
 			assert.NoError(t, ValidateIncludes(rules, nil))
 		})
 	}
@@ -476,6 +482,7 @@ func TestValidateIncludes(t *testing.T) {
 // quoting names a different file in the plugin, which then builds a zero-rule
 // WAF or NACKs.
 func TestValidateIncludesQuotesMirrorCoraza(t *testing.T) {
+	useCRSModule(t) // the accepted crs/ forms need an embedded CRS
 	const marker = "tenant-quote-marker-3e81"
 	for _, rules := range []string{
 		"Include 'blocklist.conf'",
@@ -513,6 +520,7 @@ func TestValidateIncludesQuotesMirrorCoraza(t *testing.T) {
 // compiles with zero rules while the Engine reports Ready. A padded non-glob is
 // trimmed and resolves normally.
 func TestValidateIncludesRejectsPaddedGlobs(t *testing.T) {
+	useCRSModule(t) // the crs/ glob forms need an embedded CRS
 	for _, rules := range []string{
 		"Include  crs/rules/*.conf",
 		"Include \"crs/rules/*.conf \"",
@@ -621,6 +629,7 @@ func TestValidateIncludesRejectsUnresolvableGlobs(t *testing.T) {
 // a rule-loading problem, so the Engine was Ready while the plugin rejected the
 // push or enforced nothing.
 func TestValidateIncludesRejectsNonRuleCrsFiles(t *testing.T) {
+	useCRSModule(t) // so only the non-rule file form, not the capability, rejects
 	for _, target := range []string{
 		"crs/scanners-user-agents.data",
 		"crs/REQUEST-900-EXCLUSION-RULES-BEFORE-CRS.conf.example",
@@ -772,6 +781,7 @@ func TestValidateIncludesRejectsAuditLogFileTargets(t *testing.T) {
 }
 
 func TestValidateRuleSourceRulesAcceptsEmbeddedCRS(t *testing.T) {
+	useCRSModule(t)
 	for _, include := range []string{
 		"Include crs/crs-setup.conf",
 		"Include crs/rules/*.conf",

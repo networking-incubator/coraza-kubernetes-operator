@@ -32,6 +32,7 @@ Include "quoted.conf"`, map[string][]byte{
 	}))
 
 	// The pinned CRS is embedded under crs/ by cargo's embed-crs feature.
+	useCRSModule(t)
 	require.NoError(t, ValidateCorazaRSIncludes(`SecRuleEngine On
 Include crs/crs-setup.conf
 Include crs/rules/*.conf
@@ -59,6 +60,7 @@ Include crs/rules/REQUEST-901-INITIALIZATION.conf`, nil))
 // The same crs/ forms must also pass the Go validation WAF, which stubs the
 // embedded tree while it compiles the tenant rule text.
 func TestCorazaRSCrsIncludesValidate(t *testing.T) {
+	useCRSModule(t)
 	require.NoError(t, ValidateRuleSourceRules(`SecRuleEngine On
 Include crs/crs-setup.conf
 Include crs/rules/*.conf`, "crs", nil))

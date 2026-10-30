@@ -36,6 +36,7 @@ import (
 
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/ecds/render"
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/rulesets/assemble"
+	"github.com/networking-incubator/coraza-kubernetes-operator/internal/rulesets/validation"
 )
 
 const (
@@ -521,9 +522,24 @@ func TestRenderRejectsUnsupportedIncludes(t *testing.T) {
 		require.Error(t, err, rules)
 	}
 
-	// coraza-rs's native embedded-CRS namespace is supported.
+	// coraza-rs's native embedded-CRS namespace is supported by a module
+	// built with embed-crs.
+	orig := validation.BundledCRSVersion
+	validation.BundledCRSVersion = "v4.30.0"
+	t.Cleanup(func() { validation.BundledCRSVersion = orig })
 	_, err := render.Render(newEngineInput(t, assemble.Content{
 		Rules: "SecRuleEngine On\nInclude crs/crs-setup.conf\nInclude crs/rules/*.conf",
 	}))
 	require.NoError(t, err)
+}
+
+// A module without embedded CRS resolves crs/ includes to nothing: the
+// payload would compile a zero-rule WAF while the Engine looked Ready, so
+// rendering rejects it (the committed fixture manifest records none).
+func TestRenderRejectsCRSWithoutBundledCRS(t *testing.T) {
+	_, err := render.Render(newEngineInput(t, assemble.Content{
+		Rules: "SecRuleEngine On\nInclude crs/crs-setup.conf\nInclude crs/rules/*.conf",
+	}))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "does not include OWASP CRS")
 }

@@ -28,6 +28,10 @@ import (
 // coraza-rs has no such tree, so those targets fail at configuration time while
 // the Engine reports Ready. RuleData file names are unaffected.
 //
+// crs/ targets are rejected unless the bundled module embeds CRS
+// (moduleEmbedsCRS): without it they resolve to nothing and compile a
+// zero-rule WAF while the Engine reports Ready.
+//
 // An included RuleData file is parsed as rule text, so its Includes are checked
 // too, following the same chain the plugin compiles.
 func ValidateCorazaRSIncludes(rules string, dataFiles map[string][]byte) error {
@@ -56,7 +60,9 @@ func ValidateCorazaRSIncludes(rules string, dataFiles map[string][]byte) error {
 }
 
 func validateCorazaRSRuleText(rules string) error {
-	for line := range strings.SplitSeq(joinActiveRuleLines(rules), "\n") {
+	active := joinActiveRuleLines(rules)
+	embedsCRS := moduleEmbedsCRS()
+	for line := range strings.SplitSeq(active, "\n") {
 		match := includePattern.FindStringSubmatch(line)
 		if match == nil {
 			continue
@@ -67,6 +73,23 @@ func validateCorazaRSRuleText(rules string) error {
 		}
 		if isGlob(target) && target != "crs/rules/*.conf" {
 			return errors.New(`include with a glob is only supported as crs/rules/*.conf: use the embedded CRS or list RuleData files explicitly`)
+		}
+		if !embedsCRS && isRuntimeResolvedPath(target) {
+			return errNoBundledCRSInclude
+		}
+	}
+	if embedsCRS {
+		return nil
+	}
+	// @pmFromFile data under crs/ is served by the same embedded tree; a
+	// module without it resolves nothing.
+	for _, match := range pmFromFilePattern.FindAllStringSubmatch(active, -1) {
+		if len(match) < 3 {
+			continue
+		}
+		target := path.Clean(strings.Trim(strings.TrimSpace(match[2]), `"'`))
+		if isEmbeddedDataPath(target) {
+			return errNoBundledCRSData
 		}
 	}
 	return nil

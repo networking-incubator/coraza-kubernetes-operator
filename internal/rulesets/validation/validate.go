@@ -48,7 +48,8 @@ const validationTrailer = "\nSecAuditLogType Serial\nSecAuditLog /dev/stdout"
 // token leaks it through the compilation error into tenant-readable status).
 // Embedded CRS Include and @pmFromFile targets are stubbed, in the rule text
 // and in every RuleData file it Includes, so Coraza can compile references the
-// plugin resolves from its embedded filesystem.
+// plugin resolves from its embedded filesystem. A patch directive that tunes a
+// CRS rule by ID gets a stand-in rule, since the stubs define no CRS rules.
 func BuildWAFConfig(rules string, dataFiles map[string][]byte) coraza.WAFConfig {
 	mfs := memfs.NewMemFS()
 	for name, data := range dataFiles {
@@ -58,6 +59,9 @@ func BuildWAFConfig(rules string, dataFiles map[string][]byte) coraza.WAFConfig 
 		if _, ok := dataFiles[target]; !ok {
 			mfs.WriteFile(target, nil)
 		}
+	}
+	if standIns := crsTuningStandInRules(rules, dataFiles); standIns != "" {
+		rules = standIns + rules
 	}
 	return coraza.NewWAFConfig().WithDirectives(rules + validationTrailer).WithRootFS(mfs)
 }

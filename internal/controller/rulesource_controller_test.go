@@ -188,6 +188,34 @@ func TestRuleSourceReconciler_PatchOnlyFragmentWithBadInclude(t *testing.T) {
 	assert.Equal(t, float64(0), gatherValidationCounter(t, reg, "skipped"))
 }
 
+// TestRuleSourceReconciler_CRSWithoutBundledCRS covers the release build
+// (crs_version: none): a crs/ include resolves nothing in a module without
+// embed-crs, so the source must be Degraded instead of Ready with a zero-rule
+// WAF downstream.
+func TestRuleSourceReconciler_CRSWithoutBundledCRS(t *testing.T) {
+	ctx := context.Background()
+	rs := utils.NewTestRuleSource("rs-ctrl-no-crs", testNamespace,
+		"SecRuleEngine On\nInclude crs/crs-setup.conf\nInclude crs/rules/*.conf")
+	require.NoError(t, k8sClient.Create(ctx, rs))
+	t.Cleanup(func() { _ = k8sClient.Delete(ctx, rs) })
+
+	reg := prometheus.NewRegistry()
+	m, err := NewCorazaMetrics(reg)
+	require.NoError(t, err)
+
+	rec := &RuleSourceReconciler{Client: k8sClient, Recorder: utils.NewTestRecorder(), Metrics: m}
+	_, err = rec.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: rs.Name, Namespace: rs.Namespace}})
+	require.NoError(t, err)
+
+	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: rs.Name, Namespace: rs.Namespace}, rs))
+	deg := apimeta.FindStatusCondition(rs.Status.Conditions, conditionDegraded)
+	require.NotNil(t, deg)
+	assert.Equal(t, metav1.ConditionTrue, deg.Status)
+	assert.Equal(t, ruleSourceDegradedReasonInvalidRules, deg.Reason)
+	assert.Contains(t, deg.Message, "does not include OWASP CRS")
+	assert.Contains(t, deg.Message, "make wasm.crs")
+}
+
 func TestRuleSourceReconciler_MetricsNotIncrementedOnResync(t *testing.T) {
 	ctx := context.Background()
 	rs := utils.NewTestRuleSource("rs-ctrl-resync", testNamespace,
