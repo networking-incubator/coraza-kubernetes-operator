@@ -97,7 +97,24 @@ For detailed status conditions and events:
 kubectl describe engine my-engine -n my-namespace
 ```
 
-To verify that the WAF is attached, check for the EnvoyFilter and NetworkPolicy created by the operator:
+Checking that the EnvoyFilter exists does not prove the WAF is enforcing. Send one benign and
+one malicious request through the Gateway:
+
+```bash
+ADDR=$(kubectl -n my-namespace get gateway <gateway-name> \
+  -o jsonpath='{.status.addresses[0].value}')
+
+curl -s -o /dev/null -w '%{http_code}\n' "http://${ADDR}/"
+curl -s -o /dev/null -w '%{http_code}\n' "http://${ADDR}/?q=%3Cscript%3Ealert(1)%3C%2Fscript%3E"
+```
+
+The first request returns `200`; the second returns `403` when the RuleSet contains a matching
+deny rule. If both return `200`, the rules are not enforced: check that the Engine is `Ready`,
+that the Gateway pod loaded the module (`kubectl -n <gateway-namespace> logs <gateway-pod> -c
+istio-proxy | grep -i wasm`), and that the operator logged `ECDS configuration accepted by
+proxy` for the Engine.
+
+The operator also creates the EnvoyFilter and NetworkPolicy:
 
 ```bash
 kubectl get envoyfilter,networkpolicy -n my-namespace

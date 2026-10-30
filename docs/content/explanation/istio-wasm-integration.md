@@ -20,9 +20,10 @@ For each accepted Engine the operator:
      for the Engine's resource name.
 2. Serves the filter configuration over **ECDS** on its own listener (port 18080, HTTP/2),
    authenticated with the Gateway's ServiceAccount token and a CA-pinned TLS channel.
-3. Serves the module bytes over HTTPS at `/wasm/<sha256>.wasm` (or the URL from
-   `spec.driver.wasm.url`); Envoy fetches them once, verifies the digest, and caches the
-   module, so rule updates never carry the binary again.
+3. Serves the **bundled** module over HTTPS at `/wasm/<sha256>.wasm`; Envoy fetches it once,
+   verifies the digest, and caches it, so rule updates never carry the binary again. With
+   `spec.driver.wasm.url` set, Envoy fetches the module from that host instead and the
+   operator neither serves nor proxies the custom bytes.
 
 Until the ECDS resource arrives, Envoy applies the attachment's bootstrap config. For a
 fail-closed Engine that is a **deny-all RBAC** default. This is not a blanket guarantee for
@@ -102,4 +103,8 @@ spec:
       sha256: "<64 lowercase hex characters>"
 ```
 
-The URL must be HTTPS, and Envoy refuses bytes that do not match the digest.
+The URL must be HTTPS, and Envoy refuses bytes that do not match the digest. The URL host
+must present a certificate chain that verifies against the operator xDS CA (`--xds-ca-path`)
+and negotiate TLS 1.3; hosts with public certificates are not trusted yet. Until they are,
+the fetch fails, the proxy NACKs the push, and a fail-closed Engine keeps its deny-all
+bootstrap default while still reporting `Ready`.

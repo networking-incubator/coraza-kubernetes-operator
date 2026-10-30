@@ -84,6 +84,18 @@ Run integration tests (requires a KIND cluster - see [Setup](#setup)):
 make test.integration
 ```
 
+A clean checkout only carries the 8-byte `internal/assets/plugin.wasm` fixture. Enforcement
+tests need a real module, and `cluster.kind` builds the operator image from the working tree,
+so build and bundle one **before** creating the cluster (this is what CI does):
+
+```bash
+make wasm.plugin WASM_CRS=0
+make wasm.bundle WASM_MODULE=.cache/wasm/envoy_coraza.wasm WASM_CRS=0
+make cluster.kind
+```
+
+Restore the committed fixture afterwards with `git checkout internal/assets`.
+
 These tests validate the operator's behavior on a live cluster, including:
 - Engine and RuleSet reconciliation
 - Gateway attachment and configuration
@@ -362,7 +374,9 @@ spec:
       sha256: "<64 lowercase hex characters>"
 ```
 
-The URL must be HTTPS and the digest must match the served bytes.
+The URL must be HTTPS and the digest must match the served bytes. The Gateway verifies the
+asset host only against the operator's xDS CA, so the endpoint must present a certificate
+chain signed by that CA and negotiate TLS 1.3; public-CA hosts are not trusted yet.
 
 ## Testing Custom WASM Plugins
 

@@ -25,6 +25,17 @@ helm upgrade coraza-kubernetes-operator \
   --version 0.3.0
 ```
 
+Before applying the new CRDs, inventory Engines that still use the removed OCI fields. The new
+CRDs prune `spec.driver.wasm.image`, so this is the last point where the old reference is
+readable:
+
+```bash
+kubectl get engines -A -o jsonpath='{range .items[?(@.spec.driver.wasm.image)]}{.metadata.namespace}/{.metadata.name}{"\n"}{end}'
+```
+
+Record each module reference and digest; [Migrating custom WASM modules](#migrating-custom-wasm-modules)
+explains how to move them to `spec.driver.wasm.url` and `sha256` after the upgrade.
+
 Helm upgrades workloads but does not upgrade existing CRDs. Apply the target release's CRDs before upgrading the operator:
 
 ```bash
@@ -47,19 +58,14 @@ Before upgrading, review the release notes for any breaking changes or migration
 
 ### Migrating custom WASM modules
 
-Before upgrading, inventory Engines that still use the removed OCI fields:
-
-```bash
-kubectl get engines -A -o jsonpath='{range .items[?(@.spec.driver.wasm.image)]}{.metadata.namespace}/{.metadata.name}{"\n"}{end}'
-```
-
-Record each module reference and digest. The new API accepts only a paired
+Use the inventory from the step above: the new API accepts only a paired
 `spec.driver.wasm.url` and `sha256`; an Engine with neither selects the bundled
 module. For a custom module, publish ECDS-compatible raw bytes at an HTTPS URL,
-apply the upgraded CRDs first (they prune the removed fields), then set both
-`url` and `sha256` on each Engine. An Engine that is left with no `url`/`sha256`
-will not fail visibly: it silently selects the bundled module instead of the old
-image.
+apply the upgraded CRDs (they prune the removed fields), then set both `url` and
+`sha256` on each Engine. The URL host must present a certificate that chains to
+the operator xDS CA over TLS 1.3; public-CA hosts are not trusted yet. An Engine
+that is left with no `url`/`sha256` will not fail visibly: it silently selects
+the bundled module instead of the old image.
 
 ## Rendering Schema Upgrades
 

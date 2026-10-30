@@ -8,7 +8,7 @@ description: "Generate and deploy OWASP CoreRuleSet rules using the kubectl-cora
 The [OWASP CoreRuleSet (CRS)](https://coreruleset.org/) is a widely used set of attack detection rules for ModSecurity-compatible WAFs. The `kubectl-coraza` plugin can generate **RuleSource**, **RuleData**, and **RuleSet** manifests from CRS rule files.
 
 {{% alert title="Important" color="warning" %}}
-This project does not maintain CoreRuleSet rules. The bundled module embeds an upstream CRS release; rule behavior and support follow that release.
+This project does not maintain CoreRuleSet rules. A CRS-enabled `envoy-coraza` build embeds an upstream CRS release and rule behavior follows that release. The default and release bundles do **not** embed CRS, so `crs/...` includes are rejected there.
 {{% /alert %}}
 
 ## Use the embedded CoreRuleSet
@@ -26,6 +26,10 @@ spec:
     SecRuleEngine On
     SecRequestBodyAccess On
     SecRequestBodyLimit 13107200
+    # CRS 4.30 parses a JSON body only when the request selects the JSON
+    # processor; without this rule the ARGS rules never see JSON payloads.
+    SecRule REQUEST_HEADERS:Content-Type "@rx application/json" \
+      "id:900,phase:1,pass,nolog,ctl:requestBodyProcessor=JSON"
     Include crs/crs-setup.conf
     Include crs/rules/*.conf
 ---
