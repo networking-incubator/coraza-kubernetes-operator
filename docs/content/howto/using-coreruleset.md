@@ -72,11 +72,21 @@ curl -s -o /dev/null -w '%{http_code}\n' \
   "http://$ADDR/?q=1%27%20OR%20%271%27=%271"
 ```
 
-The previous Go plugin's aliases (`@owasp_crs/...`, `@recommended-conf`, `@demo-conf`, `@ftw-conf`, `@crs-setup-conf`) are not supported. Rewrite them to `crs/...`.
+The previous Go plugin's aliases are not all file references:
+
+- CRS file aliases such as `@owasp_crs/...` and `@crs-setup-conf` should be replaced
+  with actual Includes under `crs/`, such as `Include crs/rules/*.conf` and
+  `Include crs/crs-setup.conf`.
+- `@recommended-conf`, `@demo-conf`, and `@ftw-conf` are configuration aliases, not
+  CRS filenames. Do not rewrite them as `crs/...`. Use the generator to emit its
+  `base-rules` and per-file RuleSources/RuleData, or add the required base SecLang
+  directives explicitly to your own RuleSource.
 
 ## Generate manifests for a different CRS release
 
-Use the generator when you need a different CRS version or per-rule exclusions. To match the embedded release, set `--version 4.30.0`.
+Use the generator when you need a different CRS version or per-rule exclusions. Set
+`CRS_VERSION` to the release you download and pass the same version with `--version`.
+To match the embedded release, use `4.30.0` for both.
 
 ## Install the kubectl-coraza Plugin
 
@@ -105,7 +115,7 @@ kubectl coraza --help
 Download the CoreRuleSet release archive and extract the rules:
 
 ```bash
-export CRS_VERSION=4.28.0
+export CRS_VERSION=4.30.0
 curl -fsSL "https://github.com/coreruleset/coreruleset/archive/refs/tags/v${CRS_VERSION}.tar.gz" \
   | tar xz
 ```
