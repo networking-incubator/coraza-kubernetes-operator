@@ -66,7 +66,7 @@ const (
 //
 // +kubebuilder:validation:MinProperties=0
 // +kubebuilder:validation:XValidation:rule="(has(self.url) && has(self.sha256)) || (!has(self.url) && !has(self.sha256))",message="url and sha256 must be set together; omit both to use the bundled module"
-// +kubebuilder:validation:XValidation:rule="!has(self.url) || (self.url.matches('^https://') && !self.url.contains('?') && !self.url.contains('#'))",message="url must be an https URL without query or fragment; userinfo is rejected by Go URL parsing"
+// +kubebuilder:validation:XValidation:rule="!has(self.url) || (self.url.matches('^https://[^/@]+(/|$)') && !self.url.contains('?') && !self.url.contains('#'))",message="url must be an https URL without userinfo, query, or fragment"
 // +kubebuilder:validation:XValidation:rule="!has(self.sha256) || self.sha256.matches('^[0-9a-f]{64}$')",message="sha256 must be 64 lowercase hexadecimal characters"
 type WasmDriverConfig struct {
 	// url is an HTTPS URL serving raw WASM bytes. It must be set together

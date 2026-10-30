@@ -101,10 +101,10 @@ spec:
                         the bundled module
                       rule: (has(self.url) && has(self.sha256)) || (!has(self.url)
                         && !has(self.sha256))
-                    - message: url must be an https URL without query or fragment;
-                        userinfo is rejected by Go URL parsing
-                      rule: '!has(self.url) || (self.url.matches(''^https://'') &&
-                        !self.url.contains(''?'') && !self.url.contains(''#''))'
+                    - message: url must be an https URL without userinfo, query, or
+                        fragment
+                      rule: '!has(self.url) || (self.url.matches(''^https://[^/@]+(/|$)'')
+                        && !self.url.contains(''?'') && !self.url.contains(''#''))'
                     - message: sha256 must be 64 lowercase hexadecimal characters
                       rule: '!has(self.sha256) || self.sha256.matches(''^[0-9a-f]{64}$'')'
                 required:

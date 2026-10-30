@@ -22,7 +22,9 @@ a certificate manager such as cert-manager).
 
 The generated CA and leaf are valid for 365 days and are reused until the
 Secret is deleted. Rotate by deleting the Secret and re-running
-`helm upgrade` (helm-managed installs only).
+`helm upgrade` (helm-managed installs only). Changes to `tls.sans` do not
+update a reused Secret; rotate the certificate and restart the operator before
+using a newly added hostname.
 */ -}}
 {{- $fullname := include "coraza-operator.fullname" . }}
 {{- $secretName := printf "%s-serving-cert" $fullname }}

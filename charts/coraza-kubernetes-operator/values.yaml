@@ -143,7 +143,9 @@ tls:
   certName: "tls.crt"
   keyName: "tls.key"
   caName: "ca.crt"
-  # Extra DNS SANs appended to the generated certificate.
+  # Extra DNS SANs appended when the serving certificate is generated. Changing
+  # this list does not update a Secret reused by Helm; rotate the certificate
+  # and restart the operator before using a newly added hostname.
   sans: []
 
 # Deprecated and ignored. The Engine API no longer has spec.driver.wasm.image.

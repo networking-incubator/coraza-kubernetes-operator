@@ -75,7 +75,7 @@ When `openshift.enabled=true`, `runAsUser`, `fsGroup`, and `fsGroupChangePolicy`
 | `istio.revision`                                      | string | `""`                                                      | Istio control plane revision label; empty means no revision label on managed resources                      |
 | `tls.existingSecret`                                  | string | `""`                                                      | Existing Secret with `ca.crt`, `tls.crt`, and `tls.key` for the ECDS/WASM endpoint. Required for GitOps and static-manifest installs |
 | `tls.generate`                                        | bool   | `true`                                                    | Generate a self-signed serving certificate (365-day CA and leaf) when `tls.existingSecret` is empty. Reuse across upgrades via `lookup` works only with `helm install`/`helm upgrade`; set to `false` for `helm template` and GitOps (Argo CD, Flux) |
-| `tls.sans`                                            | list   | `[]`                                                      | Extra DNS SANs appended to the generated serving certificate                                                |
+| `tls.sans`                                            | list   | `[]`                                                      | Extra DNS SANs added when the serving certificate is generated. Changing this list does not update a reused Secret; rotate the certificate and restart the operator before using a newly added hostname. |
 | `defaultWasmImage`                                    | string | `""`                                                      | Deprecated and ignored. Use the bundled module or `spec.driver.wasm.url` with `sha256`. |
 | `createNamespace`                                     | bool   | `true`                                                    | Manage the release namespace with Pod Security Standard labels. Requires `--create-namespace` on first install |
 | `openshift.enabled`                                   | bool   | `false`                                                   | Omit UID/fsGroup from pod security context for OpenShift SCC compatibility                                  |
@@ -104,7 +104,17 @@ GitOps and static-manifest installs must instead:
 
 #### Rotation
 
-The generated certificate is reused until the Secret is deleted, so it expires after 365 days even across upgrades. To rotate a helm-managed installation, delete `<release>-serving-cert` and re-run `helm upgrade`. For `tls.existingSecret`, a leaf renewed under the same CA can be rotated by replacing the Secret contents. The operator reads `ca.crt` only at startup and inlines it into every EnvoyFilter, so after a CA change restart the operator (`kubectl rollout restart deployment/<release>`) to publish the new trust bundle.
+The generated certificate is reused until the Secret is deleted, so it expires after 365 days even across upgrades. Changing `tls.sans` does not update the reused certificate: to use a newly added hostname, rotate the certificate first. For a Helm-generated certificate, delete `<chart-fullname>-serving-cert` and re-run `helm upgrade`. For `tls.existingSecret`, replace the Secret with a certificate containing the new SAN. Then restart the operator before using the hostname:
+
+```bash
+helm_release=coraza-kubernetes-operator
+deployment=$(kubectl -n coraza-system get deployments \
+  -l "app.kubernetes.io/instance=${helm_release},control-plane=coraza-controller-manager" \
+  -o jsonpath='{.items[0].metadata.name}')
+kubectl -n coraza-system rollout restart "deployment/${deployment}"
+```
+
+Set `helm_release` to your release name. The selector discovers the chart-rendered Deployment fullname rather than assuming it equals the release name. The operator reads `ca.crt` only at startup and inlines it into every EnvoyFilter, so after a CA change this restart publishes the new trust bundle. A leaf-only renewal under the same CA does not change the trust bundle.
 
 Static manifests built with `make build.installer` or `make release.manifests` disable generation (`tls.generate=false`) so no private key is published. Before applying one of those manifests, create the serving Secret yourself as described above.
 

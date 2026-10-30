@@ -29,8 +29,8 @@ spec:
     SecRequestBodyLimit 13107200
     # CRS 4.30 parses a JSON body only when the request selects the JSON
     # processor; without this rule the ARGS rules never see JSON payloads.
-    SecRule REQUEST_HEADERS:Content-Type "@rx application/json" \
-      "id:900,phase:1,pass,nolog,ctl:requestBodyProcessor=JSON"
+    SecRule REQUEST_HEADERS:Content-Type "@rx ^application/json(?:\s*;|$)" \
+      "id:900,phase:1,t:none,t:lowercase,pass,nolog,ctl:requestBodyProcessor=JSON"
     Include crs/crs-setup.conf
     Include crs/rules/*.conf
 ---

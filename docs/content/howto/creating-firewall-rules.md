@@ -28,8 +28,8 @@ spec:
     SecAuditEngine RelevantOnly
     # Enable JSON body parsing so that ARGS-based rules inspect application/json request bodies.
     # Without this, JSON request bodies are read as raw bytes and are invisible to ARGS rules.
-    SecRule REQUEST_HEADERS:Content-Type "@rx application/json" \
-      "id:900,phase:1,pass,nolog,ctl:requestBodyProcessor=JSON"
+    SecRule REQUEST_HEADERS:Content-Type "@rx ^application/json(?:\s*;|$)" \
+      "id:900,phase:1,t:none,t:lowercase,pass,nolog,ctl:requestBodyProcessor=JSON"
 ```
 
 {{% alert title="JSON body inspection" color="info" %}}

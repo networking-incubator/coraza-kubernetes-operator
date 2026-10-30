@@ -72,7 +72,7 @@ spec:
       sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 ```
 
-The `url` and `sha256` fields must be set together: `url` must be an HTTPS URL without query or fragment, and `sha256` must be the 64-character lowercase hexadecimal SHA-256 of the raw WASM bytes served at `url`. Omit both fields (or set `wasm: {}`) to use the bundled module.
+The `url` and `sha256` fields must be set together: `url` must be an HTTPS URL without userinfo, query, or fragment, and `sha256` must be the 64-character lowercase hexadecimal SHA-256 of the raw WASM bytes served at `url`. Omit both fields (or set `wasm: {}`) to use the bundled module.
 
 The custom URL host must present a certificate that chains to the CA configured with `--xds-ca-path` (the operator serving CA). Public certificate hosts are not supported by this MVP, so use an internal host with a matching certificate or keep the bundled module.
 

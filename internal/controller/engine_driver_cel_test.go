@@ -72,6 +72,13 @@ func TestEngineWasmDriverCEL(t *testing.T) {
 			},
 		},
 		{
+			name: "bracketed IPv6 URL",
+			wasm: &wafv1alpha1.WasmDriverConfig{
+				URL:    "https://[2001:db8::1]:18080/plugin.wasm",
+				SHA256: testSHA256,
+			},
+		},
+		{
 			name: "both omitted uses bundled module",
 			wasm: &wafv1alpha1.WasmDriverConfig{},
 		},
@@ -99,7 +106,7 @@ func TestEngineWasmDriverCEL(t *testing.T) {
 				URL:    "https://example.com/plugin.wasm?version=1",
 				SHA256: testSHA256,
 			},
-			wantErr: "url must be an https URL without query or fragment",
+			wantErr: "url must be an https URL without userinfo, query, or fragment",
 		},
 		{
 			name: "url with fragment",
@@ -107,7 +114,15 @@ func TestEngineWasmDriverCEL(t *testing.T) {
 				URL:    "https://example.com/plugin.wasm#fragment",
 				SHA256: testSHA256,
 			},
-			wantErr: "url must be an https URL without query or fragment",
+			wantErr: "url must be an https URL without userinfo, query, or fragment",
+		},
+		{
+			name: "url with userinfo",
+			wasm: &wafv1alpha1.WasmDriverConfig{
+				URL:    "https://user:password@example.com/plugin.wasm",
+				SHA256: testSHA256,
+			},
+			wantErr: "url must be an https URL without userinfo, query, or fragment",
 		},
 		{
 			name: "uppercase sha256",
