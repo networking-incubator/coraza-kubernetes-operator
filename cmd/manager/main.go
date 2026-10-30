@@ -25,6 +25,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
@@ -284,7 +285,10 @@ func buildECDSConfig(cfg config, podNamespace string) (controller.ECDSConfig, st
 	}
 	if advertise != "" {
 		if _, _, err := net.SplitHostPort(advertise); err != nil {
-			advertise = net.JoinHostPort(advertise, strconv.Itoa(cfg.xdsPort))
+			// A bracketed IPv6 literal is already a complete host; JoinHostPort
+			// would wrap it a second time.
+			host := strings.TrimSuffix(strings.TrimPrefix(advertise, "["), "]")
+			advertise = net.JoinHostPort(host, strconv.Itoa(cfg.xdsPort))
 		}
 	}
 

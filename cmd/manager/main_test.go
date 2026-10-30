@@ -18,6 +18,7 @@ package main
 
 import (
 	"crypto/tls"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -54,6 +55,34 @@ func TestBuildCacheOptionsScopesPodsToGatewayDataPlane(t *testing.T) {
 // -----------------------------------------------------------------------------
 // Listener address Tests
 // -----------------------------------------------------------------------------
+
+func TestBuildECDSConfigAdvertiseAddress(t *testing.T) {
+	tests := map[string]struct {
+		advertise   string
+		serviceName string
+		want        string
+	}{
+		"bare host gets the port":           {advertise: "coraza.example", want: "coraza.example:18080"},
+		"host and port are kept":            {advertise: "coraza.example:9443", want: "coraza.example:9443"},
+		"bare IPv6 gets brackets":           {advertise: "2001:db8::1", want: "[2001:db8::1]:18080"},
+		"bracketed IPv6 is not rebracketed": {advertise: "[2001:db8::1]", want: "[2001:db8::1]:18080"},
+		"bracketed IPv6 with port is kept":  {advertise: "[2001:db8::1]:9443", want: "[2001:db8::1]:9443"},
+		"derived from the Service name":     {serviceName: "coraza", want: "coraza.default.svc.cluster.local:18080"},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			got, assetURL := buildECDSConfig(config{
+				xdsAdvertiseAddress: tc.advertise,
+				operatorServiceName: tc.serviceName,
+				xdsPort:             18080,
+				// A missing CA is not fatal: Engine reconciliation reports it.
+				xdsCAPath: filepath.Join(t.TempDir(), "missing-ca.crt"),
+			}, "default")
+			assert.Equal(t, tc.want, got.AdvertiseAddress)
+			assert.Equal(t, "https://"+tc.want, assetURL)
+		})
+	}
+}
 
 func TestListenPort(t *testing.T) {
 	tests := map[string]int32{
