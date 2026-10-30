@@ -56,6 +56,7 @@ func TestLimitsWithDefaultsRejectsNegativeLimits(t *testing.T) {
 func TestLimitsValidateRejectsPluginCapViolations(t *testing.T) {
 	assert.NoError(t, DefaultLimits().Validate())
 	assert.NoError(t, Limits{}.Validate(), "unset limits must not fail validation")
+	assert.Equal(t, DefaultMaxStreams, DefaultLimits().MaxStreamsPerIdentity)
 
 	err := Limits{MaxMessageBytes: DefaultMaxMessageBytes + 1}.Validate()
 	require.Error(t, err)
@@ -68,6 +69,18 @@ func TestLimitsValidateRejectsPluginCapViolations(t *testing.T) {
 	err = Limits{MaxDataFiles: pluginMaxDataFiles + 1}.Validate()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "xds-max-data-files")
+}
+
+func TestLimitsValidateRequiresRevalidationBeforeStaleness(t *testing.T) {
+	for _, revalidate := range []time.Duration{time.Minute, 2 * time.Minute} {
+		err := Limits{
+			TokenReviewRevalidate:     revalidate,
+			AuthorizationMaxStaleness: time.Minute,
+		}.Validate()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "xds-token-review-revalidate")
+		assert.Contains(t, err.Error(), "xds-authorization-max-staleness")
+	}
 }
 
 // TestLimitsValidateRejectsUndeliverableCombination checks the combined bound:

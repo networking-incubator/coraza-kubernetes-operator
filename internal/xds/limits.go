@@ -46,8 +46,8 @@ const (
 	// DefaultMaxStreams bounds concurrent ECDS streams per replica.
 	DefaultMaxStreams = 512
 	// DefaultMaxStreamsPerIdentity bounds concurrent ECDS streams per
-	// authenticated ServiceAccount.
-	DefaultMaxStreamsPerIdentity = 8
+	// authenticated ServiceAccount; operators may lower it independently.
+	DefaultMaxStreamsPerIdentity = DefaultMaxStreams
 	// DefaultMaxPendingWatches is the number of pending snapshot watches per
 	// stream. Updates coalesce to the latest snapshot.
 	DefaultMaxPendingWatches = 1
@@ -170,6 +170,9 @@ func (l Limits) WithDefaults() Limits {
 // filled by WithDefaults.
 func (l Limits) Validate() error {
 	l = l.WithDefaults()
+	if l.TokenReviewRevalidate >= l.AuthorizationMaxStaleness {
+		return fmt.Errorf("xds-token-review-revalidate %s must be less than xds-authorization-max-staleness %s", l.TokenReviewRevalidate, l.AuthorizationMaxStaleness)
+	}
 	if l.MaxMessageBytes > pluginMaxMessageBytes {
 		return fmt.Errorf("xds-max-message-bytes %d exceeds the ECDS message cap of %d bytes", l.MaxMessageBytes, pluginMaxMessageBytes)
 	}

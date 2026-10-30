@@ -634,6 +634,45 @@ func TestAuthzIndexStalenessBoundOnRefreshFailure(t *testing.T) {
 	}
 }
 
+func TestAuthzIndexRefreshAllRemovesDeletedEngine(t *testing.T) {
+	fixture := newAuthorizationFixture()
+	base := newAuthorizationClient(t, fixture.engine, fixture.gateway, fixture.pod, fixture.account)
+	revoker := newRecordingRevoker()
+	index := NewAuthzIndex(base, base, time.Hour, revoker.RevokeResource)
+	ctx := context.Background()
+	resource := ResourceName(testNamespace, testEngineName, fixture.engine.UID)
+	granted := Identity{Namespace: testNamespace, Name: "gateway", UID: "sa-uid"}
+
+	if err := index.Refresh(ctx, fixture.engine); err != nil {
+		t.Fatalf("Refresh() error = %v", err)
+	}
+	if !index.Authorize(resource, granted) {
+		t.Fatal("Authorize() = false before deleting the Engine")
+	}
+	if err := base.Delete(ctx, fixture.engine); err != nil {
+		t.Fatalf("Delete() error = %v", err)
+	}
+
+	index.RefreshAll(ctx)
+
+	if !revoker.revoked(resource) {
+		t.Fatal("RefreshAll() did not revoke the deleted Engine")
+	}
+	if _, ok := index.EngineKey(resource); ok {
+		t.Fatal("RefreshAll() kept the deleted Engine's entry")
+	}
+	index.mu.RLock()
+	_, known := index.known[resource]
+	_, entry := index.entries[resource]
+	index.mu.RUnlock()
+	if known {
+		t.Fatal("RefreshAll() kept the deleted Engine in the known set")
+	}
+	if entry {
+		t.Fatal("RefreshAll() kept the deleted Engine's authorization entry")
+	}
+}
+
 func TestEngineAcceptedForGeneration(t *testing.T) {
 	fixture := newAuthorizationFixture()
 	if !engineAcceptedForGeneration(fixture.engine) {

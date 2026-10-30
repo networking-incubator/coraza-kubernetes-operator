@@ -325,6 +325,9 @@ func (a *AuthzIndex) RefreshAll(ctx context.Context) {
 		if err := a.reader.Get(ctx, key, &engine); err != nil {
 			if apierrors.IsNotFound(err) {
 				a.RevokeAndNotify(resourceName)
+				a.mu.Lock()
+				delete(a.known, resourceName)
+				a.mu.Unlock()
 			} else {
 				a.logRefreshFailure(resourceName, fmt.Errorf("get Engine %s: %w", key, err))
 			}

@@ -61,7 +61,7 @@ The operator serves Envoy Configuration Discovery Service (ECDS) streams and the
 | `--xds-max-decoded-data-bytes` | `6291456` (6 MiB) | Maximum decoded RuleData bytes carried by one Engine. `rule_data` is carried as JSON strings, and `envoy-coraza` caps the whole plugin configuration at 8 MiB, leaving room for rule text. The plugin accepts at most 8 MiB of rule data. |
 | `--xds-max-data-files` | `1024` | Maximum number of RuleData files carried by one Engine. `envoy-coraza` accepts at most 1024. |
 | `--xds-max-streams` | `512` | Maximum concurrent ECDS streams per replica. |
-| `--xds-max-streams-per-identity` | `8` | Maximum concurrent ECDS streams per authenticated ServiceAccount. |
+| `--xds-max-streams-per-identity` | `512` | Maximum concurrent ECDS streams per authenticated ServiceAccount on one replica. |
 | `--xds-stream-max-lifetime` | `10m` | Maximum ECDS stream lifetime before a forced reconnect (with jitter). |
 | `--xds-token-review-revalidate` | `2m` | Interval between open-stream TokenReview and authorization revalidation. |
 | `--xds-authorization-max-staleness` | `5m` | Maximum age of an authorization mapping before affected streams are closed. |
