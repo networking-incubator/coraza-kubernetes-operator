@@ -79,13 +79,16 @@ The readiness deadline applies to any accepted record this build never reconstru
 
 This release rejects rule text that opens or creates host files while the operator compiles it: `SecDebugLog` (including `/dev/stdout`), `SecUploadDir`, and `SecUploadKeepFiles` with any value other than `Off`. A RuleSet that an older version accepted with one of these directives now fails validation and becomes `Degraded` with `InvalidRuleSet`, and the Engine drops that content from its accepted configuration instead of publishing it again; an already-running proxy keeps the WAF it has, but a new or reconnecting proxy has only its bootstrap policy (which allows traffic for a fail-open Engine) until the directive is removed. RuleSets whose rules `Include` a file carrying such a directive are affected the same way.
 
-`SecAuditLog` is rejected entirely: `envoy-coraza` has no audit sink and refuses any policy that names one. Remove the directive; `SecAuditLogType`, `SecAuditLogFormat`, and `SecAuditLogParts` are still accepted. Rules that enable `SecRequestBodyAccess` must also set `SecRequestBodyLimit` at or below 16 MiB; the engine default is 128 MiB and is rejected.
+`SecAuditLog` is rejected entirely: `envoy-coraza` has no audit sink and refuses any policy that names one. Only `SecAuditLogType Serial` is supported; replace `Concurrent`, `Syslog`, or `Https` with `Serial`. `SecAuditLogFormat` and `SecAuditLogParts` are still accepted. Rules that enable `SecRequestBodyAccess` must also set `SecRequestBodyLimit` at or below 16 MiB; the engine default is 128 MiB and is rejected.
 
 The same guard rejects `Include` targets the plugin cannot resolve. A CRS-enabled
 `envoy-coraza` build (the CRS artifact `make demo` downloads, or `make wasm.crs`)
 embeds the pinned OWASP CRS under `crs/`, so `Include crs/crs-setup.conf`, `Include crs/rules/*.conf`, and
-a literal `crs/rules/<file>.conf` are accepted. The release bundle does not embed
-CRS; use the generator or a CRS-enabled module for those includes. Every other glob is rejected, and the Go
+a literal `crs/rules/<file>.conf` are accepted. Validation checks the operator image's
+bundled module manifest; setting a custom `spec.driver.wasm.url` to a CRS-enabled module
+does not enable `crs/...` includes when the bundled release module reports
+`crs_version: none`. Use the generator to package rules as RuleSource/RuleData, or use an
+operator image bundled with CRS. Every other glob is rejected, and the Go
 plugin's `@` aliases (`@owasp_crs/...`, `@recommended-conf`, `@demo-conf`,
 `@ftw-conf`, `@crs-setup-conf`) are **not** supported by `envoy-coraza`. A
 literal `crs/<file>` must end in `.conf`: the `.conf.example` templates hold no

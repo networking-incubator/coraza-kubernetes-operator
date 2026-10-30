@@ -69,10 +69,14 @@ spec:
     type: wasm
     wasm:
       url: "https://files.example.com/coraza-rs/envoy-coraza-<version>.wasm"
-      sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      sha256: "<sha256-of-the-exact-served-wasm-bytes>"
 ```
 
-The `url` and `sha256` fields must be set together: `url` must be an HTTPS URL without userinfo, query, or fragment, and `sha256` must be the 64-character lowercase hexadecimal SHA-256 of the raw WASM bytes served at `url`. Omit both fields (or set `wasm: {}`) to use the bundled module.
+Calculate the digest from the exact raw file served at `url`, for example with
+`sha256sum envoy-coraza.wasm`, and put its 64 lowercase hexadecimal characters in `sha256`.
+The `url` and `sha256` fields must be set together: `url` must be an HTTPS URL without
+userinfo, query, or fragment. Envoy rejects downloaded bytes whose digest differs. Omit
+both fields (or set `wasm: {}`) to use the bundled module.
 
 The custom URL host must present a certificate that chains to the CA configured with `--xds-ca-path` (the operator serving CA). Public certificate hosts are not supported by this MVP, so use an internal host with a matching certificate or keep the bundled module.
 
@@ -108,11 +112,15 @@ curl -s -o /dev/null -w '%{http_code}\n' "http://${ADDR}/"
 curl -s -o /dev/null -w '%{http_code}\n' "http://${ADDR}/?q=%3Cscript%3Ealert(1)%3C%2Fscript%3E"
 ```
 
-The first request returns `200`; the second returns `403` when the RuleSet contains a matching
-deny rule. If both return `200`, the rules are not enforced: check that the Engine is `Ready`,
-that the Gateway pod loaded the module (`kubectl -n <gateway-namespace> logs <gateway-pod> -c
+The first request returns `200`; the second returns `403` only if the selected RuleSet has a
+deny rule matching that XSS payload. Choose a probe that matches a deny rule in your RuleSet:
+for example, this XSS request may return `200` when the RuleSet contains only the sample
+SQL-injection rule, and that result alone does not mean enforcement failed. If a matching
+probe and the normal request both return `200`, check that the Engine is `Ready`, that the
+Gateway pod loaded the module (`kubectl -n <gateway-namespace> logs <gateway-pod> -c
 istio-proxy | grep -i wasm`), and that the operator logged `ECDS configuration accepted by
-proxy` for the Engine.
+proxy` for the Engine. A `403` by itself is also insufficient: the fail-closed bootstrap
+policy can deny traffic before the WASM rules load.
 
 The operator also creates the EnvoyFilter and NetworkPolicy:
 
