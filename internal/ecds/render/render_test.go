@@ -213,6 +213,8 @@ func TestRenderResourceShape(t *testing.T) {
 	assert.Equal(t, testResourceRef, config.Name)
 	assert.Equal(t, testResourceRef, config.RootId)
 	assert.Equal(t, wasmv3.FailurePolicy_FAIL_CLOSED, config.FailurePolicy)
+	assert.True(t, config.GetAllowOnHeadersStopIteration().GetValue(),
+		"envoy-coraza must be allowed to pause request headers for body inspection")
 
 	vm := config.GetVmConfig()
 	require.NotNil(t, vm)

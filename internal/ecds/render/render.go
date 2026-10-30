@@ -426,6 +426,10 @@ func buildResource(name string, binary BinaryRef, runtime, vmID string, codeTime
 		RootId:        name,
 		FailurePolicy: failurePolicy,
 		Configuration: configuration,
+		// envoy-coraza pauses request headers to inspect the body. Envoy
+		// rejects that StopIteration unless the plugin is allowed to use it,
+		// and a request with a body then hangs until the client times out.
+		AllowOnHeadersStopIteration: wrapperspb.Bool(true),
 		Vm: &wasmv3.PluginConfig_VmConfig{
 			VmConfig: &wasmv3.VmConfig{
 				VmId:    vmID,
