@@ -46,9 +46,9 @@ const validationTrailer = "\nSecAuditLogType Serial\nSecAuditLog /dev/stdout"
 // always in-memory. Coraza falls back to io.OSFS when no root is set, so tenant
 // rule text could otherwise read operator files (an Include of the ServiceAccount
 // token leaks it through the compilation error into tenant-readable status).
-// Runtime include aliases and embedded CRS data files are stubbed, in the rule
-// text and in every RuleData file it Includes, so Coraza does not reject what
-// the plugin resolves from its embedded filesystem.
+// Embedded CRS Include and @pmFromFile targets are stubbed, in the rule text
+// and in every RuleData file it Includes, so Coraza can compile references the
+// plugin resolves from its embedded filesystem.
 func BuildWAFConfig(rules string, dataFiles map[string][]byte) coraza.WAFConfig {
 	mfs := memfs.NewMemFS()
 	for name, data := range dataFiles {
@@ -71,11 +71,11 @@ func CloseWAF(waf coraza.WAF) {
 	}
 }
 
-// validationStubTargets returns the runtime include aliases and embedded
-// @pmFromFile data files the plugin resolves from its own filesystem. Coraza
-// parses an included RuleData file as rule text, so the aliases and @pmf
-// targets it contains must be stubbed too: follow the include chain exactly as
-// Coraza does, relative to the including file's directory.
+// validationStubTargets returns the embedded CRS Include and @pmFromFile data
+// files the plugin resolves from its own filesystem. Coraza parses an included
+// RuleData file as rule text, so its CRS Include and @pmf targets must be
+// stubbed too: follow the include chain exactly as Coraza does, relative to the
+// including file's directory.
 func validationStubTargets(rules string, dataFiles map[string][]byte) []string {
 	var targets []string
 	queue := []struct{ name, text string }{{text: rules}}
@@ -83,7 +83,7 @@ func validationStubTargets(rules string, dataFiles map[string][]byte) []string {
 	for len(queue) > 0 {
 		current := queue[0]
 		queue = queue[1:]
-		targets = append(targets, runtimeIncludeTargets(current.text)...)
+		targets = append(targets, crsIncludeTargets(current.text)...)
 		targets = append(targets, embeddedDataTargets(current.text)...)
 		for _, name := range ruleDataIncludeNames(current.text) {
 			name = path.Join(path.Dir(current.name), name)
@@ -118,8 +118,9 @@ func includeTarget(arg string) string {
 }
 
 // ruleDataIncludeNames returns the RuleData file names a rule text Includes.
-// Aliases, globs and filesystem paths are omitted: aliases and globs are
-// stubbed as targets, and filesystem paths are rejected before compilation.
+// Aliases, globs, embedded CRS paths and filesystem paths are omitted: aliases
+// and unsupported globs are rejected, CRS paths are handled as embedded files,
+// and filesystem paths are rejected before compilation.
 func ruleDataIncludeNames(rules string) []string {
 	var names []string
 	for line := range strings.SplitSeq(joinActiveRuleLines(rules), "\n") {
@@ -132,7 +133,7 @@ func ruleDataIncludeNames(rules string) []string {
 			continue
 		}
 		target = strings.TrimSpace(target)
-		if isOSPath(target) || strings.HasPrefix(target, "@") {
+		if isOSPath(target) || strings.HasPrefix(target, "@") || strings.HasPrefix(target, "crs/") {
 			continue
 		}
 		names = append(names, path.Clean(target))
@@ -140,9 +141,9 @@ func ruleDataIncludeNames(rules string) []string {
 	return names
 }
 
-// runtimeIncludeTargets returns the non-glob Include targets resolved by the
+// crsIncludeTargets returns the embedded CRS Include targets resolved by the
 // plugin at runtime, so validation can stub them.
-func runtimeIncludeTargets(rules string) []string {
+func crsIncludeTargets(rules string) []string {
 	var targets []string
 	for line := range strings.SplitSeq(joinActiveRuleLines(rules), "\n") {
 		match := includePattern.FindStringSubmatch(line)
@@ -208,34 +209,9 @@ func ExtractMissingFileBasename(err error) (string, bool) {
 	return filepath.Base(name), true
 }
 
-// isRuntimeResolvedPath reports whether the plugin's embedded filesystem
-// resolves the path at runtime. Only these aliases are resolvable there: any
-// other @-prefixed target passes validation but makes the plugin NACK every
-// push, which the operator cannot report because the Engine looks Ready.
-// The four file aliases name a single embedded file. @owasp_crs/<path> maps to
-// the embedded CRS tree, so the path must name a rule file inside it: the bare
-// @owasp_crs and a path with an empty, "." or ".." segment name the directory
-// itself, which cannot be included, and a literal must end in .conf, the
-// extension of every embedded rule file. The other files in that tree are not
-// rule text: Coraza fails to parse the .data files ("unknown directive", so the
-// plugin NACKs) and the .conf.example templates hold no active rules (a
-// zero-rule WAF). Neither produces a working WAF while the Engine looks Ready,
-// so both are rejected. A glob only works where the embedded tree holds the files
-// and every match is valid rule text. The plugin expands it with the CRS
-// directory's ReadDir, and Coraza only logs an empty glob result, so a pattern
-// that matches nothing silently yields a zero-rule WAF. The exact unpadded
-// @owasp_crs/*.conf is the only glob the embedded tree guarantees to match
-// (every embedded CRS rule file ends in .conf): any other pattern is rejected
-// because the operator cannot enumerate what it matches, not because it fails:
-// @owasp_crs/REQUEST-*.conf compiles rules, @owasp_crs/*.data NACKs, and
-// @owasp_crs/NOSUCH-*.conf or a nested @owasp_crs/crs/*.conf compiles a
-// zero-rule WAF. A wrong literal file name there is a documented delivery risk:
-// the operator cannot verify the embedded file list.
+// isRuntimeResolvedPath reports whether the CRS-enabled plugin resolves the
+// Include target from its embedded filesystem.
 func isRuntimeResolvedPath(target string) bool {
-	switch target {
-	case "@recommended-conf", "@demo-conf", "@ftw-conf", "@crs-setup-conf":
-		return true
-	}
 	if rel, ok := strings.CutPrefix(target, "crs/"); ok {
 		// coraza-rs embeds the pinned CRS under crs/: the setup file and the
 		// rule files in crs/rules/. Only .conf files are rule text.
@@ -247,27 +223,7 @@ func isRuntimeResolvedPath(target string) bool {
 		}
 		return strings.HasPrefix(rel, "rules/") && strings.HasSuffix(rel, ".conf") && !isGlob(rel)
 	}
-	rel, ok := strings.CutPrefix(target, "@owasp_crs/")
-	if !ok {
-		return false
-	}
-	elems := strings.Split(rel, "/")
-	for _, elem := range elems {
-		if elem == "" || elem == "." || elem == ".." {
-			return false
-		}
-	}
-	// Only the exact all-conf glob is guaranteed to match embedded rule files,
-	// and it must be the only segment: a nested glob names a directory the
-	// plugin does not have, so ReadDir fails, Coraza logs an empty glob result
-	// and the WAF compiles with zero rules.
-	if isGlob(rel) {
-		return rel == "*.conf"
-	}
-	// A literal names a rule file, so it must end in .conf. The other embedded
-	// files (.conf.example, .data, .txt, ...) compile zero rules or fail to
-	// parse as SecLang, and the Engine would still report Ready.
-	return strings.HasSuffix(rel, ".conf")
+	return false
 }
 
 // isGlob reports whether elem contains a glob metacharacter. Coraza expands
@@ -279,7 +235,7 @@ func isGlob(elem string) bool {
 // isOSPath reports whether path addresses the operator's filesystem instead of
 // a RuleData file name (absolute, parent-relative anywhere in the path, Windows
 // volume or UNC). Such paths are always rejected: only RuleData names and
-// runtime aliases may be referenced.
+// embedded CRS paths may be referenced.
 func isOSPath(target string) bool {
 	if target == "" {
 		return false
@@ -309,10 +265,10 @@ func SanitizeErrorMessage(err error) error {
 }
 
 // ShouldSkipMissingFileError reports whether a missing-file validation error
-// should be skipped. A runtime alias (@owasp_crs/..., @crs-setup-conf, ...) is
-// always skipped: the plugin's merged filesystem resolves it. Otherwise, when
-// dataFiles is nil (RuleSource reconciler path, no RuleSet-scoped RuleData
-// merged), any missing-file error is skipped so aggregate RuleSet validation
+// should be skipped. An embedded CRS Include is skipped because the plugin's
+// filesystem resolves it. Otherwise, when dataFiles is nil (RuleSource
+// reconciler path, no RuleSet-scoped RuleData merged), any missing-file error
+// is skipped so aggregate RuleSet validation
 // remains authoritative for Include targets and @pmFromFile. When dataFiles is
 // non-nil, the error is skipped only if basename exists in the map (use an
 // empty non-nil map to require resolution without providing files).
@@ -361,14 +317,13 @@ var uploadKeepFilesPattern = regexp.MustCompile(`(?i)^secuploadkeepfiles(?:[ \t]
 // filesystem applies. Coraza parses the target as SecLang: the .data files and
 // the .conf.example templates compile zero rules or fail with "unknown
 // directive", so the plugin either NACKs the push or enforces nothing while the
-// Engine reports Ready (see isRuntimeResolvedPath). Globs are handled by their
-// own case; the bare crs directory is matched too, since it is not a file.
+// Engine reports Ready (see isRuntimeResolvedPath). Unsupported globs are
+// rejected by ValidateCorazaRSIncludes; the bare crs directory is matched too,
+// since it is not a file.
 func nonRuleCrsTarget(target string) bool {
 	target = path.Clean(target)
 	var rel string
 	switch {
-	case strings.HasPrefix(target, "@owasp_crs/"):
-		rel = strings.TrimPrefix(target, "@owasp_crs/")
 	case target == "crs":
 		// The embedded directory itself, never a file.
 		return true
@@ -382,22 +337,11 @@ func nonRuleCrsTarget(target string) bool {
 
 // allowedIncludeTargets lists the reference forms a tenant may use. It is
 // static so neither a rejected path nor rule content can leak into status.
-const allowedIncludeTargets = "@recommended-conf, @demo-conf, @ftw-conf, @crs-setup-conf, @owasp_crs/*.conf, @owasp_crs/<file>.conf or a RuleData file name"
+const allowedIncludeTargets = "crs/crs-setup.conf, crs/rules/*.conf, crs/rules/<file>.conf or a RuleData file name"
 
-// ValidateIncludes rejects Include targets that address the operator
-// filesystem, unresolvable aliases, and directives that write host files. The
-// validation WAF has an in-memory root, so such a path cannot resolve anyway;
-// rejecting it here keeps the error honest and independent of the missing-file
-// skip that defers RuleData names to aggregate validation. Runtime aliases
-// (@owasp_crs/..., @crs-setup-conf, ...) are accepted because the plugin
-// resolves them from its embedded filesystem; a literal CRS-tree path must name
-// a .conf rule file (see isRuntimeResolvedPath and nonRuleCrsTarget). Coraza
-// trims a non-glob Include target, so a padded target is accepted and resolved
-// to the name Coraza opens. It expands a glob from the untrimmed argument, so a
-// glob is accepted only as the exact unpadded @owasp_crs/*.conf: a padded
-// pattern matches nothing and compiles a zero-rule WAF without an error. A
-// target that still carries a quote after the double quotes Coraza strips is
-// rejected, because Coraza reads the quote as part of the file name.
+// ValidateIncludes applies the renderer's Include contract and rejects paths
+// that address the operator filesystem or directives that write host files.
+// It also scans included RuleData files, since Coraza parses them as rule text.
 //
 // dataFiles are the RuleData files merged for the RuleSet. An Include of a
 // RuleData name is parsed as rule text, so the content of every included file
@@ -405,6 +349,10 @@ const allowedIncludeTargets = "@recommended-conf, @demo-conf, @ftw-conf, @crs-se
 // scanned: a blocklist that happens to contain the text of a forbidden
 // directive is valid. Pass nil on the RuleSource path, which has no merged data.
 func ValidateIncludes(rules string, dataFiles map[string][]byte) error {
+	if err := ValidateCorazaRSIncludes(rules, dataFiles); err != nil {
+		return err
+	}
+
 	queue := []struct{ name, text string }{{text: rules}}
 	scanned := make(map[string]struct{}, len(dataFiles))
 	for len(queue) > 0 {
@@ -438,9 +386,8 @@ func ValidateIncludes(rules string, dataFiles map[string][]byte) error {
 // validateRuleText rejects the directives and Include targets a tenant rule
 // text (or an included data file) may not use. It returns the RuleData file
 // names the text Includes, so the caller can scan their content too.
-// shortcut: a glob Include is not expanded for scanning; only the exact
-// @owasp_crs/*.conf is accepted, and those files resolve inside the plugin's
-// embedded tree, which the operator cannot enumerate.
+// shortcut: the CRS glob is not expanded for scanning; only crs/rules/*.conf is
+// accepted, and those files resolve inside the plugin's embedded tree.
 func validateRuleText(rules string) ([]string, error) {
 	// Coraza skips blank and comment lines before checking for a line
 	// continuation, so a trailing "\" would swallow the first directive of
@@ -490,20 +437,9 @@ func validateRuleText(rules string) ([]string, error) {
 		case isOSPath(target):
 			return nil, errors.New(`include with an absolute or parent-relative path is not allowed: use ` + allowedIncludeTargets)
 		case nonRuleCrsTarget(target):
-			return nil, errors.New(`include of a non-rule file from the embedded CRS tree is not allowed: use @owasp_crs/*.conf or @owasp_crs/<file>.conf`)
-		case strings.HasPrefix(target, "@"):
-			if !isRuntimeResolvedPath(target) {
-				return nil, errors.New(`include alias is not resolved by the plugin: use ` + allowedIncludeTargets)
-			}
+			return nil, errors.New(`include of a non-rule file from the embedded CRS tree is not allowed: use ` + allowedIncludeTargets)
 		case isRuntimeResolvedPath(target):
 			// Embedded coraza-rs CRS tree; not a RuleData name.
-		case isGlob(target):
-			// The validation WAF's root cannot expand a glob, and the plugin
-			// also expands crs/ patterns, so only the exact @owasp_crs/*.conf
-			// form is safe (see isRuntimeResolvedPath). Any other glob is
-			// rejected: the operator cannot tell whether it matches rule files,
-			// nothing at all (a zero-rule WAF) or a .data file (a NACK).
-			return nil, errors.New(`include with a glob is only allowed as @owasp_crs/*.conf: use ` + allowedIncludeTargets)
 		default:
 			included = append(included, path.Clean(target))
 		}
@@ -519,7 +455,7 @@ func validateRuleText(rules string) ([]string, error) {
 // for cross-source and full RuleData-backed rules.
 func ValidateRuleSourceRules(rules, ruleSourceName string, dataFiles map[string][]byte) error {
 	// The guard is cheap and applies to patch-only fragments too: they are
-	// skipped by Coraza, not by the directive and alias rules.
+	// skipped by Coraza, not by the directive and Include rules.
 	if err := ValidateIncludes(rules, dataFiles); err != nil {
 		return fmt.Errorf("RuleSource %s doesn't contain valid rules: %w", ruleSourceName, err)
 	}

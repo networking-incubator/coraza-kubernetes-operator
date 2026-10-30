@@ -249,16 +249,16 @@ func TestShouldSkipMissingFileError(t *testing.T) {
 			want:       false,
 		},
 		{
-			name:       "runtime alias is skipped with nil dataFiles",
-			err:        &fs.PathError{Op: "open", Path: "@recommended-conf", Err: fs.ErrNotExist},
-			secretData: nil,
+			name:       "embedded CRS include is skipped with an empty data file map",
+			err:        &fs.PathError{Op: "open", Path: "crs/crs-setup.conf", Err: fs.ErrNotExist},
+			secretData: map[string][]byte{},
 			want:       true,
 		},
 		{
-			name:       "runtime alias is skipped with an empty data file map",
-			err:        &fs.PathError{Op: "open", Path: "@owasp_crs/REQUEST-901-INITIALIZATION.conf", Err: fs.ErrNotExist},
+			name:       "legacy alias is not runtime skipped with an empty data file map",
+			err:        &fs.PathError{Op: "open", Path: "@recommended-conf", Err: fs.ErrNotExist},
 			secretData: map[string][]byte{},
-			want:       true,
+			want:       false,
 		},
 		{
 			name:       "Coraza %s-wrapped missing include is deferred with nil dataFiles",
@@ -356,14 +356,13 @@ func TestValidateRuleSourceRulesDefersIncludedRuleData(t *testing.T) {
 	assert.NotContains(t, err.Error(), "/", "the redacted message must not leak a filesystem path")
 }
 
-// TestBuildWAFConfigStubsAliasesInIncludedRuleData covers an Include of a
-// RuleData file that itself includes a runtime alias or reads embedded CRS data:
-// Coraza parses the included file as rule text, so the stubs must be collected
-// from it too, not only from the top-level text.
-func TestBuildWAFConfigStubsAliasesInIncludedRuleData(t *testing.T) {
+// TestBuildWAFConfigStubsCRSInIncludedRuleData covers an Include of a RuleData
+// file that itself includes embedded CRS data: Coraza parses the included file
+// as rule text, so the stubs must be collected from it too.
+func TestBuildWAFConfigStubsCRSInIncludedRuleData(t *testing.T) {
 	dataFiles := map[string][]byte{
-		"extra.conf": []byte("Include @crs-setup-conf\n" +
-			`SecRule ARGS "@pmf crs/restricted-files.data" "id:1,phase:1,pass"` + "\n"),
+		"extra.conf": []byte("Include crs/crs-setup.conf\n" +
+			`SecRule ARGS "@pmFromFile crs/restricted-files.data" "id:1,phase:1,pass"` + "\n"),
 	}
 	rules := "SecRuleEngine On\nInclude extra.conf"
 
@@ -454,12 +453,9 @@ func TestValidateIncludes(t *testing.T) {
 	}
 
 	for _, rules := range []string{
-		"Include @recommended-conf",
-		"Include @demo-conf",
-		"Include @ftw-conf",
-		"Include @crs-setup-conf",
-		"Include @owasp_crs/*.conf",
-		"Include @owasp_crs/REQUEST-901-INITIALIZATION.conf",
+		"Include crs/crs-setup.conf",
+		"Include crs/rules/*.conf",
+		"Include crs/rules/REQUEST-901-INITIALIZATION.conf",
 		"Include some.data",
 		"Include ./some.data",
 		"SecRuleEngine On\nSecRule ARGS \"@rx x\" \"id:1,phase:1,pass\"",
@@ -482,11 +478,10 @@ func TestValidateIncludes(t *testing.T) {
 func TestValidateIncludesQuotesMirrorCoraza(t *testing.T) {
 	const marker = "tenant-quote-marker-3e81"
 	for _, rules := range []string{
-		"Include '@owasp_crs/*.conf'",
-		"Include @owasp_crs/*.conf'",
-		"SecRuleEngine On\nInclude \"@owasp_crs/*.conf",
-		"Include ''@owasp_crs/*.conf''",
 		"Include 'blocklist.conf'",
+		"Include blocklist.conf'",
+		"SecRuleEngine On\nInclude \"blocklist.conf",
+		"Include ''blocklist.conf''",
 		"Include \"" + marker + ".conf\"'",
 		"Include \"\"",
 	} {
@@ -499,9 +494,8 @@ func TestValidateIncludesQuotesMirrorCoraza(t *testing.T) {
 	}
 
 	for _, rules := range []string{
-		"Include \"@owasp_crs/*.conf\"",
-		"Include @owasp_crs/*.conf",
-		"Include \"@crs-setup-conf\"",
+		"Include \"crs/crs-setup.conf\"",
+		"Include crs/rules/*.conf",
 		"Include \"blocklist.conf\"",
 		"Include blocklist.conf",
 	} {
@@ -520,16 +514,16 @@ func TestValidateIncludesQuotesMirrorCoraza(t *testing.T) {
 // trimmed and resolves normally.
 func TestValidateIncludesRejectsPaddedGlobs(t *testing.T) {
 	for _, rules := range []string{
-		"Include  @owasp_crs/*.conf",
-		"Include \"@owasp_crs/*.conf \"",
-		"Include \u00a0@owasp_crs/*.conf",
-		"Include \t@owasp_crs/*.conf",
+		"Include  crs/rules/*.conf",
+		"Include \"crs/rules/*.conf \"",
+		"Include \u00a0crs/rules/*.conf",
+		"Include \tcrs/rules/*.conf",
 	} {
 		t.Run(rules, func(t *testing.T) {
 			err := ValidateIncludes(rules, map[string][]byte{})
 			require.Error(t, err, "Coraza expands the padded glob and matches nothing")
 			assert.Contains(t, err.Error(), "glob")
-			assert.Contains(t, err.Error(), "@owasp_crs/*.conf", "the error must name the allowed form")
+			assert.Contains(t, err.Error(), "crs/rules/*.conf", "the error must name the allowed form")
 
 			err = ValidateRuleSourceRules(rules, "padded-glob-rs", map[string][]byte{})
 			require.Error(t, err)
@@ -539,8 +533,8 @@ func TestValidateIncludesRejectsPaddedGlobs(t *testing.T) {
 
 	dataFiles := map[string][]byte{"blocklist.data": []byte("SecRuleEngine On\n")}
 	for _, rules := range []string{
-		"Include @owasp_crs/*.conf",
-		"Include \"@owasp_crs/*.conf\"",
+		"Include crs/rules/*.conf",
+		"Include \"crs/rules/*.conf\"",
 		"Include  blocklist.data",
 		"Include \"blocklist.data \"",
 	} {
@@ -552,7 +546,7 @@ func TestValidateIncludesRejectsPaddedGlobs(t *testing.T) {
 
 	// Un-guarded, the padded glob is exactly what the Engine reported Ready on:
 	// Coraza logs the empty result and compiles a zero-rule WAF without an error.
-	waf, err := coraza.NewWAF(BuildWAFConfig("Include  @owasp_crs/*.conf", nil))
+	waf, err := coraza.NewWAF(BuildWAFConfig("Include  crs/rules/*.conf", nil))
 	require.NoError(t, err)
 	CloseWAF(waf)
 }
@@ -592,25 +586,20 @@ func TestValidateIncludesTrimsTargetLikeCoraza(t *testing.T) {
 	}), "a clean RuleData file is still accepted")
 }
 
-// TestValidateIncludesRejectsUnresolvableGlobs covers globs the plugin cannot
-// guarantee to match. Only the exact @owasp_crs/*.conf is accepted: the operator
-// cannot enumerate the embedded tree, so a narrower pattern may match rule files
-// (@owasp_crs/REQUEST-*.conf) or nothing at all (@owasp_crs/NOSUCH-*.conf, a
-// zero-rule WAF), a broader one also matches the .data files and NACKs, and a
-// nested glob names a directory the plugin does not have. A root-level glob
-// matches nothing in either filesystem.
+// TestValidateIncludesRejectsUnresolvableGlobs covers globs the plugin does not
+// support. Only crs/rules/*.conf is accepted; all other patterns are rejected
+// rather than risking an empty or malformed rule set.
 func TestValidateIncludesRejectsUnresolvableGlobs(t *testing.T) {
 	for _, target := range []string{
-		"@owasp_crs/*",
-		"@owasp_crs/*.data",
-		"@owasp_crs/REQUEST-*.data",
-		"@owasp_crs/REQUEST-*.conf",
-		"@owasp_crs/NOSUCH-*.conf",
-		"@owasp_crs/*[.conf",
-		"@owasp_crs/crs/*.conf",
-		"@owasp_crs/sub/*.conf",
-		"@owasp_crs/*/*.conf",
-		"@owasp_crs/*/REQUEST-901-INITIALIZATION.conf",
+		"crs/rules/*",
+		"crs/rules/*.data",
+		"crs/rules/REQUEST-*.conf",
+		"crs/rules/NOSUCH-*.conf",
+		"crs/rules/*[.conf",
+		"crs/rules/sub/*.conf",
+		"crs/rules/*/*.conf",
+		"crs/*.conf",
+		"@owasp_crs/*.conf",
 		"@recommended-conf*",
 		"*.conf",
 		"*.data",
@@ -619,8 +608,8 @@ func TestValidateIncludesRejectsUnresolvableGlobs(t *testing.T) {
 	} {
 		t.Run(target, func(t *testing.T) {
 			err := ValidateIncludes("Include "+target, nil)
-			require.Error(t, err, "the plugin cannot guarantee this glob matches")
-			assert.Contains(t, err.Error(), "@owasp_crs/<file>", "the error must name the allowed aliases")
+			require.Error(t, err, "the plugin does not support this glob")
+			assert.Contains(t, err.Error(), "crs/rules/*.conf", "the error must name the supported CRS form")
 		})
 	}
 }
@@ -633,15 +622,10 @@ func TestValidateIncludesRejectsUnresolvableGlobs(t *testing.T) {
 // push or enforced nothing.
 func TestValidateIncludesRejectsNonRuleCrsFiles(t *testing.T) {
 	for _, target := range []string{
-		"@owasp_crs/REQUEST-900-EXCLUSION-RULES-BEFORE-CRS.conf.example",
-		"@owasp_crs/RESPONSE-999-EXCLUSION-RULES-AFTER-CRS.conf.example",
-		"@owasp_crs/restricted-files.data",
-		"@owasp_crs/REQUEST-901-INITIALIZATION.txt",
 		"crs/scanners-user-agents.data",
 		"crs/REQUEST-900-EXCLUSION-RULES-BEFORE-CRS.conf.example",
 		// The plugin cleans the path, so a leading ./ reaches the same file.
 		"./crs/scanners-user-agents.data",
-		"./@owasp_crs/restricted-files.data",
 		// The crs directory itself is not a file either.
 		"crs",
 		"crs/",
@@ -650,27 +634,27 @@ func TestValidateIncludesRejectsNonRuleCrsFiles(t *testing.T) {
 			for _, dataFiles := range []map[string][]byte{nil, {}} {
 				err := ValidateIncludes("Include "+target, dataFiles)
 				require.Error(t, err, "only .conf rule files may be included")
-				assert.Contains(t, err.Error(), "@owasp_crs/*.conf")
-				assert.Contains(t, err.Error(), "@owasp_crs/<file>.conf")
+				assert.Contains(t, err.Error(), "crs/rules/*.conf")
+				assert.Contains(t, err.Error(), "crs/rules/<file>.conf")
 				assert.NotContains(t, err.Error(), "conf.example", "the error must not echo the tenant's path")
 			}
 		})
 	}
 
-	// A real embedded rule file, the glob and a bare RuleData name stay accepted.
-	assert.NoError(t, ValidateIncludes("Include @owasp_crs/REQUEST-901-INITIALIZATION.conf", nil))
-	assert.NoError(t, ValidateIncludes("Include @owasp_crs/*.conf", nil))
-	assert.NoError(t, ValidateIncludes("Include crs/REQUEST-901-INITIALIZATION.conf", nil))
+	// The setup file, rule glob, literal rule file and a bare RuleData name stay accepted.
+	assert.NoError(t, ValidateIncludes("Include crs/crs-setup.conf", nil))
+	assert.NoError(t, ValidateIncludes("Include crs/rules/*.conf", nil))
+	assert.NoError(t, ValidateIncludes("Include crs/rules/REQUEST-901-INITIALIZATION.conf", nil))
 	assert.NoError(t, ValidateIncludes("Include blocklist.data", nil), "a bare RuleData name is deferred")
 }
 
 // TestValidateRuleSourceRulesRejectsNonRuleCrsFile covers the RuleSource entry
 // point, which must reject the same literal before the Engine looks Ready.
 func TestValidateRuleSourceRulesRejectsNonRuleCrsFile(t *testing.T) {
-	err := ValidateRuleSourceRules("Include @owasp_crs/restricted-files.data", "crs-rs", nil)
+	err := ValidateRuleSourceRules("Include crs/restricted-files.data", "crs-rs", nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "crs-rs")
-	assert.Contains(t, err.Error(), "@owasp_crs/<file>.conf")
+	assert.Contains(t, err.Error(), "crs/rules/<file>.conf")
 }
 
 // TestValidateIncludesNestedIncludeResolvesRelativeToIncludingFile covers a
@@ -705,43 +689,27 @@ func TestValidateIncludesNestedIncludeResolvesRelativeToIncludingFile(t *testing
 	require.NoError(t, ValidateIncludes("Include outer.data", sameDir))
 }
 
-// TestValidateIncludesRejectsUnknownAliases covers the alias allowlist: an
-// alias the plugin does not resolve makes the plugin NACK every push while the
-// Engine looks Ready, so it must fail validation instead.
+// TestValidateIncludesRejectsUnknownAliases covers legacy Go-plugin aliases:
+// envoy-coraza does not resolve any @-prefixed Include target.
 func TestValidateIncludesRejectsUnknownAliases(t *testing.T) {
 	for _, target := range []string{
 		"@notanalias",
 		"@",
 		"@crs-setup",
 		"@OWASP_CRS/REQUEST-901-INITIALIZATION.conf",
-		"@owasp_crsx/open.conf",
+		"@owasp_crs/*.conf",
 		"@owasp_crs/../setup.conf",
-		"@owasp_crs/./open.conf",
-		"@owasp_crs//open.conf",
-		"@owasp_crs/open/./nested.conf",
 		"@recommended-conf-extra",
+		"@recommended-conf",
 	} {
 		t.Run(target, func(t *testing.T) {
 			err := ValidateIncludes("Include "+target, nil)
 			require.Error(t, err)
-			assert.Contains(t, err.Error(), "@owasp_crs/<file>", "the error must name the allowed aliases")
-			assert.NotContains(t, err.Error(), "notanalias")
+			assert.Contains(t, err.Error(), "crs/crs-setup.conf")
+			assert.Contains(t, err.Error(), "RuleData file name")
+			assert.NotContains(t, err.Error(), target, "the error must stay static")
 		})
 	}
-
-	// The bare alias names the embedded directory, not a file: the plugin has no
-	// file mapping for it, so it would NACK every push.
-	for _, target := range []string{"@owasp_crs", "@owasp_crs/"} {
-		t.Run(target, func(t *testing.T) {
-			err := ValidateIncludes("Include "+target, nil)
-			require.Error(t, err, "the bare CRS directory cannot be included")
-			assert.Contains(t, err.Error(), "@owasp_crs/<file>")
-		})
-	}
-
-	// Documented trade: the operator cannot verify the embedded file list, so a
-	// wrong file under @owasp_crs/ passes validation and NACKs in the plugin.
-	assert.NoError(t, ValidateIncludes("Include @owasp_crs/typo.conf", nil))
 }
 
 // TestValidateIncludesRejectsHostWritingDirectives covers the directives that
@@ -803,41 +771,32 @@ func TestValidateIncludesRejectsAuditLogFileTargets(t *testing.T) {
 	assert.NoError(t, ValidateIncludes("SecAuditLogType Serial", nil))
 }
 
-func TestValidateRuleSourceRulesAcceptsRuntimeAliases(t *testing.T) {
+func TestValidateRuleSourceRulesAcceptsEmbeddedCRS(t *testing.T) {
 	for _, include := range []string{
-		"Include @recommended-conf",
-		"Include @demo-conf",
-		"Include @ftw-conf",
-		"Include @crs-setup-conf",
-		"SecRuleEngine On\nInclude @crs-setup-conf\nInclude @owasp_crs/*.conf",
-		"Include @owasp_crs/REQUEST-901-INITIALIZATION.conf",
+		"Include crs/crs-setup.conf",
+		"Include crs/rules/*.conf",
+		"Include crs/rules/REQUEST-901-INITIALIZATION.conf",
+		"SecRuleEngine On\nInclude crs/crs-setup.conf\nInclude crs/rules/*.conf",
+		`SecRule ARGS "@pmFromFile crs/restricted-files.data" "id:1,phase:1,pass"`,
 	} {
 		t.Run(include, func(t *testing.T) {
-			assert.NoError(t, ValidateRuleSourceRules(include, "alias-rs", nil), "the plugin resolves this include at runtime")
-			assert.NoError(t, ValidateRuleSourceRules(include, "alias-rs", map[string][]byte{}))
-		})
-	}
-
-	// The bare directory alias cannot be resolved to a file by the plugin.
-	for _, include := range []string{"Include @owasp_crs", "Include @owasp_crs/"} {
-		t.Run(include, func(t *testing.T) {
-			err := ValidateRuleSourceRules(include, "alias-rs", nil)
-			require.Error(t, err)
-			assert.Contains(t, err.Error(), "alias-rs")
-			assert.Contains(t, err.Error(), "@owasp_crs/<file>")
+			assert.NoError(t, ValidateRuleSourceRules(include, "crs-rs", nil), "the plugin resolves this CRS reference at runtime")
+			assert.NoError(t, ValidateRuleSourceRules(include, "crs-rs", map[string][]byte{}))
 		})
 	}
 }
 
 // TestValidateRuleSourceRulesRejectsUnknownAlias covers the RuleSource entry
-// point: an alias the plugin cannot resolve must fail before the Engine looks
-// Ready and the plugin NACKs.
+// point: legacy Go-plugin Include aliases must fail before the Engine looks Ready.
 func TestValidateRuleSourceRulesRejectsUnknownAlias(t *testing.T) {
-	err := ValidateRuleSourceRules("Include @notanalias", "alias-rs", nil)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "alias-rs")
-	assert.Contains(t, err.Error(), "@owasp_crs/<file>")
-	assert.NotContains(t, err.Error(), "notanalias")
+	for _, include := range []string{"Include @owasp_crs/*.conf", "Include @recommended-conf"} {
+		err := ValidateRuleSourceRules(include, "alias-rs", nil)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "alias-rs")
+		assert.Contains(t, err.Error(), "crs/crs-setup.conf")
+		assert.Contains(t, err.Error(), "RuleData file name")
+		assert.NotContains(t, err.Error(), "@owasp_crs")
+	}
 }
 
 // TestValidateRuleSourceRulesScansPatchOnlyFragments covers patch-only
@@ -851,7 +810,7 @@ func TestValidateRuleSourceRulesScansPatchOnlyFragments(t *testing.T) {
 	err := ValidateRuleSourceRules(rules, "patch-rs", nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "patch-rs")
-	assert.Contains(t, err.Error(), "@owasp_crs/<file>")
+	assert.Contains(t, err.Error(), "crs/crs-setup.conf")
 }
 
 // TestValidateRuleSourceRulesRejectsDebugLog covers the RuleSource entry point:

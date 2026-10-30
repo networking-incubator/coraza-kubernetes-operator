@@ -25,6 +25,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -172,4 +173,77 @@ func TestMissingIncludedRuleDataIsDegraded(t *testing.T) {
 	assert.Equal(t, ruleSetDegradedReasonInvalidRuleSet, degraded.Reason)
 	assert.Contains(t, degraded.Message, "open nope.conf: data does not exist")
 	assert.NotContains(t, degraded.Message, "/", "the status message must not leak a filesystem path")
+}
+
+func TestRuleSetValidationRejectsLegacyAliasesAndAcceptsCRS(t *testing.T) {
+	tests := []struct {
+		name      string
+		rules     string
+		wantValid bool
+	}{
+		{name: "legacy alias", rules: "Include @owasp_crs/*.conf"},
+		{
+			name: "embedded CRS",
+			rules: `SecRuleEngine On
+Include crs/crs-setup.conf
+Include crs/rules/*.conf
+SecRule ARGS "@pmFromFile crs/restricted-files.data" "id:1,phase:1,pass"`,
+			wantValid: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			source := utils.NewTestRuleSource("include-contract-source", testNamespace, tc.rules)
+			source.UID = "include-contract-source-uid"
+			apimeta.SetStatusCondition(&source.Status.Conditions, metav1.Condition{
+				Type:               conditionReady,
+				Status:             metav1.ConditionTrue,
+				ObservedGeneration: source.Generation,
+				Reason:             ruleSourceReadyReasonValidated,
+				LastTransitionTime: metav1.Now(),
+			})
+			ruleset := utils.NewTestRuleSet(utils.RuleSetOptions{
+				Name:      "include-contract-ruleset",
+				Namespace: testNamespace,
+				Sources:   []wafv1alpha1.SourceReference{{Name: source.Name}},
+			})
+			ruleset.UID = "include-contract-ruleset-uid"
+
+			c := fake.NewClientBuilder().
+				WithScheme(scheme).
+				WithStatusSubresource(&wafv1alpha1.RuleSet{}, &wafv1alpha1.RuleData{}, &wafv1alpha1.Engine{}, &wafv1alpha1.RuleSource{}).
+				WithObjects(ruleset, source).
+				Build()
+			metrics, err := NewCorazaMetrics(prometheus.NewRegistry())
+			require.NoError(t, err)
+			reconciler := &RuleSetReconciler{
+				Client:   c,
+				Scheme:   scheme,
+				Recorder: utils.NewTestRecorder(),
+				Metrics:  metrics,
+			}
+			req := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(ruleset)}
+			_, err = reconciler.Reconcile(ctx, req)
+			require.NoError(t, err)
+
+			var updated wafv1alpha1.RuleSet
+			require.NoError(t, c.Get(ctx, req.NamespacedName, &updated))
+			if tc.wantValid {
+				require.NotNil(t, updated.Status.AcceptedContent)
+				assert.Equal(t, ruleSetReadyReasonRulesAccepted, apimeta.FindStatusCondition(updated.Status.Conditions, conditionReady).Reason)
+				assert.Nil(t, apimeta.FindStatusCondition(updated.Status.Conditions, conditionDegraded))
+				return
+			}
+
+			assert.Nil(t, updated.Status.AcceptedContent)
+			degraded := apimeta.FindStatusCondition(updated.Status.Conditions, conditionDegraded)
+			require.NotNil(t, degraded)
+			assert.Equal(t, ruleSetDegradedReasonInvalidRuleSet, degraded.Reason)
+			assert.Contains(t, degraded.Message, "crs/rules/*.conf")
+			assert.Contains(t, degraded.Message, "RuleData file name")
+			assert.NotContains(t, degraded.Message, "@owasp_crs")
+		})
+	}
 }

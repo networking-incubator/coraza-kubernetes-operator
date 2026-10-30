@@ -183,7 +183,7 @@ func TestRuleSourceReconciler_PatchOnlyFragmentWithBadInclude(t *testing.T) {
 	require.NotNil(t, deg)
 	assert.Equal(t, metav1.ConditionTrue, deg.Status)
 	assert.Equal(t, ruleSourceDegradedReasonInvalidRules, deg.Reason)
-	assert.Contains(t, deg.Message, "@owasp_crs/<file>")
+	assert.Contains(t, deg.Message, "crs/crs-setup.conf")
 	assert.Equal(t, float64(1), gatherValidationCounter(t, reg, "invalid"))
 	assert.Equal(t, float64(0), gatherValidationCounter(t, reg, "skipped"))
 }
