@@ -329,6 +329,24 @@ change the Go version required to build the operator.
   `curl`, `tar`, and `sha256sum` (or `shasum`). The release build uses
   `WASM_CRS=0` and has no embedded CRS; `crs/...` includes then fail.
 
+None of the above is needed for `make demo`: it downloads the published
+`coraza-rs` artifact (see below).
+
+## Prebuilt Artifacts
+
+`coraza-rs` publishes the `envoy-coraza` WASM filter for each release:
+
+```bash
+make wasm.release              # coraza-rs.wasm (no CRS)
+make wasm.release WASM_CRS=1   # coraza-rs-crs.wasm (embedded CRS)
+```
+
+`wasm.release` downloads `WASM_RELEASE_VERSION` from the coraza-rs releases,
+verifies the pinned digest (a re-uploaded asset fails, it does not get
+bundled), and runs `wasm.bundle`. `make demo` uses this path by default. Set
+`WASM_RELEASE_VERSION` and the matching `WASM_RELEASE_SHA256` together when
+bumping.
+
 ## Building from Source
 
 The pinned commit is `CORAZA_RS_VERSION` in the `Makefile`. Build it with:
@@ -380,9 +398,10 @@ chain signed by that CA and negotiate TLS 1.3; public-CA hosts are not trusted y
 
 ## Testing Custom WASM Plugins
 
-`make demo` builds and bundles the pinned module before creating the cluster. To
-test a locally built artifact instead, bundle it first and run the deployment
-targets without `wasm.plugin`:
+`make demo` downloads the published module and bundles it before creating the
+cluster; `make demo WASM_SOURCE=build` builds it from source instead. To test
+any artifact, bundle it first and run the deployment targets without
+`wasm.plugin`:
 
 ```bash
 make wasm.bundle WASM_MODULE=/path/to/envoy_coraza.wasm

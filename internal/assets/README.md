@@ -16,9 +16,10 @@ is pulled from an OCI registry or extracted at runtime.
 ## Dev fixture vs. release
 
 The fixture exists only so that `go build`/`go test` always have embeddable
-bytes. **The real bundled module is never committed.** Release images and
-`make demo` replace both files with the freshly built `envoy-coraza` artifact
-and then verify the result.
+bytes. **The real bundled module is never committed.** Release images replace
+both files with the built `envoy-coraza` artifact; `make demo` replaces them
+with the published `coraza-rs` release artifact, and both paths verify the
+result.
 
 `make build.image` and the ordinary `make cluster.kind` path embed the committed
 fixture unless `wasm.bundle` was run first. That image is suitable for
@@ -27,6 +28,8 @@ build/test scaffolding, **not for WAF enforcement**.
 ## Building the module
 
 ```bash
+make wasm.release                # published artifact (what `make demo` uses)
+# or build the pinned commit:
 make wasm.plugin                 # builds the pinned coraza-rs commit
 make wasm.bundle WASM_MODULE=.cache/wasm/envoy_coraza.wasm
 make wasm.verify
@@ -37,9 +40,10 @@ make wasm.verify
   `hack/wasi-stub.wat` with the pinned Binaryen release. The stubs are required
   on Envoy releases before 1.40 (Istio 1.31 ships Envoy 1.39) and are harmless
   on newer releases. The output stays in `.cache/`.
-- **The release bundle does not embed CRS.** `make wasm.crs` (and `make demo`)
-  fetches the CRS release pinned in coraza-rs's `crs.pin` and rebuilds with
-  `embed-crs`; `crs/...` includes only work with that module. The bundle
+- **The release bundle does not embed CRS.** `make wasm.crs` (and the
+  `coraza-rs-crs.wasm` artifact `make demo` downloads) fetches the CRS release
+  pinned in coraza-rs's `crs.pin` and builds with `embed-crs`; `crs/...`
+  includes only work with that module. The bundle
   manifest records `crs_version: none` for the release build and the pinned
   release (for example `v4.30.0`) for the CRS-enabled build.
 - Pass `CORAZA_RS_DIR=/path/to/coraza-rs` to build a local checkout; the target

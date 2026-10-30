@@ -82,7 +82,7 @@ Rule text may reference only what the plugin can resolve. The operator validates
 references before an Engine accepts the configuration:
 
 - `Include` targets: a RuleData file name, or the embedded CRS tree in a
-  CRS-enabled build (`make wasm.crs`, used by the demo). The release bundle does
+  CRS-enabled build (`make wasm.crs`, or the published artifact `make demo` downloads). The release bundle does
   not embed CRS. In a CRS-enabled module, `Include crs/crs-setup.conf`,
   `Include crs/rules/*.conf`, and a literal `crs/rules/<file>.conf` are accepted.
   The previous Go plugin's `@` aliases (`@recommended-conf`, `@demo-conf`,

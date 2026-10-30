@@ -44,8 +44,8 @@ and the engine identity. The module itself is referenced by URL and digest.
 The artifact is built for `wasm32-wasip1` and linked with the WASI stubs from
 `hack/wasi-stub.wat`, because Istio 1.31 ships Envoy 1.39, which does not provide those
 imports; Envoy 1.40 and newer ignore the stubs. The release bundle does not embed CRS.
-`make wasm.crs` (used by the demo) builds a CRS-enabled module whose pinned tree is
-addressed through coraza-rs's native `crs/` namespace: `Include crs/crs-setup.conf` and
+`make demo` downloads the published CRS-enabled module (`make wasm.crs` builds it
+from source), whose pinned tree is addressed through coraza-rs's native `crs/` namespace: `Include crs/crs-setup.conf` and
 `Include crs/rules/*.conf`. The previous Go plugin's `@owasp_crs` aliases are not
 supported. See the [ECDS plugin
 contract]({{< relref "/reference/ecds-plugin-contract" >}}) for the exact payload.

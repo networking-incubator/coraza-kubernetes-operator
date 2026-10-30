@@ -203,6 +203,9 @@ WASM_MODULE_NAME ?= envoy-coraza
 WASM_GIT_SHA ?= $(CORAZA_RS_VERSION)
 WASM_CORAZA_VERSION ?= 0.1.0
 WASM_PROXY_WASM_SDK_VERSION ?= 6ceedbbdd07a048a65d197c9bbb1f950884561fb
+# Where `make demo` gets the module: the published coraza-rs artifact
+# (default) or a local build. WASM_SOURCE=build needs the Rust toolchain.
+WASM_SOURCE ?= release
 # Embed the pinned OWASP CRS tree in the module (coraza-rs embed-crs feature).
 # The release bundle does not embed CRS; the demo and wasm.crs do.
 WASM_CRS ?= 0
@@ -229,9 +232,10 @@ wasm.verify: ## Verify the bundled module digest against plugin.manifest.yaml
 	echo "wasm.verify: $$got $(ASSETS_DIR)/plugin.wasm ok"
 
 # envoy-coraza built from coraza-rs. The default build has no embedded CRS;
-# wasm.crs (and the demo) adds the pinned CRS tree. Point CORAZA_RS_DIR at a
-# local checkout to build a branch without publishing anything:
-#   make demo CORAZA_RS_DIR=/path/to/coraza-rs
+# wasm.crs adds the pinned CRS tree. `make demo` downloads the published
+# artifact instead (wasm.release); to build the demo module from source, point
+# CORAZA_RS_DIR at a local checkout:
+#   make demo WASM_SOURCE=build CORAZA_RS_DIR=/path/to/coraza-rs
 # The build runs from an archive of CORAZA_RS_VERSION inside a temporary
 # directory, so a user-provided checkout is read-only for this target (no clone,
 # fetch, checkout, or new files).
@@ -240,7 +244,8 @@ wasm.verify: ## Verify the bundled module digest against plugin.manifest.yaml
 # std imports. The artifact is therefore linked with hack/wasi-stub.wat using
 # the pinned Binaryen release; Envoy 1.40+ ignores the stubs.
 CORAZA_RS_REPO ?= https://github.com/networking-incubator/coraza-rs
-CORAZA_RS_VERSION ?= e1442ee3dc516a022a687a2bc9e239e39b629e03
+# v0.0.1: the commit the published artifacts are built from (WASM_RELEASE_*).
+CORAZA_RS_VERSION ?= a5eb0b87f3df9b20707434d410275051fd3eda3f
 CORAZA_RS_DIR ?= $(CURDIR)/.cache/coraza-rs
 # Raw module produced by wasm.plugin (ignored by git, outside the source repo).
 WASM_MODULE_OUT ?= $(CURDIR)/.cache/wasm/envoy_coraza.wasm
@@ -292,9 +297,43 @@ wasm.plugin: ## Build envoy-coraza from the pinned coraza-rs commit (skipped whe
 	echo "wasm.plugin: $(WASM_MODULE_OUT)"
 
 .PHONY: wasm.crs
-wasm.crs: ## Build and bundle a CRS-enabled module (demo only; the release bundle omits CRS)
+wasm.crs: ## Build and bundle a CRS-enabled module from source (demo only; the release bundle omits CRS)
 	$(MAKE) wasm.plugin WASM_CRS=1
 	$(MAKE) wasm.bundle WASM_CRS=1 WASM_MODULE=$(WASM_MODULE_OUT)
+
+# Prebuilt envoy-coraza artifacts published by coraza-rs. The demo downloads
+# these instead of compiling Rust; CI and `make wasm.crs` still build from
+# source. Digests are pinned so a re-uploaded asset fails instead of shipping
+# bytes the release did not publish.
+WASM_RELEASE_VERSION ?= v0.0.1
+WASM_RELEASE_GIT_SHA ?= a5eb0b87f3df9b20707434d410275051fd3eda3f
+WASM_RELEASE_BASE ?= https://github.com/networking-incubator/coraza-rs/releases/download/$(WASM_RELEASE_VERSION)
+WASM_RELEASE_DIR ?= $(CURDIR)/.cache/coraza-rs-release/$(WASM_RELEASE_VERSION)
+WASM_RELEASE_ASSET ?= $(if $(filter 1,$(WASM_CRS)),coraza-rs-crs.wasm,coraza-rs.wasm)
+WASM_RELEASE_SHA256 ?= $(if $(filter 1,$(WASM_CRS)),b9657732ab06e9314a08e8c9cdc2615d6cde0f5226dc1d3a81199722c6e5b1e7,db76ec3d8f8ee3b3ac345a44b0b36640bf4508433977946db72e46ea97095449)
+WASM_RELEASE_CRS_VERSION ?= v4.30.0
+
+.PHONY: wasm.release
+wasm.release: ## Download and bundle the published envoy-coraza artifact (no Rust toolchain)
+	@set -e; \
+	asset="$(WASM_RELEASE_ASSET)"; \
+	want="$(WASM_RELEASE_SHA256)"; \
+	out="$(WASM_RELEASE_DIR)/$$asset"; \
+	if [ ! -f "$$out" ] || [ "$$(sha256sum "$$out" | cut -d' ' -f1)" != "$$want" ]; then \
+		echo "wasm.release: downloading $(WASM_RELEASE_VERSION)/$$asset"; \
+		mkdir -p "$(WASM_RELEASE_DIR)"; \
+		curl -fsSL --retry 3 -o "$$out.tmp" "$(WASM_RELEASE_BASE)/$$asset"; \
+		mv "$$out.tmp" "$$out"; \
+	fi; \
+	got=$$(sha256sum "$$out" | cut -d' ' -f1); \
+	if [ "$$got" != "$$want" ]; then \
+		echo "wasm.release: digest mismatch for $$asset: got $$got, want $$want" >&2; \
+		exit 1; \
+	fi; \
+	$(MAKE) --no-print-directory wasm.bundle \
+		WASM_MODULE="$$out" WASM_CRS=$(WASM_CRS) \
+		WASM_CRS_VERSION=$(if $(filter 1,$(WASM_CRS)),$(WASM_RELEASE_CRS_VERSION),none) \
+		WASM_GIT_SHA=$(WASM_RELEASE_GIT_SHA)
 
 # ------------------------------------------------------------------------------
 # Deployment
@@ -747,8 +786,12 @@ observability.demo.workload: demo.workload ## Apply demo CRs and seed traffic fo
 observability.demo: observability.prometheus.deploy observability.operator.monitoring observability.demo.workload observability.grafana.url ## Full observability demo on existing KIND cluster
 
 .PHONY: demo
-demo: ## Single command: build the CRS-enabled WASM module, create KIND, deploy the operator and the demo rules
+demo: ## Single command: get the CRS-enabled WASM module (WASM_SOURCE=release|build), create KIND, deploy the demo
+ifeq ($(WASM_SOURCE),build)
 	$(MAKE) wasm.crs
+else
+	$(MAKE) wasm.release WASM_CRS=1
+endif
 	$(MAKE) wasm.verify
 	$(MAKE) cluster.kind
 	@# The chart reuses imagePullPolicy IfNotPresent, so restart the operator to run the image just loaded.
