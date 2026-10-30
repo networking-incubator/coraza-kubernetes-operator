@@ -51,15 +51,6 @@ rules:
   - update
   - watch
 - apiGroups:
-  - extensions.istio.io
-  resources:
-  - wasmplugins
-  verbs:
-  - delete
-  - get
-  - list
-  - watch
-- apiGroups:
   - gateway.networking.k8s.io
   resources:
   - gatewayclasses

@@ -114,12 +114,6 @@ func (r *EngineReconciler) cleanupNotAccepted(ctx context.Context, log logr.Logg
 		return err
 	}
 
-	// A rejected Engine may still own the retired WasmPlugin from a previous
-	// release. It must not keep polling the removed cache server.
-	if err := r.deleteLegacyWasmPlugin(ctx, log, req, engine); err != nil {
-		return err
-	}
-
 	if err := r.cleanupNetworkPolicy(ctx, log, req); err != nil {
 		return err
 	}

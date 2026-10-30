@@ -30,7 +30,6 @@ import (
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -47,7 +46,6 @@ import (
 // -----------------------------------------------------------------------------
 
 // +kubebuilder:rbac:groups=networking.istio.io,resources=envoyfilters,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=extensions.istio.io,resources=wasmplugins,verbs=get;list;watch;delete
 // +kubebuilder:rbac:groups="",resources=pods,verbs=list;watch
 
 // -----------------------------------------------------------------------------
@@ -55,10 +53,6 @@ import (
 // -----------------------------------------------------------------------------
 
 const (
-	// legacyWasmPluginNamePrefix is the name prefix of the retired WasmPlugin
-	// child resource. It is kept only so cleanup can find and delete it.
-	legacyWasmPluginNamePrefix = "coraza-engine-"
-
 	telemetryRetryAfter         = 30 * time.Second
 	ruleSetAcceptanceRetryAfter = 3 * time.Second
 	bootstrapConvergeRetryAfter = 1 * time.Second
@@ -72,12 +66,6 @@ const (
 	// inject into the EnvoyFilter.
 	reasonTLSNotConfigured = "TLSNotConfigured"
 )
-
-// legacyWasmPluginName returns the deterministic name of the retired
-// WasmPlugin child resource derived from the given Engine name.
-func legacyWasmPluginName(engineName string) string {
-	return legacyWasmPluginNamePrefix + engineName
-}
 
 // -----------------------------------------------------------------------------
 // Engine Controller - WASM Driver - Provisioning
@@ -185,10 +173,6 @@ func (r *EngineReconciler) provisionWasmDriver(ctx context.Context, log logr.Log
 
 	logDebug(log, req, "Engine", "Recording accepted configuration")
 	if err := r.patchAcceptedConfiguration(ctx, log, req, engine, artifact, binary, ruleSet.UID, contentHash, failurePolicy); err != nil {
-		return ctrl.Result{}, err
-	}
-
-	if err := r.deleteLegacyWasmPlugin(ctx, log, req, engine); err != nil {
 		return ctrl.Result{}, err
 	}
 
@@ -465,35 +449,6 @@ func (r *EngineReconciler) patchAcceptedConfiguration(
 		return err
 	}
 	logConditionTransitions(log, req, "Engine", before, engine.Status.Conditions)
-	return nil
-}
-
-// deleteLegacyWasmPlugin removes the retired WasmPlugin child resource. It runs
-// only after the EnvoyFilter apply succeeds, so there is no window without a
-// WAF attachment.
-func (r *EngineReconciler) deleteLegacyWasmPlugin(ctx context.Context, log logr.Logger, req ctrl.Request, engine *wafv1alpha1.Engine) error {
-	wasmPlugin := &unstructured.Unstructured{}
-	wasmPlugin.SetGroupVersionKind(schema.GroupVersionKind{
-		Group:   "extensions.istio.io",
-		Version: "v1alpha1",
-		Kind:    "WasmPlugin",
-	})
-	name := legacyWasmPluginName(engine.Name)
-	if err := r.Get(ctx, types.NamespacedName{Namespace: engine.Namespace, Name: name}, wasmPlugin); err != nil {
-		// A cluster without the retired WasmPlugin CRD has no legacy object
-		// to delete; failing here would block every Engine reconcile.
-		if apierrors.IsNotFound(err) || apimeta.IsNoMatchError(err) {
-			return nil
-		}
-		logAPIError(log, req, "Engine", err, "Failed to get legacy WasmPlugin", nil)
-		return err
-	}
-
-	if err := r.Delete(ctx, wasmPlugin); client.IgnoreNotFound(err) != nil {
-		logAPIError(log, req, "Engine", err, "Failed to delete legacy WasmPlugin", wasmPlugin)
-		return err
-	}
-	logInfo(log, req, "Engine", "Deleted legacy WasmPlugin", "wasmPlugin", name)
 	return nil
 }
 

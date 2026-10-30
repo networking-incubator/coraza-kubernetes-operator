@@ -220,7 +220,6 @@ func TestEngineReconciler_ReconcileIstioDriver(t *testing.T) {
 	assert.Equal(t, metav1.ConditionTrue, acceptedCond.Status)
 
 	requireEnvoyFilterExists(t, ctx, engine.Name, engine.Namespace)
-	requireNoLegacyWasmPlugin(t, ctx, engine.Name, engine.Namespace)
 
 	assert.True(t, recorder.HasEvent("Normal", reasonConfigurationAccepted),
 		"expected Normal/%s event; got: %v", reasonConfigurationAccepted, recorder.Events)
@@ -433,8 +432,8 @@ func TestEngineReconciler_NilTargetRef_MarksDegraded(t *testing.T) {
 	}
 
 	// Call provisionWasmDriver directly — it should detect the empty
-	// TargetRef and mark the Engine Degraded instead of creating a
-	// WasmPlugin that matches all workloads.
+	// TargetRef and mark the Engine Degraded instead of creating an
+	// EnvoyFilter without a workload selector.
 	_, err := reconciler.provisionWasmDriver(ctx, ctrl.Log, engineReq, &fetched)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "target is required")
@@ -881,7 +880,6 @@ func TestEngineReconciler_TargetNotFound(t *testing.T) {
 
 	t.Log("Verifying no WAF attachment was created")
 	requireNoEnvoyFilter(t, ctx, engine.Name, engine.Namespace)
-	requireNoLegacyWasmPlugin(t, ctx, engine.Name, engine.Namespace)
 
 	assert.True(t, recorder.HasEvent("Warning", "TargetNotFound"),
 		"expected Warning/TargetNotFound event; got: %v", recorder.Events)
