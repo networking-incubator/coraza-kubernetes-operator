@@ -22,13 +22,14 @@ The operator requires two sets of RBAC permissions:
 | Deployments | get | Read operator deployment metadata. |
 | TokenReviews, SubjectAccessReviews | create | Authenticate and authorize metrics endpoint access. |
 | Leases | create, delete, get, list, patch, update, watch | Leader election. |
+| EnvoyFilters (Istio) | create, delete, get, list, patch, update, watch | Attach ECDS filters to Engine Gateway workloads. |
 | Gateways (Gateway API) | get, list, watch | Discover and validate Gateways for Engine target resolution. |
 
 ### Namespace-Scoped Permissions (Role)
 
 | Resource | Verbs | Purpose |
 |----------|-------|---------|
-| NetworkPolicies | create, delete, get, list, patch, update, watch | Manage network policies for cache server access. |
+| NetworkPolicies | create, delete, get, list, patch, update, watch | Restrict Gateway access to the operator's ECDS listener. |
 
 The operator follows the principle of least privilege. It does not request permissions beyond what is needed for its controllers.
 
@@ -46,29 +47,12 @@ The endpoint requires authentication and authorization via Kubernetes RBAC. Clie
 
 By default, the operator generates a self-signed certificate. Users can provide their own certificate via the `metrics.certSecret` Helm value.
 
-### Cache Server
+## ECDS NetworkPolicy
 
-The RuleSet cache server listens on port 18080. Access to the cache server is controlled through:
-
-- Kubernetes ServiceAccount token authentication.
-- NetworkPolicies that restrict which pods can connect.
-
-## Cache Server Authentication
-
-The cache server authenticates requests using Kubernetes ServiceAccount tokens. When an Engine is created, the operator:
-
-1. Creates a bound ServiceAccount token scoped to the Engine and RuleSet.
-2. Passes the token to the WASM plugin via the WasmPlugin configuration.
-3. Validates incoming tokens using the Kubernetes TokenReview API.
-
-This ensures that only authorized WASM plugins can fetch rules from the cache server.
-
-## NetworkPolicy
-
-The operator creates a NetworkPolicy in its own namespace to control access to the cache server. The policy:
+The operator creates a NetworkPolicy in its own namespace to control access to the ECDS listener. The policy:
 
 - Allows ingress from Gateway pods that match an Engine's target.
-- Restricts access to the cache server port only.
+- Restricts access to the operator's ECDS listener port.
 - Is labeled with the Engine name and namespace for management tracking.
 - Is cleaned up via a finalizer when the Engine is deleted.
 
