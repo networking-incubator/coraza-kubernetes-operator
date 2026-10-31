@@ -776,8 +776,58 @@ func TestValidateIncludesRejectsAuditLogFileTargets(t *testing.T) {
 		})
 	}
 
-	// SecAuditLogType alone is still accepted; it names no sink.
+	// SecAuditLogType alone is still accepted when it is the supported type.
 	assert.NoError(t, ValidateIncludes("SecAuditLogType Serial", nil))
+	assert.NoError(t, ValidateIncludes("secauditlogtype serial", nil))
+	assert.NoError(t, ValidateIncludes("SecAuditLogType \"Serial\"", nil))
+}
+
+// TestValidateIncludesRejectsUnsupportedAuditLogType covers the only audit type
+// envoy-coraza can compile: it has no Concurrent, Syslog, or Https sink.
+func TestValidateIncludesRejectsUnsupportedAuditLogType(t *testing.T) {
+	for _, rules := range []string{
+		"SecAuditLogType Concurrent",
+		"SecAuditLogType Syslog",
+		"SecAuditLogType Https",
+		"SecAuditLogType Serial\nSecAuditLogType Concurrent",
+		"SecAuditLogType",
+	} {
+		t.Run(rules, func(t *testing.T) {
+			err := ValidateIncludes(rules, nil)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "only supported as Serial")
+			assert.NotContains(t, err.Error(), "/var/")
+		})
+	}
+}
+
+// TestValidateIncludesRejectsRequestBodyLimitOverWasmCap covers the limit
+// envoy-coraza refuses: its WASM host caps the request body at 16 MiB.
+func TestValidateIncludesRejectsRequestBodyLimitOverWasmCap(t *testing.T) {
+	for _, rules := range []string{
+		"SecRequestBodyAccess On\nSecRequestBodyLimit 16777217",
+		"SecRequestBodyLimit 16777217",
+		"SecRequestBodyLimit 0",
+		"SecRequestBodyLimit -1",
+		"SecRequestBodyLimit not-a-number",
+	} {
+		t.Run(rules, func(t *testing.T) {
+			err := ValidateIncludes(rules, nil)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "SecRequestBodyLimit")
+		})
+	}
+
+	for _, rules := range []string{
+		"SecRequestBodyAccess On\nSecRequestBodyLimit 13107200",
+		"SecRequestBodyAccess On\nSecRequestBodyLimit 16777216",
+		"SecRequestBodyAccess On\nSecRequestBodyLimit \"16777216\"",
+		"SecResponseBodyAccess Off",
+	} {
+		t.Run(rules, func(t *testing.T) {
+			assert.NoError(t, ValidateIncludes(rules, nil))
+		})
+	}
 }
 
 func TestValidateRuleSourceRulesAcceptsEmbeddedCRS(t *testing.T) {

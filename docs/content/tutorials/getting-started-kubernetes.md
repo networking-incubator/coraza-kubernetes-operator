@@ -186,6 +186,7 @@ spec:
   rules: |
     SecRuleEngine On
     SecRequestBodyAccess On
+    SecRequestBodyLimit 13107200
     SecResponseBodyAccess Off
 ---
 apiVersion: waf.k8s.coraza.io/v1alpha1

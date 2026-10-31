@@ -72,10 +72,12 @@ Rules for both sides:
   acceptance, not proxy acknowledgement. Check the Gateway
   Envoy logs for NACK/configuration errors and the operator log for
   `ECDS configuration accepted by proxy`.
-- `SecRequestBodyAccess On` requires an explicit `SecRequestBodyLimit` at or
-  below 16 MiB: the engine default (128 MiB) exceeds the WASM ceiling. If
-  `SecRequestBodyInMemoryLimit` is set, it must be `0` or at least the request
-  limit, or the body would spill to a file.
+- `SecRequestBodyAccess On` needs an explicit `SecRequestBodyLimit` at or below
+  16 MiB: the engine default (128 MiB) exceeds the WASM ceiling and the plugin
+  refuses the configuration. CKO rejects a visible `SecRequestBodyLimit` above the
+  cap, but cannot see directives inside `crs/` includes, so set the limit in your
+  own rule text. If `SecRequestBodyInMemoryLimit` is set, it must be `0` or at
+  least the request limit, or the body would spill to a file.
 - An explicitly allowed empty ruleset is an intentional no-op WAF, not a missing
   configuration.
 - Release artifacts: raw `plugin.wasm`, `plugin.wasm.sha256` (standard
@@ -118,8 +120,9 @@ references before an Engine accepts the configuration:
   `SecDebugLog`, `SecUploadDir`, and `SecUploadKeepFiles` with any value other than
   `Off`. This covers rule text and any RuleData file the rules `Include` (an included
   file is parsed as rule text). `@pmFromFile` data is not SecLang and is not scanned.
-  `SecDebugLogLevel`, `SecAuditLogType`, `SecAuditLogFormat`, and `SecAuditLogParts`
-  are accepted. `SecAuditLog` is rejected: this WASM build has no audit sink, and a
+  `SecDebugLogLevel`, `SecAuditLogFormat`, and `SecAuditLogParts` are accepted.
+  Only `SecAuditLogType Serial` is supported; `Concurrent`, `Syslog`, and `Https`
+  are rejected. `SecAuditLog` is rejected: this WASM build has no audit sink, and a
   policy that names one fails to configure while the Engine reports `Ready`.
 - The previous Go plugin's `@owasp_crs` aliases are gone. A CRS-enabled build
   exposes the tree under coraza-rs's native `crs/` namespace (pinned CRS release,

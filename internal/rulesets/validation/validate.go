@@ -24,6 +24,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/corazawaf/coraza/v3"
@@ -316,6 +317,40 @@ var auditLogPattern = regexp.MustCompile(`(?i)^secauditlog(?: (.*))?$`)
 // no upload directory.
 var uploadKeepFilesPattern = regexp.MustCompile(`(?i)^secuploadkeepfiles(?:[ \t]+(\S+))?`)
 
+// auditLogTypePattern matches SecAuditLogType and its value. envoy-coraza
+// rejects every type except Serial, because it has no native audit sink.
+var auditLogTypePattern = regexp.MustCompile(`(?i)^secauditlogtype(?:[ \t]+(\S+))?`)
+
+// requestBodyLimitPattern matches SecRequestBodyLimit and its byte count.
+// envoy-coraza caps the effective request body at its 16 MiB WASM ceiling.
+var requestBodyLimitPattern = regexp.MustCompile(`(?i)^secrequestbodylimit[ \t]+(\S+)`)
+
+// maxRequestBodyLimit is envoy-coraza's WASM request-body ceiling.
+const maxRequestBodyLimit = 16 << 20
+
+// checkHostDirective rejects directive values envoy-coraza's WASM host cannot
+// compile: any audit type other than Serial, and a request-body limit outside
+// (0, 16 MiB]. Both are per-line facts, so the check never needs other files.
+func checkHostDirective(line string) error {
+	if match := auditLogTypePattern.FindStringSubmatch(line); match != nil {
+		if len(match) < 2 || !strings.EqualFold(strings.Trim(match[1], `"'`), "serial") {
+			return errors.New("SecAuditLogType is only supported as Serial by envoy-coraza: replace Concurrent, Syslog, or Https with Serial")
+		}
+	}
+	match := requestBodyLimitPattern.FindStringSubmatch(line)
+	if match == nil {
+		return nil
+	}
+	limit, err := strconv.ParseInt(strings.Trim(match[1], `"'`), 10, 64)
+	if err != nil {
+		return errors.New("SecRequestBodyLimit must be an integer byte count")
+	}
+	if limit <= 0 || limit > maxRequestBodyLimit {
+		return fmt.Errorf("SecRequestBodyLimit %d exceeds the envoy-coraza WASM cap of %d bytes", limit, maxRequestBodyLimit)
+	}
+	return nil
+}
+
 // nonRuleCrsTarget reports whether target names a literal file in the embedded
 // CRS tree whose extension is not .conf, after the path cleaning the plugin's
 // filesystem applies. Coraza parses the target as SecLang: the .data files and
@@ -418,6 +453,9 @@ func validateRuleText(rules string) ([]string, error) {
 		}
 		if auditLogPattern.MatchString(line) {
 			return nil, errors.New("SecAuditLog is not supported by envoy-coraza: remove it")
+		}
+		if err := checkHostDirective(line); err != nil {
+			return nil, err
 		}
 		match := includePattern.FindStringSubmatch(line)
 		if match == nil {
