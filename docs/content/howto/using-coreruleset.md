@@ -8,8 +8,85 @@ description: "Generate and deploy OWASP CoreRuleSet rules using the kubectl-cora
 The [OWASP CoreRuleSet (CRS)](https://coreruleset.org/) is a widely used set of attack detection rules for ModSecurity-compatible WAFs. The `kubectl-coraza` plugin can generate **RuleSource**, **RuleData**, and **RuleSet** manifests from CRS rule files.
 
 {{% alert title="Important" color="warning" %}}
-This project does not provide, maintain, or support CoreRuleSet rules. Users must supply their own rules. The tools described here are provided for convenience.
+This project does not maintain CoreRuleSet rules. A CRS-enabled `envoy-coraza` build embeds an upstream CRS release and rule behavior follows that release. The default and release bundles do **not** embed CRS, so `crs/...` includes are rejected there.
 {{% /alert %}}
+
+## Use the embedded CoreRuleSet
+
+`make demo` downloads the published CRS-enabled `envoy-coraza` artifact, and
+`make wasm.crs` builds the same thing from source, with the CRS release pinned by the operator (`v4.30.0`; recorded as `crs_version` in `plugin.manifest.yaml`). The default and release builds do **not** embed CRS, so `crs/...` includes require a CRS-enabled module: the operator rejects a RuleSet that uses them while the bundled module reports `crs_version: none`. Reference the embedded tree directly:
+
+```yaml
+apiVersion: waf.k8s.coraza.io/v1alpha1
+kind: RuleSource
+metadata:
+  name: crs
+  namespace: my-namespace
+spec:
+  rules: |
+    SecRuleEngine On
+    SecRequestBodyAccess On
+    SecRequestBodyLimit 13107200
+    # CRS 4.30 parses a JSON body only when the request selects the JSON
+    # processor; without this rule the ARGS rules never see JSON payloads.
+    SecRule REQUEST_HEADERS:Content-Type "^(?:application(?:/soap\+|/)|text/)xml" \
+      "id:200000,phase:1,t:none,t:lowercase,pass,nolog,ctl:requestBodyProcessor=XML"
+    SecRule REQUEST_HEADERS:Content-Type "@rx ^application/json(?:\s*;|$)" \
+      "id:900,phase:1,t:none,t:lowercase,pass,nolog,ctl:requestBodyProcessor=JSON"
+    Include crs/crs-setup.conf
+    Include crs/rules/*.conf
+---
+apiVersion: waf.k8s.coraza.io/v1alpha1
+kind: RuleSet
+metadata:
+  name: crs
+  namespace: my-namespace
+spec:
+  sources:
+    - name: crs
+```
+
+Point the Engine at the RuleSet:
+
+```yaml
+spec:
+  ruleSet:
+    name: crs
+```
+
+`crs/crs-setup.conf`, `crs/rules/*.conf`, a literal `crs/rules/<file>.conf`, and `@pmFromFile crs/...` resolve inside the module. They are not RuleData files: `crs/` paths cannot be supplied through `spec.data`.
+
+Verify enforcement:
+
+```bash
+kubectl -n my-namespace wait --for=condition=Ready ruleset/crs --timeout=300s
+
+ADDR=$(kubectl -n my-namespace get gateway <gateway-name> \
+  -o jsonpath='{.status.addresses[0].value}')
+
+# normal request
+curl -s -o /dev/null -w '%{http_code}\n' "http://$ADDR/"
+
+# SQLi probe; expect 403
+curl -s -o /dev/null -w '%{http_code}\n' \
+  "http://$ADDR/?q=1%27%20OR%20%271%27=%271"
+```
+
+The previous Go plugin's aliases are not all file references:
+
+- CRS file aliases such as `@owasp_crs/...` and `@crs-setup-conf` should be replaced
+  with actual Includes under `crs/`, such as `Include crs/rules/*.conf` and
+  `Include crs/crs-setup.conf`.
+- `@recommended-conf`, `@demo-conf`, and `@ftw-conf` are configuration aliases, not
+  CRS filenames. Do not rewrite them as `crs/...`. Use the generator to emit its
+  `base-rules` and per-file RuleSources/RuleData, or add the required base SecLang
+  directives explicitly to your own RuleSource.
+
+## Generate manifests for a different CRS release
+
+Use the generator when you need a different CRS version or per-rule exclusions. Set
+`CRS_VERSION` to the release you download and pass the same version with `--version`.
+To match the embedded release, use `4.30.0` for both.
 
 ## Install the kubectl-coraza Plugin
 
@@ -38,7 +115,7 @@ kubectl coraza --help
 Download the CoreRuleSet release archive and extract the rules:
 
 ```bash
-export CRS_VERSION=4.28.0
+export CRS_VERSION=4.30.0
 curl -fsSL "https://github.com/coreruleset/coreruleset/archive/refs/tags/v${CRS_VERSION}.tar.gz" \
   | tar xz
 ```

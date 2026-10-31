@@ -67,6 +67,7 @@ spec:
   rules: |
     SecRuleEngine On
     SecRequestBodyAccess On
+    SecRequestBodyLimit 13107200
 ---
 apiVersion: waf.k8s.coraza.io/v1alpha1
 kind: RuleSource
@@ -105,7 +106,7 @@ spec:
 
 ## Updating data files
 
-When you change a **RuleData** (or a **RuleSet** that references it), the RuleSet controller re-compiles with the new data and updates the cache. Engines pick up changes at their next poll interval.
+When you change a **RuleData** (or a **RuleSet** that references it), the RuleSet controller re-compiles with the new data and the Engines referencing it re-accept the new content. The operator pushes that configuration to the Gateways over ECDS.
 
 {{% alert title="Note" color="info" %}}
 You can list **up to 256** `spec.data` entries. Put multiple named files in one RuleData, or split them across several RuleData objects; remember that duplicate filenames are resolved with **last-listed** RuleData winning.

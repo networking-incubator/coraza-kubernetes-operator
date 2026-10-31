@@ -1,3 +1,8 @@
+> **Baseline note:** these results were measured against the previous Go
+> `coraza-proxy-wasm` plugin. The operator now bundles the `envoy-coraza` filter
+> from `coraza-rs`; this matrix must be re-run before the counts or categories
+> are treated as current.
+
 # Known Limitations
 
 This document describes behavioral differences and limitations when running Coraza WAF with Istio using the WASM mode.

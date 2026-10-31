@@ -5,7 +5,7 @@ weight: 25
 description: "Create an Engine resource to attach a WAF to a Kubernetes Gateway."
 ---
 
-An Engine resource references a RuleSet and attaches the Coraza WAF to a Gateway via an Istio WasmPlugin.
+An Engine resource references a RuleSet and attaches the Coraza WAF to a Gateway. The operator renders an Istio `EnvoyFilter` for the Gateway and delivers the compiled rules to it over ECDS (Envoy Configuration Discovery Service).
 
 ## Creating an Engine
 
@@ -53,44 +53,32 @@ spec:
 
 See [Configuring Failure Policies]({{< relref "configuring-failure-policies" >}}) for guidance on choosing.
 
-## Configuring the Poll Interval
+## Rule Set Delivery
 
-The `ruleSetCacheServer.pollIntervalSeconds` field controls how often the WASM plugin checks the cache for updated rules. The default is 15 seconds. Valid range: 1 to 3600.
+Rules are delivered to the Gateway over ECDS, and the operator pushes updates as soon as they are accepted. The Gateway does not poll. The `spec.ruleSetCacheServer` field is retained for API compatibility but is ignored.
 
-```yaml
-spec:
-  ruleSetCacheServer:
-    pollIntervalSeconds: 30
-```
+## Selecting the WASM Module
 
-Lower values mean faster rule updates but slightly more network traffic between the WASM plugin and the cache server.
-
-## Using a Custom WASM Image
-
-By default, the operator uses its built-in WASM plugin image. To use a custom image, specify it in the Engine:
+By default, the operator serves its own bundled WASM module over its HTTPS asset route and
+references it in the ECDS configuration; no module reference is needed. To use a custom
+module, specify an HTTPS URL together with its SHA-256 digest, and Envoy fetches it:
 
 ```yaml
 spec:
   driver:
     type: wasm
     wasm:
-      image: "oci://ghcr.io/my-org/coraza-proxy-wasm:v1.0.0"
+      url: "https://files.example.com/coraza-rs/envoy-coraza-<version>.wasm"
+      sha256: "<sha256-of-the-exact-served-wasm-bytes>"
 ```
 
-The image must use the `oci://` URI scheme.
+Calculate the digest from the exact raw file served at `url`, for example with
+`sha256sum envoy-coraza.wasm`, and put its 64 lowercase hexadecimal characters in `sha256`.
+The `url` and `sha256` fields must be set together: `url` must be an HTTPS URL without
+userinfo, query, or fragment. Envoy rejects downloaded bytes whose digest differs. Omit
+both fields (or set `wasm: {}`) to use the bundled module.
 
-If the image is in a private registry, provide an image pull secret:
-
-```yaml
-spec:
-  driver:
-    type: wasm
-    wasm:
-      image: "oci://my-registry.example.com/coraza-proxy-wasm:v1.0.0"
-      imagePullSecret: my-registry-credentials
-```
-
-The Secret must exist in the same namespace as the Engine.
+The custom URL host must present a certificate that chains to the CA configured with `--xds-ca-path` (the operator serving CA). Public certificate hosts are not supported by this MVP, so use an internal host with a matching certificate or keep the bundled module.
 
 ## Verifying the Engine
 
@@ -113,8 +101,29 @@ For detailed status conditions and events:
 kubectl describe engine my-engine -n my-namespace
 ```
 
-To verify that the WAF is attached, check for the WasmPlugin and NetworkPolicy created by the operator:
+Checking that the EnvoyFilter exists does not prove the WAF is enforcing. Send one benign and
+one malicious request through the Gateway:
 
 ```bash
-kubectl get wasmplugin,networkpolicy -n my-namespace
+ADDR=$(kubectl -n my-namespace get gateway <gateway-name> \
+  -o jsonpath='{.status.addresses[0].value}')
+
+curl -s -o /dev/null -w '%{http_code}\n' "http://${ADDR}/"
+curl -s -o /dev/null -w '%{http_code}\n' "http://${ADDR}/?q=%3Cscript%3Ealert(1)%3C%2Fscript%3E"
+```
+
+The first request returns `200`; the second returns `403` only if the selected RuleSet has a
+deny rule matching that XSS payload. Choose a probe that matches a deny rule in your RuleSet:
+for example, this XSS request may return `200` when the RuleSet contains only the sample
+SQL-injection rule, and that result alone does not mean enforcement failed. If a matching
+probe and the normal request both return `200`, check that the Engine is `Ready`, that the
+Gateway pod loaded the module (`kubectl -n <gateway-namespace> logs <gateway-pod> -c
+istio-proxy | grep -i wasm`), and that the operator logged `ECDS configuration accepted by
+proxy` for the Engine. A `403` by itself is also insufficient: the fail-closed bootstrap
+policy can deny traffic before the WASM rules load.
+
+The operator also creates the EnvoyFilter and NetworkPolicy:
+
+```bash
+kubectl get envoyfilter,networkpolicy -n my-namespace
 ```

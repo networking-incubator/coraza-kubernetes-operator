@@ -143,11 +143,11 @@ func TestLogConditionTransitions(t *testing.T) {
 	t.Run("idempotent call does not log transitions", func(t *testing.T) {
 		log, sink := newCaptureLogger()
 		conditions := []metav1.Condition{
-			{Type: "Ready", Status: metav1.ConditionTrue, Reason: "RulesCached"},
+			{Type: "Ready", Status: metav1.ConditionTrue, Reason: "RulesAccepted"},
 		}
 
 		before := snapshotConditions(conditions)
-		applyStatusReady(&conditions, 1, "RulesCached", "cached")
+		applyStatusReady(&conditions, 1, "RulesAccepted", "cached")
 		logConditionTransitions(log, req, "RuleSet", before, conditions)
 
 		for _, e := range sink.entries {

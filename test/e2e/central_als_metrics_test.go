@@ -38,7 +38,6 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/util/retry"
 
-	"github.com/networking-incubator/coraza-kubernetes-operator/internal/defaults"
 	"github.com/networking-incubator/coraza-kubernetes-operator/test/framework"
 )
 
@@ -218,11 +217,7 @@ func TestCentralALSMetricsPipeline(t *testing.T) {
 	gwName := "gw"
 	engineName := "engine"
 
-	// Use the operator's default WASM image unless CORAZA_WASM_IMAGE overrides it.
-	wasmImage := os.Getenv("CORAZA_WASM_IMAGE")
-	if wasmImage == "" {
-		wasmImage = defaults.DefaultCorazaWasmOCIReference
-	}
+	// The operator serves its bundled WASM module; no image override is needed.
 
 	s.Step("apply central ALS test fixture (no hostPath)")
 	s.ApplyManifest("", filepath.Join(testdata, "00-namespace.yaml"))
@@ -283,7 +278,6 @@ func TestCentralALSMetricsPipeline(t *testing.T) {
 	s.CreateEngine(ns, engineName, framework.EngineOpts{
 		RuleSetName:         "ruleset",
 		GatewayName:         gwName,
-		WasmImage:           wasmImage,
 		EnableObservability: true,
 	})
 	s.ExpectEngineReady(ns, engineName)

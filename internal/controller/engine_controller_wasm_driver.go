@@ -18,49 +18,61 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net/url"
+	"regexp"
+	"strings"
 	"time"
 
 	"github.com/go-logr/logr"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	wafv1alpha1 "github.com/networking-incubator/coraza-kubernetes-operator/api/v1alpha1"
+	"github.com/networking-incubator/coraza-kubernetes-operator/internal/assets"
+	"github.com/networking-incubator/coraza-kubernetes-operator/internal/ecds/render"
+	"github.com/networking-incubator/coraza-kubernetes-operator/internal/rulesets/assemble"
 )
 
 // -----------------------------------------------------------------------------
 // Engine Controller - Istio RBAC
 // -----------------------------------------------------------------------------
 
-// +kubebuilder:rbac:groups=extensions.istio.io,resources=wasmplugins,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=networking.istio.io,resources=serviceentries;destinationrules,verbs=get;create;update;patch
-// +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get
+// +kubebuilder:rbac:groups=networking.istio.io,resources=envoyfilters,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=pods,verbs=list;watch
 
 // -----------------------------------------------------------------------------
 // Engine Controller - Istio Consts
 // -----------------------------------------------------------------------------
 
-// WasmPluginNamePrefix is the prefix used for all created WasmPlugin resources
-const WasmPluginNamePrefix = "coraza-engine-"
-const telemetryRetryAfter = 30 * time.Second
+const (
+	telemetryRetryAfter         = 30 * time.Second
+	ruleSetAcceptanceRetryAfter = 3 * time.Second
+	bootstrapConvergeRetryAfter = 1 * time.Second
 
-// wasmPluginName returns the deterministic name for the WasmPlugin child
-// resource derived from the given Engine name. All call sites MUST use this
-// helper to keep the naming scheme consistent.
-func wasmPluginName(engineName string) string {
-	return WasmPluginNamePrefix + engineName
-}
+	// reasonConfigurationAccepted is the Ready reason for a provisioned Engine.
+	reasonConfigurationAccepted = "ConfigurationAccepted"
+	// reasonAwaitingRuleSetAcceptance means the Engine is waiting for the
+	// referenced RuleSet to accept content for its current generation.
+	reasonAwaitingRuleSetAcceptance = "AwaitingRuleSetAcceptance"
+	// reasonTLSNotConfigured means the operator has no verified CA chain to
+	// inject into the EnvoyFilter.
+	reasonTLSNotConfigured = "TLSNotConfigured"
+)
 
 // -----------------------------------------------------------------------------
 // Engine Controller - WASM Driver - Provisioning
 // -----------------------------------------------------------------------------
 
-// provisionWasmDriver provisions the Istio WasmPlugin resource for the Engine.
+// provisionWasmDriver renders the accepted Engine configuration, attaches the
+// EnvoyFilter that consumes it, and records the accepted configuration.
 // engine is passed by pointer so that status patches are visible to the caller.
 func (r *EngineReconciler) provisionWasmDriver(ctx context.Context, log logr.Logger, req ctrl.Request, engine *wafv1alpha1.Engine) (ctrl.Result, error) {
 	ws := targetLabelSelector(engine)
@@ -73,40 +85,64 @@ func (r *EngineReconciler) provisionWasmDriver(ctx context.Context, log logr.Log
 		return ctrl.Result{}, err
 	}
 
-	// Apply NetworkPolicy first to ensure network restrictions are in place
-	// before the WasmPlugin starts running. This prevents a partially-provisioned
-	// state where the plugin is active without the intended cache-server network
-	// restrictions.
+	binary, err := r.resolveBinaryRef(engine)
+	if err != nil {
+		if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "Engine", engine, &engine.Status.Conditions, engine.Generation, "InvalidConfiguration", err.Error()); patchErr != nil {
+			return ctrl.Result{}, patchErr
+		}
+		return ctrl.Result{}, err
+	}
+
+	accepted, result, err := r.acceptedRuleSetContent(ctx, log, req, engine)
+	if accepted == nil {
+		return result, err
+	}
+	ruleSet := &accepted.ruleSet
+	inputs := accepted.inputs
+	content := accepted.content
+	contentHash := accepted.contentHash
+
+	failurePolicy := engineFailurePolicy(engine)
+	limits := r.Limits.WithDefaults()
+	logDebug(log, req, "Engine", "Rendering Engine configuration")
+	artifact, err := render.Render(render.EngineInput{
+		Namespace:             engine.Namespace,
+		Name:                  engine.Name,
+		UID:                   engine.UID,
+		RuleSet:               render.RuleSetAccepted{UID: ruleSet.UID, ContentHash: contentHash},
+		Content:               content,
+		EmptyRulesPolicy:      string(ruleSet.Spec.EmptyRulesPolicy),
+		FailurePolicy:         failurePolicy,
+		EnableFilterStateLogs: observabilityEnabled(engine),
+		DriverType:            string(wafv1alpha1.DriverTypeWasm),
+		Binary:                binary,
+	})
+	if err != nil {
+		if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "Engine", engine, &engine.Status.Conditions, engine.Generation, "RenderFailed", fmt.Sprintf("Failed to render Engine configuration: %v", err)); patchErr != nil {
+			return ctrl.Result{}, patchErr
+		}
+		return ctrl.Result{}, err
+	}
+	if err := validateRenderedPayload(artifact, limits); err != nil {
+		if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "Engine", engine, &engine.Status.Conditions, engine.Generation, "RenderFailed", fmt.Sprintf("Rendered Engine configuration exceeds delivery limits: %v", err), func() { clearAcceptedConfiguration(engine) }); patchErr != nil {
+			return ctrl.Result{}, patchErr
+		}
+		return ctrl.Result{}, err
+	}
+
+	changed, err := r.engineInputsChanged(ctx, engine, ruleSet, inputs)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if changed {
+		logInfo(log, req, "Engine", "Inputs changed before acceptance; requeueing")
+		return ctrl.Result{RequeueAfter: 100 * time.Millisecond}, nil
+	}
+
+	// Apply NetworkPolicy first: the WAF must never be attached without its
+	// intended network restrictions.
 	if err := r.applyNetworkPolicy(ctx, log, req, engine); err != nil {
 		if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "Engine", engine, &engine.Status.Conditions, engine.Generation, "NetworkPolicyFailed", fmt.Sprintf("Failed to apply NetworkPolicy: %v", err)); patchErr != nil {
-			return ctrl.Result{}, patchErr
-		}
-		return ctrl.Result{}, err
-	}
-
-	logDebug(log, req, "Engine", "Ensuring cache client ServiceAccount")
-	saName, err := r.ensureCacheClientServiceAccount(ctx, log, req, engine)
-	if err != nil {
-		if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "Engine", engine, &engine.Status.Conditions, engine.Generation, "ServiceAccountFailed", fmt.Sprintf("Failed to ensure cache client ServiceAccount: %v", err)); patchErr != nil {
-			return ctrl.Result{}, patchErr
-		}
-		return ctrl.Result{}, err
-	}
-
-	r.cleanupStaleTokens(req.Namespace, req.Name, engine.Spec.RuleSet.Name)
-
-	logDebug(log, req, "Engine", "Ensuring cache client token")
-	cacheToken, renewAt, err := r.ensureCacheToken(ctx, log, req, saName, engine.Spec.RuleSet.Name)
-	if err != nil {
-		if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "Engine", engine, &engine.Status.Conditions, engine.Generation, "TokenFailed", fmt.Sprintf("Failed to ensure cache client token: %v", err)); patchErr != nil {
-			return ctrl.Result{}, patchErr
-		}
-		return ctrl.Result{}, err
-	}
-
-	wasmPlugin, err := r.applyWasmPlugin(ctx, log, req, engine, cacheToken)
-	if err != nil {
-		if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "Engine", engine, &engine.Status.Conditions, engine.Generation, "ProvisioningFailed", fmt.Sprintf("Failed to create or update WasmPlugin: %v", err)); patchErr != nil {
 			return ctrl.Result{}, patchErr
 		}
 		return ctrl.Result{}, err
@@ -129,18 +165,306 @@ func (r *EngineReconciler) provisionWasmDriver(ctx context.Context, log logr.Log
 		r.Recorder.Eventf(engine, nil, "Warning", "TelemetryProvisioningFailed", "Provision", "Failed to reconcile Telemetry: %v", telemetryErr)
 	}
 
-	logDebug(log, req, "Engine", "Updating status after successful provisioning")
-	if patchErr := patchReady(ctx, r.Status(), r.Recorder, log, req, "Engine", engine, &engine.Status.Conditions, engine.Generation, "Configured", "WasmPlugin successfully created/updated"); patchErr != nil {
-		return ctrl.Result{}, patchErr
+	logDebug(log, req, "Engine", "Applying EnvoyFilter")
+	applied, err := r.applyEnvoyFilter(ctx, log, req, engine, artifact, binary, failurePolicy)
+	if err != nil {
+		return ctrl.Result{}, err
 	}
-	r.Recorder.Eventf(engine, nil, "Normal", "WasmPluginCreated", "Provision", "Created WasmPlugin %s/%s", wasmPlugin.GetNamespace(), wasmPlugin.GetName())
 
-	// Schedule re-reconciliation at the token's renewal deadline. This is a
-	// single requeue that fires exactly when the token needs refreshing,
-	// avoiding repeated intermediate reconciliations.
-	requeueAfter := telemetryRequeueAfter(renewAt, telemetryErr)
-	logDebug(log, req, "Engine", "Scheduling token renewal", "requeueAfter", requeueAfter)
-	return ctrl.Result{RequeueAfter: requeueAfter}, nil
+	logDebug(log, req, "Engine", "Recording accepted configuration")
+	if err := r.patchAcceptedConfiguration(ctx, log, req, engine, artifact, binary, ruleSet.UID, contentHash, failurePolicy); err != nil {
+		return ctrl.Result{}, err
+	}
+
+	result = ctrl.Result{}
+	if telemetryErr != nil {
+		result.RequeueAfter = telemetryRetryAfter
+	}
+	if applied != failurePolicy {
+		// Status-only updates do not bump the Engine generation, so the
+		// generation-gated watch will not fire. Requeue to converge a deferred
+		// bootstrap weakening after the accepted configuration exists.
+		result.RequeueAfter = bootstrapConvergeRetryAfter
+	}
+	return result, nil
+}
+
+// acceptedRuleSet is the verified, deliverable content an Engine may render.
+type acceptedRuleSet struct {
+	ruleSet     wafv1alpha1.RuleSet
+	inputs      assemble.Inputs
+	content     assemble.Content
+	contentHash string
+}
+
+// acceptedRuleSetContent waits for the referenced RuleSet to accept the current
+// content and verifies that this replica reconstructs the same, deliverable
+// configuration. A nil result means reconcile should return the given result.
+func (r *EngineReconciler) acceptedRuleSetContent(ctx context.Context, log logr.Logger, req ctrl.Request, engine *wafv1alpha1.Engine) (*acceptedRuleSet, ctrl.Result, error) {
+	logDebug(log, req, "Engine", "Checking RuleSet acceptance")
+	var ruleSet wafv1alpha1.RuleSet
+	if err := r.Get(ctx, types.NamespacedName{Namespace: engine.Namespace, Name: engine.Spec.RuleSet.Name}, &ruleSet); err != nil {
+		if apierrors.IsNotFound(err) {
+			msg := fmt.Sprintf("RuleSet %s not found", engine.Spec.RuleSet.Name)
+			if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "Engine", engine, &engine.Status.Conditions, engine.Generation, "RuleSetNotFound", msg, func() { clearAcceptedConfiguration(engine) }); patchErr != nil {
+				return nil, ctrl.Result{}, patchErr
+			}
+			return nil, ctrl.Result{}, err
+		}
+		logAPIError(log, req, "Engine", err, "Failed to get RuleSet", nil)
+		return nil, ctrl.Result{}, fmt.Errorf("failed to get RuleSet %s: %w", engine.Spec.RuleSet.Name, err)
+	}
+
+	if msg, ok := ruleSetAcceptancePending(&ruleSet); !ok {
+		result, err := r.awaitRuleSetAcceptance(ctx, log, req, engine, msg, acceptedRecordUnjustified(engine, &ruleSet))
+		return nil, result, err
+	}
+	acceptedContentHash := ruleSet.Status.AcceptedContent.ContentHash
+
+	logDebug(log, req, "Engine", "Assembling accepted RuleSet content")
+	inputs, err := loadRuleSetInputs(ctx, r.Client, &ruleSet)
+	if err != nil {
+		var clear []func()
+		if apierrors.IsNotFound(err) {
+			// The accepted record cannot be reconstructed without its inputs.
+			clear = append(clear, func() { clearAcceptedConfiguration(engine) })
+		}
+		if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "Engine", engine, &engine.Status.Conditions, engine.Generation, "RuleSetInputsUnavailable", fmt.Sprintf("Failed to load RuleSet inputs: %v", err), clear...); patchErr != nil {
+			return nil, ctrl.Result{}, patchErr
+		}
+		return nil, ctrl.Result{}, err
+	}
+	content, err := assemble.Assemble(inputs)
+	if err != nil {
+		if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "Engine", engine, &engine.Status.Conditions, engine.Generation, "InvalidRuleSet", fmt.Sprintf("Failed to assemble RuleSet content: %v", err)); patchErr != nil {
+			return nil, ctrl.Result{}, patchErr
+		}
+		return nil, ctrl.Result{}, err
+	}
+	contentHash, err := render.RuleSetContentHash(content)
+	if err != nil {
+		return nil, ctrl.Result{}, err
+	}
+	if contentHash != acceptedContentHash {
+		msg := fmt.Sprintf("RuleSet %s accepted content hash %s, assembled content is %s", ruleSet.Name, acceptedContentHash, contentHash)
+		result, err := r.awaitRuleSetAcceptance(ctx, log, req, engine, msg, acceptedRecordUnjustified(engine, &ruleSet))
+		return nil, result, err
+	}
+
+	// Accept only content the ECDS serving plane can deliver. Checking here
+	// keeps readiness honest: the publication reconciler refuses oversized
+	// payloads silently.
+	if err := validateContentLimits(content, r.Limits.WithDefaults()); err != nil {
+		if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "Engine", engine, &engine.Status.Conditions, engine.Generation, "InvalidRuleSet", fmt.Sprintf("RuleSet %s content exceeds delivery limits: %v", ruleSet.Name, err), func() { clearAcceptedConfiguration(engine) }); patchErr != nil {
+			return nil, ctrl.Result{}, patchErr
+		}
+		return nil, ctrl.Result{}, err
+	}
+
+	return &acceptedRuleSet{ruleSet: ruleSet, inputs: inputs, content: content, contentHash: contentHash}, ctrl.Result{}, nil
+}
+
+// ruleSetAcceptancePending returns a message and false when the RuleSet has no
+// accepted content for its current generation. The second return value is true
+// when the RuleSet may be used for rendering.
+func ruleSetAcceptancePending(ruleSet *wafv1alpha1.RuleSet) (string, bool) {
+	accepted := ruleSet.Status.AcceptedContent
+	switch {
+	case accepted == nil:
+		return fmt.Sprintf("RuleSet %s has not accepted any content yet", ruleSet.Name), false
+	case accepted.ObservedGeneration != ruleSet.Generation:
+		return fmt.Sprintf("RuleSet %s accepted content for generation %d, current generation is %d", ruleSet.Name, accepted.ObservedGeneration, ruleSet.Generation), false
+	}
+
+	degraded := apimeta.FindStatusCondition(ruleSet.Status.Conditions, conditionDegraded)
+	if degraded != nil && degraded.Status == metav1.ConditionTrue && degraded.ObservedGeneration == ruleSet.Generation {
+		return fmt.Sprintf("RuleSet %s is degraded: %s", ruleSet.Name, degraded.Message), false
+	}
+
+	return "", true
+}
+
+// acceptedRecordUnjustified reports whether the accepted configuration can no
+// longer be justified by the RuleSet. A different RuleSet object and a RuleSet
+// whose rules this build rejects are both un-reconstructable by definition. Any
+// other degradation may be a wait state (RuleData not found yet), so the record
+// is kept and the readiness deadline is the safety net.
+func acceptedRecordUnjustified(engine *wafv1alpha1.Engine, ruleSet *wafv1alpha1.RuleSet) bool {
+	if engine.Status == nil || engine.Status.AcceptedConfiguration == nil {
+		return false
+	}
+	if engine.Status.AcceptedConfiguration.RuleSetUID != string(ruleSet.UID) {
+		return true
+	}
+	return isConditionCurrent(ruleSet.Status.Conditions, conditionDegraded, ruleSetDegradedReasonInvalidRuleSet, ruleSet.Generation)
+}
+
+// awaitRuleSetAcceptance marks the Engine Progressing and requeues until the
+// RuleSet accepts content for its current generation. When clearAccepted is
+// set, the stale accepted record is dropped in the same patch.
+func (r *EngineReconciler) awaitRuleSetAcceptance(ctx context.Context, log logr.Logger, req ctrl.Request, engine *wafv1alpha1.Engine, message string, clearAccepted bool) (ctrl.Result, error) {
+	if engine.Status == nil {
+		engine.Status = &wafv1alpha1.EngineStatus{}
+	}
+	conditionStale := false
+	if current := apimeta.FindStatusCondition(engine.Status.Conditions, conditionProgressing); current == nil ||
+		current.Status != metav1.ConditionTrue ||
+		current.Reason != reasonAwaitingRuleSetAcceptance ||
+		current.ObservedGeneration != engine.Generation {
+		conditionStale = true
+	}
+	if conditionStale || (clearAccepted && engine.Status.AcceptedConfiguration != nil) {
+		patch := client.MergeFrom(engine.DeepCopy())
+		before := snapshotConditions(engine.Status.Conditions)
+		if clearAccepted {
+			clearAcceptedConfiguration(engine)
+		}
+		applyStatusProgressing(&engine.Status.Conditions, engine.Generation, reasonAwaitingRuleSetAcceptance, message)
+		if err := r.Status().Patch(ctx, engine, patch); err != nil {
+			logAPIError(log, req, "Engine", err, "Failed to patch status", engine)
+			return ctrl.Result{}, err
+		}
+		logConditionTransitions(log, req, "Engine", before, engine.Status.Conditions)
+	}
+
+	logInfo(log, req, "Engine", "Awaiting RuleSet acceptance", "message", message)
+	return ctrl.Result{RequeueAfter: ruleSetAcceptanceRetryAfter}, nil
+}
+
+// applyEnvoyFilter applies the EnvoyFilter attachment and returns the bootstrap
+// policy that was actually applied (which may be stricter than desired).
+func (r *EngineReconciler) applyEnvoyFilter(
+	ctx context.Context,
+	log logr.Logger,
+	req ctrl.Request,
+	engine *wafv1alpha1.Engine,
+	artifact render.Artifact,
+	binary render.BinaryRef,
+	desiredPolicy string,
+) (string, error) {
+	if len(r.xdsConfig.CAPEM) == 0 {
+		err := fmt.Errorf("CA PEM is not configured: set --xds-ca-path so the Gateway can verify the operator certificate")
+		if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "Engine", engine, &engine.Status.Conditions, engine.Generation, reasonTLSNotConfigured, err.Error()); patchErr != nil {
+			return "", patchErr
+		}
+		return "", err
+	}
+
+	var existing unstructured.Unstructured
+	existing.SetGroupVersionKind(envoyFilterGVK)
+	previous := ""
+	err := r.Get(ctx, types.NamespacedName{Namespace: engine.Namespace, Name: envoyFilterName(engine.Name)}, &existing)
+	switch {
+	case err == nil:
+		previous = existing.GetAnnotations()["waf.k8s.coraza.io/bootstrap-policy"]
+	case !apierrors.IsNotFound(err):
+		logAPIError(log, req, "Engine", err, "Failed to get EnvoyFilter", nil)
+		return "", err
+	}
+
+	accepted := engine.Status.AcceptedConfiguration
+	acceptedActive := accepted != nil &&
+		accepted.Version == artifact.Version &&
+		string(accepted.FailurePolicy) == desiredPolicy
+	applied := bootstrapPolicy(previous, desiredPolicy, acceptedActive)
+
+	envoyFilter, err := buildEnvoyFilter(engine, artifact, binary, EnvoyFilterConfig{
+		AdvertiseAddress: r.xdsConfig.AdvertiseAddress,
+		CAPEM:            r.xdsConfig.CAPEM,
+		IstioRevision:    r.istioRevision,
+	}, applied)
+	if err != nil {
+		if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "Engine", engine, &engine.Status.Conditions, engine.Generation, "ProvisioningFailed", fmt.Sprintf("Failed to build EnvoyFilter: %v", err)); patchErr != nil {
+			return "", patchErr
+		}
+		return "", err
+	}
+
+	if err := controllerutil.SetControllerReference(engine, envoyFilter, r.Scheme); err != nil {
+		logError(log, req, "Engine", err, "Failed to set owner reference on EnvoyFilter")
+		return "", err
+	}
+
+	if err := serverSideApply(ctx, r.Client, envoyFilter); err != nil {
+		if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "Engine", engine, &engine.Status.Conditions, engine.Generation, "ProvisioningFailed", fmt.Sprintf("Failed to create or update EnvoyFilter: %v", err)); patchErr != nil {
+			return "", patchErr
+		}
+		return "", err
+	}
+
+	logInfo(log, req, "Engine", "EnvoyFilter provisioned", "envoyFilter", envoyFilter.GetName(), "bootstrapPolicy", applied)
+	return applied, nil
+}
+
+// clearAcceptedConfiguration drops the accepted record of a delivery-limit
+// failure. The publisher then deletes the Engine's snapshot and readiness stops
+// depending on a record this build refuses to publish.
+func clearAcceptedConfiguration(engine *wafv1alpha1.Engine) {
+	if engine.Status != nil {
+		engine.Status.AcceptedConfiguration = nil
+	}
+}
+
+// patchAcceptedConfiguration records the accepted configuration and Ready
+// condition in a single status patch.
+func (r *EngineReconciler) patchAcceptedConfiguration(
+	ctx context.Context,
+	log logr.Logger,
+	req ctrl.Request,
+	engine *wafv1alpha1.Engine,
+	artifact render.Artifact,
+	binary render.BinaryRef,
+	ruleSetUID types.UID,
+	contentHash, failurePolicy string,
+) error {
+	if engine.Status == nil {
+		engine.Status = &wafv1alpha1.EngineStatus{}
+	}
+
+	message := fmt.Sprintf("Accepted configuration %s provisioned", artifact.Version)
+	patch := client.MergeFrom(engine.DeepCopy())
+	before := snapshotConditions(engine.Status.Conditions)
+	engine.Status.AcceptedConfiguration = &wafv1alpha1.EngineAcceptedConfiguration{
+		ObservedGeneration:     engine.Generation,
+		RenderingSchemaVersion: render.RenderingSchemaVersion,
+		Version:                artifact.Version,
+		RuleSetUID:             string(ruleSetUID),
+		RuleSetContentHash:     contentHash,
+		BinaryURL:              binary.URL,
+		WasmSHA256:             binary.SHA256,
+		FailurePolicy:          wafv1alpha1.FailurePolicy(failurePolicy),
+		EmptyRulesPolicy:       wafv1alpha1.EmptyRulesPolicy(artifact.EmptyRulesPolicy),
+		FilterStateLogs:        filterStateLogsMode(artifact.EnableFilterStateLogs),
+		DriverType:             wafv1alpha1.DriverType(artifact.DriverType),
+		VM: wafv1alpha1.EngineAcceptedVMSettings{
+			Runtime:     artifact.VM.Runtime,
+			VMID:        artifact.VM.VMID,
+			CodeTimeout: artifact.VM.CodeTimeout.String(),
+		},
+	}
+	applyStatusReady(&engine.Status.Conditions, engine.Generation, reasonConfigurationAccepted, message)
+	r.Recorder.Eventf(engine, nil, "Normal", reasonConfigurationAccepted, "Provision", truncateEventNote(message))
+	if err := r.Status().Patch(ctx, engine, patch); err != nil {
+		logAPIError(log, req, "Engine", err, "Failed to patch status", engine)
+		return err
+	}
+	logConditionTransitions(log, req, "Engine", before, engine.Status.Conditions)
+	return nil
+}
+
+func engineFailurePolicy(engine *wafv1alpha1.Engine) string {
+	if engine.Spec.FailurePolicy == "" {
+		return bootstrapPolicyFail
+	}
+	return string(engine.Spec.FailurePolicy)
+}
+
+// filterStateLogsMode records the resolved filter-state-log rendering input.
+func filterStateLogsMode(enabled bool) wafv1alpha1.FilterStateLogsMode {
+	if enabled {
+		return wafv1alpha1.FilterStateLogsEnabled
+	}
+	return wafv1alpha1.FilterStateLogsDisabled
 }
 
 func setObservabilityReady(conditions *[]metav1.Condition, generation int64, telemetryErr error) {
@@ -149,121 +473,6 @@ func setObservabilityReady(conditions *[]metav1.Condition, generation int64, tel
 		return
 	}
 	setConditionTrue(conditions, generation, conditionObservabilityReady, "TelemetryReady", "Telemetry successfully created or updated")
-}
-
-func telemetryRequeueAfter(renewAt time.Time, telemetryErr error) time.Duration {
-	requeueAfter := max(time.Until(renewAt), time.Second)
-	if telemetryErr != nil && requeueAfter > telemetryRetryAfter {
-		return telemetryRetryAfter
-	}
-	return requeueAfter
-}
-
-// applyWasmPlugin builds the WasmPlugin resource, sets the controller reference,
-// and applies it via server-side apply.
-func (r *EngineReconciler) applyWasmPlugin(ctx context.Context, log logr.Logger, req ctrl.Request, engine *wafv1alpha1.Engine, cacheToken string) (*unstructured.Unstructured, error) {
-	logDebug(log, req, "Engine", "Building WasmPlugin resource")
-	wasmURL, fromSpec := r.wasmPluginOCIURLSource(engine)
-	if fromSpec {
-		logDebug(log, req, "Engine", "WasmPlugin OCI URL from Engine spec", "url", wasmURL)
-	} else {
-		logDebug(log, req, "Engine", "WasmPlugin OCI URL from operator default", "url", wasmURL)
-	}
-	wasmPlugin := r.buildWasmPlugin(engine, wasmURL, cacheToken)
-
-	logDebug(log, req, "Engine", "Setting controller reference on WasmPlugin")
-	if err := controllerutil.SetControllerReference(engine, wasmPlugin, r.Scheme); err != nil {
-		logError(log, req, "Engine", err, "Failed to set owner reference on WasmPlugin")
-		return nil, err
-	}
-
-	logDebug(log, req, "Engine", "Applying WasmPlugin", "wasmPluginName", wasmPlugin.GetName())
-	if err := serverSideApply(ctx, r.Client, wasmPlugin); err != nil {
-		logAPIError(log, req, "Engine", err, "Failed to create or update WasmPlugin", wasmPlugin)
-		return nil, err
-	}
-
-	logInfo(log, req, "Engine", "WasmPlugin provisioned", "wasmNamespace", wasmPlugin.GetNamespace(), "wasmName", wasmPlugin.GetName())
-	return wasmPlugin, nil
-}
-
-// -----------------------------------------------------------------------------
-// Engine Controller - WASM Driver - WasmPlugin Builder
-// -----------------------------------------------------------------------------
-
-func (r *EngineReconciler) wasmPluginOCIURLSource(engine *wafv1alpha1.Engine) (url string, fromSpec bool) {
-	if engine.Spec.Driver.Wasm != nil && engine.Spec.Driver.Wasm.Image != "" {
-		return engine.Spec.Driver.Wasm.Image, true
-	}
-	return r.defaultWasmImage, false
-}
-
-func (r *EngineReconciler) buildWasmPlugin(engine *wafv1alpha1.Engine, wasmURL string, cacheToken string) *unstructured.Unstructured {
-	rulesetKey := fmt.Sprintf("%s/%s", engine.Namespace, engine.Spec.RuleSet.Name)
-
-	failurePolicy := wafv1alpha1.FailurePolicyFail
-	if engine.Spec.FailurePolicy != "" {
-		failurePolicy = engine.Spec.FailurePolicy
-	}
-
-	pluginConfig := map[string]any{
-		"cache_server_instance":    rulesetKey,
-		"cache_server_cluster":     r.ruleSetCacheServerCluster,
-		"failure_policy":           string(failurePolicy),
-		"cache_token":              cacheToken,
-		"enable_filter_state_logs": observabilityEnabled(engine),
-		"engine":                   engine.Name,
-	}
-
-	if engine.Spec.RuleSetCacheServer != nil {
-		pluginConfig["rule_reload_interval_seconds"] = engine.Spec.RuleSetCacheServer.PollIntervalSeconds
-	}
-
-	ws := targetLabelSelector(engine)
-	matchLabels := map[string]string{}
-	if ws != nil && ws.MatchLabels != nil {
-		matchLabels = ws.MatchLabels
-	}
-
-	wasmPlugin := &unstructured.Unstructured{
-		Object: map[string]any{
-			"apiVersion": "extensions.istio.io/v1alpha1",
-			"kind":       "WasmPlugin",
-			"metadata": map[string]any{
-				"name":      wasmPluginName(engine.Name),
-				"namespace": engine.Namespace,
-			},
-			"spec": map[string]any{
-				"url":          wasmURL,
-				"pluginConfig": pluginConfig,
-				"selector": map[string]any{
-					"matchLabels": matchLabels,
-				},
-			},
-		},
-	}
-
-	if engine.Spec.Driver.Wasm != nil && engine.Spec.Driver.Wasm.ImagePullSecret != "" {
-		spec := wasmPlugin.Object["spec"].(map[string]any)
-		spec["imagePullSecret"] = engine.Spec.Driver.Wasm.ImagePullSecret
-	}
-
-	wasmPlugin.SetGroupVersionKind(schema.GroupVersionKind{
-		Group:   "extensions.istio.io",
-		Version: "v1alpha1",
-		Kind:    "WasmPlugin",
-	})
-
-	if r.istioRevision != "" {
-		labels := wasmPlugin.GetLabels()
-		if labels == nil {
-			labels = map[string]string{}
-		}
-		labels["istio.io/rev"] = r.istioRevision
-		wasmPlugin.SetLabels(labels)
-	}
-
-	return wasmPlugin
 }
 
 func observabilityEnabled(engine *wafv1alpha1.Engine) bool {
@@ -278,3 +487,64 @@ func observabilityEnabled(engine *wafv1alpha1.Engine) bool {
 // gatewayNameLabel is the well-known label that Istio applies to Gateway pods
 // to identify which Gateway resource they belong to.
 const gatewayNameLabel = "gateway.networking.k8s.io/gateway-name"
+
+var binarySHA256Pattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
+
+// resolveBinaryRef returns the raw WASM binary location and digest for an
+// Engine. An explicit spec.driver.wasm.url/sha256 pair wins; omitting both
+// selects the module bundled with the operator.
+//
+// shortcut: full SSRF/host-class validation and custom WAsm CA are Phase 5; add them here.
+func (r *EngineReconciler) resolveBinaryRef(engine *wafv1alpha1.Engine) (render.BinaryRef, error) {
+	var explicitURL, explicitSHA string
+	if engine.Spec.Driver.Wasm != nil {
+		explicitURL = engine.Spec.Driver.Wasm.URL
+		explicitSHA = engine.Spec.Driver.Wasm.SHA256
+	}
+
+	switch {
+	case explicitURL != "" && explicitSHA != "":
+		ref := render.BinaryRef{URL: explicitURL, SHA256: explicitSHA}
+		if err := validateBinaryRefBasic(ref); err != nil {
+			return render.BinaryRef{}, err
+		}
+		return ref, nil
+
+	case explicitURL == "" && explicitSHA == "":
+		manifest, _, err := assets.ResolveDefault()
+		if err != nil {
+			return render.BinaryRef{}, fmt.Errorf("resolve bundled WASM module: %w", err)
+		}
+		ref := render.BinaryRef{
+			URL:    strings.TrimRight(r.assetBaseURL, "/") + "/wasm/" + manifest.SHA256 + ".wasm",
+			SHA256: manifest.SHA256,
+		}
+		if err := validateBinaryRefBasic(ref); err != nil {
+			return render.BinaryRef{}, fmt.Errorf("resolve bundled WASM module: %w", err)
+		}
+		return ref, nil
+
+	default:
+		return render.BinaryRef{}, errors.New("spec.driver.wasm.url and spec.driver.wasm.sha256 must be set together; omit both to use the bundled module")
+	}
+}
+
+// validateBinaryRefBasic validates the URL shape and digest of a binary
+// reference. The CEL rules already reject these shapes for new writes; this is
+// the runtime guard for already-stored objects.
+func validateBinaryRefBasic(ref render.BinaryRef) error {
+	parsed, err := url.Parse(ref.URL)
+	if err != nil {
+		return errors.New("parse WASM binary URL: invalid URL")
+	}
+	if parsed.Scheme != "https" || parsed.Host == "" {
+		return errors.New("WASM binary URL must be an absolute https URL with a host")
+	}
+	if parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return errors.New("WASM binary URL must not contain userinfo, query, or fragment")
+	}
+	if !binarySHA256Pattern.MatchString(ref.SHA256) {
+		return fmt.Errorf("WASM sha256 %q must be 64 lowercase hex characters", ref.SHA256)
+	}
+	return nil
+}

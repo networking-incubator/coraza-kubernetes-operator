@@ -116,11 +116,9 @@ type EngineSpec struct {
 	// +default="fail"
 	FailurePolicy FailurePolicy `json:"failurePolicy,omitempty"`
 
-	// ruleSetCacheServer contains configuration for the ruleset cache server.
-	//
-	// When omitted, no cache server will be used and no rulesets will be
-	// dynamically loaded. This implies that your Engine will be deployed with
-	// all rules statically embedded.
+	// ruleSetCacheServer is deprecated and ignored. The operator distributes
+	// rules through ECDS and does not start the legacy HTTP rule server, so
+	// this field has no effect.
 	//
 	// +optional
 	RuleSetCacheServer *RuleSetCacheServerConfig `json:"ruleSetCacheServer,omitempty"`
@@ -191,6 +189,144 @@ type EngineStatus struct {
 	// +kubebuilder:validation:MaxItems=16
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty" patchStrategy:"merge" patchMergeKey:"type" protobuf:"bytes,1,rep,name=conditions"`
+
+	// acceptedConfiguration records the last accepted complete Engine
+	// configuration. It survives desired-input degradation and is not a payload
+	// store.
+	//
+	// +optional
+	//nolint:kubeapilinter // optional pointer distinguishes absence from an accepted record
+	AcceptedConfiguration *EngineAcceptedConfiguration `json:"acceptedConfiguration,omitempty"`
+}
+
+// EngineAcceptedConfiguration records the Engine configuration accepted by the
+// leader and the inputs its content hash was derived from.
+type EngineAcceptedConfiguration struct {
+	// observedGeneration is the Engine generation whose configuration was
+	// accepted.
+	//
+	// +required
+	// +kubebuilder:validation:Minimum=1
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+
+	// renderingSchemaVersion is the schema version of the rendered runtime
+	// configuration.
+	//
+	// +required
+	// +kubebuilder:validation:Minimum=1
+	RenderingSchemaVersion int32 `json:"renderingSchemaVersion,omitempty"`
+
+	// version is the content-addressed version of the accepted configuration,
+	// in the form sha256:<64 lowercase hexadecimal characters>.
+	//
+	// +required
+	// +kubebuilder:validation:MinLength=71
+	// +kubebuilder:validation:MaxLength=71
+	Version string `json:"version,omitempty"`
+
+	// ruleSetUID is the UID of the RuleSet used for the accepted configuration.
+	//
+	// +required
+	// +kubebuilder:validation:MinLength=36
+	// +kubebuilder:validation:MaxLength=36
+	RuleSetUID string `json:"ruleSetUID,omitempty"`
+
+	// ruleSetContentHash is the accepted RuleSet content hash, in the form
+	// sha256:<64 lowercase hexadecimal characters>.
+	//
+	// +required
+	// +kubebuilder:validation:MinLength=71
+	// +kubebuilder:validation:MaxLength=71
+	RuleSetContentHash string `json:"ruleSetContentHash,omitempty"`
+
+	// binaryURL is the URL of the raw WASM binary used by the accepted
+	// configuration.
+	//
+	// +required
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=2048
+	BinaryURL string `json:"binaryURL,omitempty"`
+
+	// wasmSHA256 is the lowercase hexadecimal SHA-256 of the WASM binary used
+	// by the accepted configuration.
+	//
+	// +required
+	// +kubebuilder:validation:MinLength=64
+	// +kubebuilder:validation:MaxLength=64
+	WasmSHA256 string `json:"wasmSHA256,omitempty"`
+
+	// failurePolicy is the failure policy of the accepted configuration.
+	//
+	// +required
+	FailurePolicy FailurePolicy `json:"failurePolicy,omitempty"`
+
+	// emptyRulesPolicy is the resolved empty-rules policy of the accepted
+	// configuration. Publication requires it; records written before this
+	// field existed mismatch and wait for re-acceptance.
+	//
+	// +optional
+	// +kubebuilder:validation:Enum=Reject;Allow
+	EmptyRulesPolicy EmptyRulesPolicy `json:"emptyRulesPolicy,omitempty"`
+
+	// filterStateLogs reports whether the accepted configuration renders WAF
+	// filter-state logging. Publication requires it; records written before
+	// this field existed mismatch and wait for re-acceptance.
+	//
+	// +optional
+	FilterStateLogs FilterStateLogsMode `json:"filterStateLogs,omitempty"`
+
+	// driverType is the resolved driver type of the accepted configuration.
+	// Publication requires it; records written before this field existed
+	// mismatch and wait for re-acceptance.
+	//
+	// +optional
+	DriverType DriverType `json:"driverType,omitempty"`
+
+	// vm records the resolved WASM VM settings of the accepted configuration.
+	// Publication requires it; records written before this field existed
+	// mismatch and wait for re-acceptance.
+	//
+	// +optional
+	VM EngineAcceptedVMSettings `json:"vm,omitempty,omitzero"`
+}
+
+// FilterStateLogsMode controls whether WAF filter-state logging is rendered.
+//
+// +kubebuilder:validation:Enum=Enabled;Disabled
+type FilterStateLogsMode string
+
+const (
+	// FilterStateLogsEnabled renders WAF filter-state logging.
+	FilterStateLogsEnabled FilterStateLogsMode = "Enabled"
+	// FilterStateLogsDisabled does not render WAF filter-state logging.
+	FilterStateLogsDisabled FilterStateLogsMode = "Disabled"
+)
+
+// EngineAcceptedVMSettings records the resolved WASM VM settings of an
+// accepted configuration.
+type EngineAcceptedVMSettings struct {
+	// runtime is the resolved WASM runtime of the accepted configuration.
+	//
+	// +required
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	Runtime string `json:"runtime,omitempty"`
+
+	// vmID is the resolved WASM VM ID of the accepted configuration.
+	//
+	// +required
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	VMID string `json:"vmID,omitempty"`
+
+	// codeTimeout is the resolved WASM code fetch and execution timeout of
+	// the accepted configuration, as a Go duration string (for example
+	// "10s").
+	//
+	// +required
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=32
+	CodeTimeout string `json:"codeTimeout,omitempty"`
 }
 
 // -----------------------------------------------------------------------------

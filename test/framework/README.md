@@ -105,7 +105,6 @@ SecRule ARGS "@contains attack" "id:1,phase:2,deny,status:403"`)
 | `ExpectEngineDegraded(ns, name)` | Poll until Engine condition Degraded=True |
 | `ExpectGatewayProgrammed(ns, name)` | Poll until Gateway condition Programmed=True |
 | `ExpectGatewayAccepted(ns, name)` | Poll until Gateway condition Accepted=True |
-| `ExpectWasmPluginExists(ns, name)` | Poll until WasmPlugin exists |
 | `ExpectResourceGone(ns, name, gvr)` | Poll until resource is deleted |
 | `ExpectCondition(ns, name, gvr, type, status)` | Generic condition poll |
 | `ExpectCreateFails(msg, fn)` | Assert fn returns error containing msg |

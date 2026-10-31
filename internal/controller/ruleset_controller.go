@@ -22,8 +22,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/corazawaf/coraza/v3"
 	"github.com/go-logr/logr"
+	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -33,11 +33,15 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	wafv1alpha1 "github.com/networking-incubator/coraza-kubernetes-operator/api/v1alpha1"
+	"github.com/networking-incubator/coraza-kubernetes-operator/internal/ecds/render"
+	"github.com/networking-incubator/coraza-kubernetes-operator/internal/rulesets/assemble"
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/rulesets/cache"
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/rulesets/validation"
 )
@@ -152,42 +156,43 @@ func (r *RuleSetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		r.reconcileRuleDataMetrics(ctx, req.Namespace)
 	}()
 
-	logDebug(log, req, "RuleSet", "Initializing status")
-	if err := r.initializeStatus(ctx, log, req, &ruleset); err != nil {
-		return ctrl.Result{}, err
+	logDebug(log, req, "RuleSet", "Preparing inputs")
+	prepared, result, err := r.prepareRuleSetInputs(ctx, log, req, &ruleset)
+	if prepared == nil {
+		return result, err
 	}
+	inputs := prepared.inputs
+	content := prepared.content
+	contentHash := prepared.contentHash
+	assembleDur := prepared.assembleDur
+	alreadyInvalid := prepared.alreadyInvalid
 
-	if msg := findDuplicateReferences(&ruleset); msg != "" {
-		logInfo(log, req, "RuleSet", "Duplicate references detected", "detail", msg)
-		if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "RuleSet", &ruleset, &ruleset.Status.Conditions, ruleset.Generation, "DuplicateReference", msg); patchErr != nil {
-			return ctrl.Result{}, patchErr
+	// The directive and Include guard is cheap and runs before the accepted
+	// fast path: content accepted by an older build may still carry a host
+	// writing directive or an alias the plugin cannot resolve. Rejecting it
+	// marks the RuleSet Degraded, which stops the Engine from publishing new
+	// configuration from it. The Engine also clears its accepted configuration,
+	// unlike a wait state: acceptedRecordUnjustified treats a rejected RuleSet
+	// as un-reconstructable.
+	guardStart := time.Now()
+	if guardErr := validation.ValidateIncludes(content.Rules, content.DataFiles); guardErr != nil {
+		if err := r.markRulesInvalid(ctx, log, req, &ruleset, contentHash, guardErr); !errors.Is(err, errRuleSetRulesInvalid) {
+			return ctrl.Result{}, err
+		}
+		if !alreadyInvalid {
+			r.Metrics.IncRuleSetValidation(req.Namespace, "invalid")
+			r.Metrics.ObserveRuleSetValidation(req.Namespace, "invalid", assembleDur+time.Since(guardStart))
 		}
 		return ctrl.Result{}, nil
 	}
 
-	logDebug(log, req, "RuleSet", "Loading RuleData objects")
-	dataFiles, done, err := r.loadData(ctx, log, req, &ruleset)
-	if done || err != nil {
-		return ctrl.Result{}, err
-	}
-
-	logDebug(log, req, "RuleSet", "Loading RuleSource objects")
-	aggregatedRules, done, requeueAfter, err := r.loadSources(ctx, log, req, &ruleset)
-	if err != nil {
-		return ctrl.Result{}, err
-	}
-	if done {
-		return ctrl.Result{RequeueAfter: requeueAfter}, nil
-	}
-
-	alreadyInvalid := isConditionCurrent(ruleset.Status.Conditions, conditionDegraded, ruleSetDegradedReasonInvalidRuleSet, ruleset.Generation)
-	alreadyCached := isConditionCurrent(ruleset.Status.Conditions, conditionReady, ruleSetReadyReasonRulesCached, ruleset.Generation)
-	cacheKey := fmt.Sprintf("%s/%s", ruleset.Namespace, ruleset.Name)
-	if alreadyCached && r.Cache.EntryMatches(cacheKey, aggregatedRules, dataFiles) {
+	alreadyAccepted := isConditionCurrent(ruleset.Status.Conditions, conditionReady, ruleSetReadyReasonRulesAccepted, ruleset.Generation) &&
+		isRuleSetContentAccepted(&ruleset, contentHash)
+	if alreadyAccepted {
 		// Annotation-only reconciles (e.g. removing skip-unsupported-rules-check) do not
 		// bump generation; still re-run unsupported-rule policy before skipping work.
 		if ruleset.Annotations[wafv1alpha1.AnnotationSkipUnsupportedRulesCheck] != "true" {
-			foundUnsupportedRules, _, err := r.rejectUnsupportedRules(ctx, log, req, &ruleset, aggregatedRules)
+			foundUnsupportedRules, _, err := r.rejectUnsupportedRules(ctx, log, req, &ruleset, content.Rules)
 			if err != nil {
 				return ctrl.Result{}, err
 			}
@@ -200,41 +205,22 @@ func (r *RuleSetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 
 	logInfo(log, req, "RuleSet", "Validating aggregated rules")
 
-	pmStart := time.Now()
-	if err := validation.ValidatePMFromFileData(aggregatedRules, dataFiles); err != nil {
-		pmDur := time.Since(pmStart)
-		if !alreadyInvalid {
-			msg := fmt.Sprintf("Ruleset is invalid\n%v", err)
-			if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "RuleSet", &ruleset, &ruleset.Status.Conditions, ruleset.Generation, ruleSetDegradedReasonInvalidRuleSet, msg); patchErr != nil {
-				return ctrl.Result{}, patchErr
-			}
-			r.Metrics.IncRuleSetValidation(req.Namespace, "invalid")
-			r.Metrics.ObserveRuleSetValidation(req.Namespace, "invalid", pmDur)
-		}
-		return ctrl.Result{}, nil
-	}
-	pmDur := time.Since(pmStart)
-
-	fsRules := getDataFilesystem(dataFiles)
-	conf := coraza.NewWAFConfig().WithDirectives(aggregatedRules)
-	if fsRules != nil {
-		conf = conf.WithRootFS(fsRules)
-	}
-	corazaDur, err := r.validateAggregatedRules(ctx, log, req, &ruleset, conf)
+	conf := validation.BuildWAFConfig(content.Rules, content.DataFiles)
+	corazaDur, err := r.validateAggregatedRules(ctx, log, req, &ruleset, contentHash, conf)
 	if err != nil {
 		if errors.Is(err, errRuleSetRulesInvalid) {
 			if !alreadyInvalid {
 				r.Metrics.IncRuleSetValidation(req.Namespace, "invalid")
-				r.Metrics.ObserveRuleSetValidation(req.Namespace, "invalid", pmDur+corazaDur)
+				r.Metrics.ObserveRuleSetValidation(req.Namespace, "invalid", assembleDur+corazaDur)
 			}
 			return ctrl.Result{}, nil
 		}
 		return ctrl.Result{}, err
 	}
-	validationDur := pmDur + corazaDur
+	validationDur := assembleDur + corazaDur
 
 	logDebug(log, req, "RuleSet", "Checking for unsupported rules")
-	foundUnsupportedRules, unsupportedMsg, err := r.rejectUnsupportedRules(ctx, log, req, &ruleset, aggregatedRules)
+	foundUnsupportedRules, unsupportedMsg, err := r.rejectUnsupportedRules(ctx, log, req, &ruleset, content.Rules)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -242,15 +228,99 @@ func (r *RuleSetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, nil
 	}
 
-	logInfo(log, req, "RuleSet", "Caching rules")
-	if err := r.cacheRules(ctx, log, req, &ruleset, aggregatedRules, dataFiles, unsupportedMsg); err != nil {
+	logInfo(log, req, "RuleSet", "Accepting rules")
+	result, err = r.acceptRules(ctx, log, req, &ruleset, content, inputs, unsupportedMsg)
+	if err != nil {
 		return ctrl.Result{}, err
 	}
-	if !alreadyCached {
+	if !result.Requeue && result.RequeueAfter == 0 && !alreadyAccepted {
 		r.Metrics.IncRuleSetValidation(req.Namespace, "valid")
 		r.Metrics.ObserveRuleSetValidation(req.Namespace, "valid", validationDur)
 	}
-	return ctrl.Result{}, nil
+	return result, nil
+}
+
+// preparedRuleSet is the assembled content and its validation timing.
+type preparedRuleSet struct {
+	inputs         assemble.Inputs
+	content        assemble.Content
+	contentHash    string
+	assembleDur    time.Duration
+	alreadyInvalid bool
+}
+
+// prepareRuleSetInputs initializes status, loads the referenced inputs and
+// assembles the rule text. A nil result means reconcile should return the
+// given result.
+func (r *RuleSetReconciler) prepareRuleSetInputs(ctx context.Context, log logr.Logger, req ctrl.Request, ruleset *wafv1alpha1.RuleSet) (*preparedRuleSet, ctrl.Result, error) {
+	logDebug(log, req, "RuleSet", "Initializing status")
+	if err := r.initializeStatus(ctx, log, req, ruleset); err != nil {
+		return nil, ctrl.Result{}, err
+	}
+
+	if msg := findDuplicateReferences(ruleset); msg != "" {
+		logInfo(log, req, "RuleSet", "Duplicate references detected", "detail", msg)
+		if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "RuleSet", ruleset, &ruleset.Status.Conditions, ruleset.Generation, "DuplicateReference", msg); patchErr != nil {
+			return nil, ctrl.Result{}, patchErr
+		}
+		return nil, ctrl.Result{}, nil
+	}
+
+	logDebug(log, req, "RuleSet", "Loading RuleData objects")
+	dataInputs, done, err := r.loadData(ctx, log, req, ruleset)
+	if done || err != nil {
+		return nil, ctrl.Result{}, err
+	}
+
+	logDebug(log, req, "RuleSet", "Loading RuleSource objects")
+	sourceInputs, done, requeueAfter, err := r.loadSources(ctx, log, req, ruleset)
+	if err != nil {
+		return nil, ctrl.Result{}, err
+	}
+	if done {
+		return nil, ctrl.Result{RequeueAfter: requeueAfter}, nil
+	}
+
+	inputs := assemble.Inputs{
+		RuleSetUID:       ruleset.UID,
+		RuleSetName:      ruleset.Name,
+		Namespace:        ruleset.Namespace,
+		EmptyRulesPolicy: assemble.EmptyRulesPolicy(ruleset.Spec.EmptyRulesPolicy),
+		Sources:          sourceInputs,
+		Data:             dataInputs,
+	}
+
+	alreadyInvalid := isConditionCurrent(ruleset.Status.Conditions, conditionDegraded, ruleSetDegradedReasonInvalidRuleSet, ruleset.Generation)
+
+	logInfo(log, req, "RuleSet", "Assembling rules")
+	assembleStart := time.Now()
+	content, err := assemble.Assemble(inputs)
+	if err != nil {
+		msg := fmt.Sprintf("Ruleset is invalid\n%v", err)
+		if !alreadyInvalid || invalidRuleSetConditionMessage(ruleset) != msg {
+			assembleDur := time.Since(assembleStart)
+			if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "RuleSet", ruleset, &ruleset.Status.Conditions, ruleset.Generation, ruleSetDegradedReasonInvalidRuleSet, msg); patchErr != nil {
+				return nil, ctrl.Result{}, patchErr
+			}
+			r.Metrics.IncRuleSetValidation(req.Namespace, "invalid")
+			r.Metrics.ObserveRuleSetValidation(req.Namespace, "invalid", assembleDur)
+		}
+		return nil, ctrl.Result{}, nil
+	}
+	assembleDur := time.Since(assembleStart)
+
+	contentHash, err := render.RuleSetContentHash(content)
+	if err != nil {
+		return nil, ctrl.Result{}, err
+	}
+
+	return &preparedRuleSet{
+		inputs:         inputs,
+		content:        content,
+		contentHash:    contentHash,
+		assembleDur:    assembleDur,
+		alreadyInvalid: alreadyInvalid,
+	}, ctrl.Result{}, nil
 }
 
 // -----------------------------------------------------------------------------
@@ -332,4 +402,86 @@ func (r *RuleSetReconciler) patchRuleSetAwaitingRuleSources(ctx context.Context,
 	}
 	logConditionTransitions(log, req, "RuleSet", before, ruleset.Status.Conditions)
 	return nil
+}
+
+// -----------------------------------------------------------------------------
+// RuleSet Controller - Watch Predicates
+// -----------------------------------------------------------------------------
+
+// findRuleSetsForRuleSource maps a RuleSource to the RuleSets that reference it
+// using the spec.sources.name field index registered in SetupWithManager.
+func (r *RuleSetReconciler) findRuleSetsForRuleSource(ctx context.Context, ruleSource client.Object) []reconcile.Request {
+	return r.findRuleSetsBy(ctx, ruleSource.GetNamespace(), "spec.sources.name", ruleSource.GetName())
+}
+
+// findRuleSetsForRuleData maps a RuleData to the RuleSets that reference it
+// using the spec.data.name field index registered in SetupWithManager.
+func (r *RuleSetReconciler) findRuleSetsForRuleData(ctx context.Context, ruleData client.Object) []reconcile.Request {
+	return r.findRuleSetsBy(ctx, ruleData.GetNamespace(), "spec.data.name", ruleData.GetName())
+}
+
+// enqueueForRuleDataChange maps RuleData events to RuleSet reconciles when
+// referenced, and refreshes namespace-level ruledata totals when not.
+func (r *RuleSetReconciler) enqueueForRuleDataChange(ctx context.Context, ruleData client.Object) []reconcile.Request {
+	reqs := r.findRuleSetsForRuleData(ctx, ruleData)
+	if len(reqs) > 0 {
+		return reqs
+	}
+	r.reconcileRuleDataMetrics(ctx, ruleData.GetNamespace())
+	return nil
+}
+
+// findRuleSetsBy lists RuleSets matching a field index value and returns
+// reconcile requests for each.
+func (r *RuleSetReconciler) findRuleSetsBy(ctx context.Context, namespace, indexKey, indexValue string) []reconcile.Request {
+	log := logf.FromContext(ctx)
+
+	var ruleSetList wafv1alpha1.RuleSetList
+	if err := r.List(ctx, &ruleSetList,
+		client.InNamespace(namespace),
+		client.MatchingFields{indexKey: indexValue},
+	); err != nil {
+		log.Error(err, "RuleSet: Failed to list RuleSets", "namespace", namespace, "index", indexKey, "value", indexValue)
+		return nil
+	}
+
+	return collectRequests(ruleSetList.Items, func(_ *wafv1alpha1.RuleSet) bool { return true })
+}
+
+// ruleSourceWatchPredicate enqueues referencing RuleSets when a RuleSource's
+// spec changes (generation), validation annotation changes, or status changes
+// (e.g. RuleSourceReconciler validation outcome) without a spec bump.
+func ruleSourceWatchPredicate() predicate.Predicate {
+	statusChanged := predicate.Funcs{
+		CreateFunc: func(event.CreateEvent) bool { return true },
+		DeleteFunc: func(event.DeleteEvent) bool { return true },
+		UpdateFunc: func(e event.UpdateEvent) bool {
+			oldRS, ok1 := e.ObjectOld.(*wafv1alpha1.RuleSource)
+			newRS, ok2 := e.ObjectNew.(*wafv1alpha1.RuleSource)
+			if !ok1 || !ok2 {
+				return false
+			}
+			return !apiequality.Semantic.DeepEqual(oldRS.Status, newRS.Status)
+		},
+		GenericFunc: func(event.GenericEvent) bool { return false },
+	}
+	return predicate.Or(
+		predicate.GenerationChangedPredicate{},
+		annotationChangedPredicate(wafv1alpha1.AnnotationSkipValidation),
+		statusChanged,
+	)
+}
+
+// ruleDataWatchPredicate enqueues referencing RuleSets (or refreshes namespace
+// ruledata totals) when RuleData is created, updated, or deleted.
+func ruleDataWatchPredicate() predicate.Predicate {
+	return predicate.Or(
+		predicate.GenerationChangedPredicate{},
+		predicate.Funcs{
+			CreateFunc:  func(event.CreateEvent) bool { return true },
+			DeleteFunc:  func(event.DeleteEvent) bool { return true },
+			UpdateFunc:  func(event.UpdateEvent) bool { return false },
+			GenericFunc: func(event.GenericEvent) bool { return false },
+		},
+	)
 }

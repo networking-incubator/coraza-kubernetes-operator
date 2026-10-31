@@ -18,70 +18,85 @@ package main
 
 import (
 	"crypto/tls"
-	"strings"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/labels"
+	ctrlcache "sigs.k8s.io/controller-runtime/pkg/cache"
 
-	wafv1alpha1 "github.com/networking-incubator/coraza-kubernetes-operator/api/v1alpha1"
-	"github.com/networking-incubator/coraza-kubernetes-operator/internal/defaults"
+	"github.com/networking-incubator/coraza-kubernetes-operator/internal/xds"
 )
 
 // -----------------------------------------------------------------------------
-// validateDefaultWasmImage Tests
+// buildCacheOptions Tests
 // -----------------------------------------------------------------------------
 
-func TestValidateDefaultWasmImage(t *testing.T) {
-	t.Parallel()
+func TestBuildCacheOptionsScopesPodsToGatewayDataPlane(t *testing.T) {
+	opts := buildCacheOptions("operators")
 
-	t.Run("empty", func(t *testing.T) {
-		t.Parallel()
-		assert.Error(t, validateDefaultWasmImage(""))
-	})
-
-	t.Run("not_oci", func(t *testing.T) {
-		t.Parallel()
-		assert.Error(t, validateDefaultWasmImage("docker.io/foo:latest"))
-		assert.Error(t, validateDefaultWasmImage("http://example/wasm"))
-	})
-
-	t.Run("too_long", func(t *testing.T) {
-		t.Parallel()
-		long := "oci://" + strings.Repeat("a", wafv1alpha1.MaxImageLen+1-len("oci://"))
-		require.Len(t, long, wafv1alpha1.MaxImageLen+1)
-		assert.Error(t, validateDefaultWasmImage(long))
-	})
-
-	t.Run("max_len_ok", func(t *testing.T) {
-		t.Parallel()
-		s := "oci://" + strings.Repeat("a", wafv1alpha1.MaxImageLen-len("oci://"))
-		require.Len(t, s, wafv1alpha1.MaxImageLen)
-		assert.NoError(t, validateDefaultWasmImage(s))
-	})
-
-	t.Run("valid", func(t *testing.T) {
-		t.Parallel()
-		assert.NoError(t, validateDefaultWasmImage("oci://ghcr.io/org/coraza-proxy-wasm:tag"))
-	})
+	var byObject ctrlcache.ByObject
+	found := false
+	for object, config := range opts.ByObject {
+		if _, ok := object.(*corev1.Pod); ok {
+			byObject, found = config, true
+		}
+	}
+	require.True(t, found, "the Pod informer must be scoped")
+	require.NotNil(t, byObject.Transform, "the Pod informer must strip PodStatus churn")
+	assert.True(t, byObject.Label.Matches(labels.Set{xds.GatewayNameLabel: "gw"}),
+		"the Pod informer must only cache pods carrying the gateway-name label")
+	assert.False(t, byObject.Label.Matches(labels.Set{"app": "gw"}),
+		"the Pod informer must not cache non-gateway pods")
 }
 
 // -----------------------------------------------------------------------------
-// resolveDefaultWasmImage Tests
+// Listener address Tests
 // -----------------------------------------------------------------------------
 
-func TestResolveDefaultWasmImage(t *testing.T) {
-	t.Run("env var overrides hardcoded default", func(t *testing.T) {
-		t.Setenv("CORAZA_DEFAULT_WASM_IMAGE", "oci://custom/img:v1")
-		assert.Equal(t, "oci://custom/img:v1", resolveDefaultWasmImage())
-	})
+func TestBuildECDSConfigAdvertiseAddress(t *testing.T) {
+	tests := map[string]struct {
+		advertise   string
+		serviceName string
+		want        string
+	}{
+		"bare host gets the port":           {advertise: "coraza.example", want: "coraza.example:18080"},
+		"host and port are kept":            {advertise: "coraza.example:9443", want: "coraza.example:9443"},
+		"bare IPv6 gets brackets":           {advertise: "2001:db8::1", want: "[2001:db8::1]:18080"},
+		"bracketed IPv6 is not rebracketed": {advertise: "[2001:db8::1]", want: "[2001:db8::1]:18080"},
+		"bracketed IPv6 with port is kept":  {advertise: "[2001:db8::1]:9443", want: "[2001:db8::1]:9443"},
+		"derived from the Service name":     {serviceName: "coraza", want: "coraza.default.svc.cluster.local:18080"},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			got, assetURL := buildECDSConfig(config{
+				xdsAdvertiseAddress: tc.advertise,
+				operatorServiceName: tc.serviceName,
+				xdsPort:             18080,
+				// A missing CA is not fatal: Engine reconciliation reports it.
+				xdsCAPath: filepath.Join(t.TempDir(), "missing-ca.crt"),
+			}, "default")
+			assert.Equal(t, tc.want, got.AdvertiseAddress)
+			assert.Equal(t, "https://"+tc.want, assetURL)
+		})
+	}
+}
 
-	t.Run("falls back to hardcoded default when env var unset", func(t *testing.T) {
-		const defaultWasmImage = "oci://ghcr.io/networking-incubator/coraza-proxy-wasm@sha256:4ceac8465dc94dbb9c7bf0e2a79a1c6ad9eb27bd80bcfe44843f362b6cb8c329"
-		assert.Equal(t, defaultWasmImage, defaults.DefaultCorazaWasmOCIReference)
-		assert.Equal(t, defaultWasmImage, resolveDefaultWasmImage())
-		assert.NoError(t, validateDefaultWasmImage(defaultWasmImage))
-	})
+func TestListenPort(t *testing.T) {
+	tests := map[string]int32{
+		":19090":      19090,
+		"0.0.0.0:443": 443,
+		":0":          0,
+		"invalid":     0,
+		":99999":      0,
+	}
+	for address, want := range tests {
+		if got := listenPort(address); got != want {
+			t.Errorf("listenPort(%q) = %d, want %d", address, got, want)
+		}
+	}
 }
 
 // -----------------------------------------------------------------------------

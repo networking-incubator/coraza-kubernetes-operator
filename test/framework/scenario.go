@@ -277,6 +277,33 @@ func (s *Scenario) dumpOnFailure() {
 	for _, ns := range s.namespaces {
 		s.dumpNamespace(ns)
 	}
+	s.dumpOperatorLogs()
+}
+
+// dumpOperatorLogs tails the operator manager logs, which are cluster-scoped
+// and not part of any test namespace. Best effort: a missing pod or failed
+// log fetch must not fail the test.
+func (s *Scenario) dumpOperatorLogs() {
+	const (
+		operatorNamespace = "coraza-system"
+		operatorSelector  = "control-plane=coraza-controller-manager"
+	)
+	pods, err := s.F.KubeClient.CoreV1().Pods(operatorNamespace).List(
+		context.Background(), metav1.ListOptions{LabelSelector: operatorSelector},
+	)
+	if err != nil {
+		s.T.Logf("[operator-logs] error listing pods: %v", err)
+		return
+	}
+	for _, pod := range pods.Items {
+		out, logErr := s.F.Kubectl(operatorNamespace, "logs", pod.Name, "-c", "manager",
+			"--tail=200").CombinedOutput()
+		if logErr != nil {
+			s.T.Logf("[operator-logs] %s/%s: error: %v", pod.Name, "manager", logErr)
+			continue
+		}
+		s.T.Logf("[operator-logs] %s/%s:\n%s", pod.Name, "manager", string(out))
+	}
 }
 
 func (s *Scenario) dumpNamespace(ns string) {
@@ -288,7 +315,7 @@ func (s *Scenario) dumpNamespace(ns string) {
 	}{
 		{"engines", []string{"get", "engines.waf.k8s.coraza.io", "-o", "yaml"}},
 		{"rulesets", []string{"get", "rulesets.waf.k8s.coraza.io", "-o", "yaml"}},
-		{"wasmplugins", []string{"get", "wasmplugins.extensions.istio.io", "-o", "yaml"}},
+		{"envoyfilters", []string{"get", "envoyfilters.networking.istio.io", "-o", "yaml"}},
 		{"events", []string{"get", "events", "--sort-by=.lastTimestamp"}},
 		{"pods", []string{"get", "pods", "-o", "wide"}},
 	}
@@ -345,7 +372,7 @@ func (s *Scenario) writeArtifacts(ns string) {
 	}{
 		{"engines.yaml", []string{"get", "engines.waf.k8s.coraza.io", "-o", "yaml"}},
 		{"rulesets.yaml", []string{"get", "rulesets.waf.k8s.coraza.io", "-o", "yaml"}},
-		{"wasmplugins.yaml", []string{"get", "wasmplugins.extensions.istio.io", "-o", "yaml"}},
+		{"envoyfilters.yaml", []string{"get", "envoyfilters.networking.istio.io", "-o", "yaml"}},
 		{"events.txt", []string{"get", "events", "--sort-by=.lastTimestamp"}},
 		{"pods.txt", []string{"describe", "pods"}},
 	}

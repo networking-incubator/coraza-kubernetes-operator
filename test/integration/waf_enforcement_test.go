@@ -84,7 +84,7 @@ func TestBlockByStatusCode(t *testing.T) {
 }
 
 // TestDegradedEngineDoesNotBlockTraffic verifies that an Engine referencing a
-// non-existent RuleSet becomes Degraded (no WasmPlugin is created) and traffic
+// non-existent RuleSet becomes Degraded (no EnvoyFilter is created) and traffic
 // continues to flow through the Gateway without being blocked when failure
 // mode is set to "allow".
 func TestDegradedEngineDoesNotBlockTraffic(t *testing.T) {
@@ -132,19 +132,19 @@ func TestRequestBodyInspection(t *testing.T) {
 	s.Step("deploy rules for body inspection")
 	s.CreateRuleSource(ns, "base-rules", `SecRuleEngine On
 SecDebugLogLevel 9
-SecDebugLog /dev/stdout
 SecRequestBodyAccess On
 SecRequestBodyLimit 13107200
 SecRequestBodyNoFilesLimit 131072
-SecRule REQUEST_HEADERS:Content-Type "^application/json" \
+SecRule REQUEST_HEADERS:Content-Type "^application/json(?:\s*;|$)" \
     "id:200001,phase:1,t:none,t:lowercase,pass,nolog,ctl:requestBodyProcessor=JSON"
-SecRule REQUEST_HEADERS:Content-Type "!@rx ^application/json" \
+SecRule REQUEST_HEADERS:Content-Type "!@rx ^application/json(?:\s*;|$)" \
     "id:200000,phase:1,t:none,t:lowercase,pass,nolog,ctl:requestBodyProcessor=URLENCODED"
 `)
 	s.CreateRuleSource(ns, "body-rules", `
 SecRule ARGS|REQUEST_BODY "@contains DROP TABLE" "id:6001,phase:2,deny,status:403,msg:'SQL injection in body',log,auditlog"
 SecRule ARGS|REQUEST_BODY "@contains <script>" "id:6002,phase:2,deny,status:403,msg:'XSS in body',log,auditlog"
 SecRule ARGS|REQUEST_BODY "@contains malicious_payload" "id:6003,phase:2,deny,status:403,msg:'Malicious payload',log,auditlog"
+SecRule ARGS:probe "@streq json-only-marker" "id:6004,phase:2,deny,status:403,msg:'JSON body processor selected',log,auditlog"
 `)
 	s.CreateRuleSet(ns, "ruleset", []string{"base-rules", "body-rules"}, nil)
 
@@ -162,7 +162,7 @@ SecRule ARGS|REQUEST_BODY "@contains malicious_payload" "id:6003,phase:2,deny,st
 	gw := s.ProxyToGateway(ns, "gw")
 
 	s.Step("verify SQL injection in body is blocked")
-	gw.ExpectPostBlocked("/api/data", "application/json", `{"query": "DROP TABLE users"}`)
+	gw.ExpectPostBlocked("/api/data", "APPLICATION/JSON; charset=UTF-8", `{"query": "DROP TABLE users"}`)
 
 	s.Step("verify XSS in body is blocked")
 	gw.ExpectPostBlocked("/api/comment", "text/plain", `<script>alert('xss')</script>`)
@@ -172,6 +172,9 @@ SecRule ARGS|REQUEST_BODY "@contains malicious_payload" "id:6003,phase:2,deny,st
 
 	s.Step("verify clean POST body is allowed")
 	gw.ExpectPostAllowed("/api/data", "application/json", `{"name": "safe data"}`)
+
+	s.Step("verify JSON-like media type does not select the JSON processor")
+	gw.ExpectPostAllowed("/api/data", "application/jsonp", `{"probe": "json-only-marker"}`)
 }
 
 // TestRequestHeaderInspection verifies that malicious headers
@@ -189,7 +192,7 @@ func TestRequestHeaderInspection(t *testing.T) {
 	s.Step("deploy rules for header inspection")
 	s.CreateRuleSource(ns, "base-rules", `SecRuleEngine On
 SecDebugLogLevel 9
-SecDebugLog /dev/stdout`)
+`)
 	s.CreateRuleSource(ns, "header-rules", `
 SecRule REQUEST_HEADERS:User-Agent "@contains sqlmap" "id:7001,phase:1,deny,status:403,msg:'SQLMap detected',log,auditlog"
 SecRule REQUEST_HEADERS:User-Agent "@contains nikto" "id:7002,phase:1,deny,status:403,msg:'Nikto scanner detected',log,auditlog"

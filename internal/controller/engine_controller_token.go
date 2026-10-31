@@ -33,8 +33,7 @@ import (
 	rcache "github.com/networking-incubator/coraza-kubernetes-operator/internal/rulesets/cache"
 )
 
-// +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=get;list;watch;create;update;patch
-// +kubebuilder:rbac:groups="",resources=serviceaccounts/token,verbs=create
+// +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=get
 // +kubebuilder:rbac:groups=authentication.k8s.io,resources=tokenreviews,verbs=create
 
 const (
@@ -42,7 +41,7 @@ const (
 	// Kept short (1 hour) to limit the exposure window since tokens are
 	// stored in plaintext in WasmPlugin CRs. The renewal mechanism
 	// requeues at 80% of the actual lifetime (~48 minutes).
-	tokenDuration = 1 * time.Hour
+	tokenDuration = 1 * time.Hour //nolint:unused // retained legacy cache-server token path
 
 	// tokenRenewalFraction is the fraction of a token's actual lifetime at which
 	// it should be renewed. For example, 0.8 means renew after 80% of the lifetime
@@ -53,7 +52,7 @@ const (
 )
 
 // tokenExpirationSeconds is tokenDuration in seconds for the TokenRequest API.
-var tokenExpirationSeconds = int64(tokenDuration.Seconds())
+var tokenExpirationSeconds = int64(tokenDuration.Seconds()) //nolint:unused // retained legacy cache-server token path
 
 // -----------------------------------------------------------------------------
 // TokenEntry
@@ -100,6 +99,8 @@ func cacheClientSALabels(engineName string) map[string]string {
 // the Engine is deleted.
 //
 // Returns the actual ServiceAccount name so callers can use it for token creation.
+//
+//nolint:unused // retained legacy cache-server token path
 func (r *EngineReconciler) ensureCacheClientServiceAccount(ctx context.Context, log logr.Logger, req ctrl.Request, engine *wafv1alpha1.Engine) (string, error) {
 	labels := cacheClientSALabels(engine.Name)
 
@@ -165,6 +166,8 @@ func (r *EngineReconciler) ensureCacheClientServiceAccount(ctx context.Context, 
 // If the stored token is missing or near expiry, a new one is generated via
 // the Kubernetes TokenRequest API. The token audience encodes the RuleSet
 // being accessed ("coraza-cache:namespace/rulesetName").
+//
+//nolint:unused // retained legacy cache-server token path
 func (r *EngineReconciler) ensureCacheToken(ctx context.Context, log logr.Logger, req ctrl.Request, saName, rulesetName string) (string, time.Time, error) {
 	key := fmt.Sprintf("%s/%s/%s", req.Namespace, req.Name, rulesetName)
 	audience := rcache.Audience(fmt.Sprintf("%s/%s", req.Namespace, rulesetName))

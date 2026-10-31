@@ -21,7 +21,10 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"net"
+	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -29,6 +32,7 @@ import (
 	// to ensure that exec-entrypoint and run can make use of them.
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
+	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -46,8 +50,8 @@ import (
 
 	wafv1alpha1 "github.com/networking-incubator/coraza-kubernetes-operator/api/v1alpha1"
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/controller"
-	"github.com/networking-incubator/coraza-kubernetes-operator/internal/defaults"
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/rulesets/cache"
+	"github.com/networking-incubator/coraza-kubernetes-operator/internal/xds"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -79,7 +83,8 @@ func main() {
 	cfg := parseFlags()
 	setupLog = ctrl.Log.WithName("setup")
 	logFlags()
-	validateFlags(cfg)
+	setupLog.Info("Deprecated flags are accepted but ignored",
+		"flags", "--default-wasm-image, --envoy-cluster-name")
 
 	tlsOpts := buildTLSOpts()
 
@@ -108,17 +113,54 @@ func main() {
 		os.Exit(1)
 	}
 
-	rulesetCache := setupCacheServer(mgr, cfg, kubeClient)
-	setupIstioPrerequisites(mgr, cfg, podNamespace)
+	rulesetCache := setupRuleSetCache(cfg)
 
-	if err := controller.SetupControllers(mgr, rulesetCache, cfg.envoyClusterName, cfg.istioRevision, cfg.defaultWasmImage, podNamespace, kubeClient); err != nil {
+	xdsDeps, err := xds.NewDependencies(xds.Config{
+		KubeClient:    kubeClient,
+		Reader:        mgr.GetClient(),
+		APIReader:     mgr.GetAPIReader(),
+		Cache:         mgr.GetCache(),
+		BindAddress:   cfg.xdsBindAddress,
+		TokenAudience: cfg.xdsTokenAudience,
+		CertDir:       cfg.xdsCertDir,
+		CertName:      cfg.xdsCertName,
+		KeyName:       cfg.xdsKeyName,
+		CAPath:        cfg.xdsCAPath,
+		Limits:        cfg.xdsLimits,
+		Registry:      metrics.Registry,
+		Logger:        ctrl.Log.WithName("xds"),
+	})
+	if err != nil {
+		setupLog.Error(err, "unable to construct xDS serving plane")
+		os.Exit(1)
+	}
+
+	ecdsConfig, assetBaseURL := buildECDSConfig(cfg, podNamespace)
+	if err := controller.SetupControllers(mgr, controller.Deps{
+		KubeClient:        kubeClient,
+		RuleSetCache:      rulesetCache,
+		IstioRevision:     cfg.istioRevision,
+		OperatorNamespace: podNamespace,
+		ECDSConfig:        ecdsConfig,
+		AssetBaseURL:      assetBaseURL,
+		XDS:               xdsDeps,
+	}); err != nil {
 		setupLog.Error(err, "unable to setup controllers")
+		os.Exit(1)
+	}
+
+	if err := mgr.Add(xdsDeps.Listener); err != nil {
+		setupLog.Error(err, "unable to add xDS listener runnable")
+		os.Exit(1)
+	}
+	if err := mgr.Add(xdsDeps.Streams); err != nil {
+		setupLog.Error(err, "unable to add xDS revalidation runnable")
 		os.Exit(1)
 	}
 
 	// +kubebuilder:scaffold:builder
 
-	setupHealthChecks(mgr)
+	setupHealthChecks(mgr, xdsDeps)
 
 	setupLog.Info("starting manager")
 	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
@@ -142,10 +184,31 @@ type config struct {
 	cacheMaxAge       time.Duration
 	cacheMaxSize      int
 	cacheServerPort   int
-	envoyClusterName  string
-	istioRevision     string
-	defaultWasmImage  string
-	operatorName      string
+
+	// Deprecated and ignored: kept so the chart can keep passing them until
+	// Phase 7 removes the flags and the chart arguments together.
+	envoyClusterName string
+	defaultWasmImage string
+
+	istioRevision string
+	operatorName  string
+
+	// ECDS settings: the address Gateways dial for config discovery, the port
+	// appended when the address has none, the base URL of the WASM asset, and
+	// the CA used to verify the operator certificate.
+	xdsAdvertiseAddress string
+	xdsPort             int
+	assetBaseURL        string
+	xdsCAPath           string
+	operatorServiceName string
+
+	// ECDS serving plane.
+	xdsBindAddress   string
+	xdsTokenAudience string
+	xdsCertDir       string
+	xdsCertName      string
+	xdsKeyName       string
+	xdsLimits        xds.Limits
 }
 
 func parseFlags() config {
@@ -159,15 +222,40 @@ func parseFlags() config {
 	flag.StringVar(&cfg.metricsCertPath, "metrics-cert-path", "", "The directory that contains the metrics server certificate.")
 	flag.StringVar(&cfg.metricsCertName, "metrics-cert-name", "tls.crt", "The name of the metrics server certificate file.")
 	flag.StringVar(&cfg.metricsCertKey, "metrics-cert-key", "tls.key", "The name of the metrics server key file.")
-	flag.DurationVar(&cfg.cacheGCInterval, "cache-gc-interval", cache.CacheGCInterval, "How often to check for and remove stale cache entries in the RuleSet cache")
-	flag.DurationVar(&cfg.cacheMaxAge, "cache-max-age", cache.CacheMaxAge, "Maximum age of a cache entry before it's considered stale in the RuleSet cache")
-	flag.IntVar(&cfg.cacheMaxSize, "cache-max-size", cache.CacheMaxSize, fmt.Sprintf("Maximum total size of all cached rules in the RuleSet cache in bytes (default %dMB)", cache.CacheMaxSize/(1024*1024)))
-	flag.IntVar(&cfg.cacheServerPort, "cache-server-port", controller.DefaultRuleSetCacheServerPort, fmt.Sprintf("Port number for the RuleSet cache server to listen on (default %d)", controller.DefaultRuleSetCacheServerPort))
-	flag.StringVar(&cfg.envoyClusterName, "envoy-cluster-name", "", "The Envoy cluster name pointing to the RuleSet cache server (required)")
+	// Deprecated: the RuleSet cache server is not started and nothing populates
+	// the cache, so these four flags are accepted for chart compatibility only.
+	flag.DurationVar(&cfg.cacheGCInterval, "cache-gc-interval", cache.CacheGCInterval, "Deprecated and ignored")
+	flag.DurationVar(&cfg.cacheMaxAge, "cache-max-age", cache.CacheMaxAge, "Deprecated and ignored")
+	flag.IntVar(&cfg.cacheMaxSize, "cache-max-size", cache.CacheMaxSize, "Deprecated and ignored")
+	flag.IntVar(&cfg.cacheServerPort, "cache-server-port", controller.DefaultRuleSetCacheServerPort, "Deprecated and ignored")
+	// Deprecated: accepted for chart compatibility until Phase 7 removes both
+	// the flags and the chart arguments. Neither value is used.
+	flag.StringVar(&cfg.envoyClusterName, "envoy-cluster-name", "", "Deprecated and ignored")
 	flag.StringVar(&cfg.istioRevision, "istio-revision", "", "The Istio revision label value for managed Istio resources")
-	flag.StringVar(&cfg.defaultWasmImage, "default-wasm-image", resolveDefaultWasmImage(),
-		"Default OCI reference for the Coraza WASM plugin when an Engine omits spec.driver.wasm.image")
+	flag.StringVar(&cfg.defaultWasmImage, "default-wasm-image", "", "Deprecated and ignored")
 	flag.StringVar(&cfg.operatorName, "operator-name", "", "The operator release name used to derive managed resource names (when unset, Istio prerequisites are skipped)")
+	flag.StringVar(&cfg.xdsAdvertiseAddress, "xds-advertise-address", "",
+		"The operator address Gateways dial for ECDS; defaults to <operator-service-name>.<POD_NAMESPACE>.svc.cluster.local")
+	flag.IntVar(&cfg.xdsPort, "xds-port", controller.DefaultRuleSetCacheServerPort,
+		"The operator ECDS port appended to the advertise address when it has no port")
+	flag.StringVar(&cfg.assetBaseURL, "asset-base-url", "",
+		"The base URL Envoy fetches the WASM asset from; defaults to https://<advertise-address>")
+	flag.StringVar(&cfg.xdsCAPath, "xds-ca-path", "/etc/coraza-tls/ca.crt",
+		"The CA bundle Gateways use to verify the operator certificate")
+	flag.StringVar(&cfg.operatorServiceName, "operator-service-name", "",
+		"The operator Service name used to derive the default xDS advertise address")
+	flag.StringVar(&cfg.xdsBindAddress, "xds-bind-address", ":18080",
+		"The address the ECDS and WASM asset listener binds to")
+	flag.StringVar(&cfg.xdsTokenAudience, "xds-token-audience", "",
+		"The expected TokenReview audience; empty uses the API server default audience")
+	flag.StringVar(&cfg.xdsCertDir, "xds-cert-path", "/etc/coraza-tls",
+		"The directory that contains the xDS serving certificate and CA bundle")
+	flag.StringVar(&cfg.xdsCertName, "xds-cert-name", "tls.crt",
+		"The name of the xDS serving certificate file")
+	flag.StringVar(&cfg.xdsKeyName, "xds-key-name", "tls.key",
+		"The name of the xDS serving key file")
+	cfg.xdsLimits = xds.DefaultLimits()
+	cfg.xdsLimits.AddFlags(flag.CommandLine)
 
 	opts := zap.Options{Development: false}
 	opts.BindFlags(flag.CommandLine)
@@ -179,11 +267,62 @@ func parseFlags() config {
 	return cfg
 }
 
-func resolveDefaultWasmImage() string {
-	if v := os.Getenv("CORAZA_DEFAULT_WASM_IMAGE"); v != "" {
-		return v
+// buildECDSConfig derives the ECDS endpoint and asset base URL from the flags,
+// and loads the CA bundle. A missing CA is not fatal: Engine reconciliation
+// reports TLSNotConfigured instead of rendering an unverified chain.
+func buildECDSConfig(cfg config, podNamespace string) (controller.ECDSConfig, string) {
+	advertise := cfg.xdsAdvertiseAddress
+	if advertise == "" {
+		serviceName := cfg.operatorServiceName
+		if serviceName == "" {
+			// The chart passes the release fullname as --operator-name, which is
+			// also the Service name.
+			serviceName = cfg.operatorName
+		}
+		if serviceName != "" {
+			advertise = fmt.Sprintf("%s.%s.svc.cluster.local", serviceName, podNamespace)
+		}
 	}
-	return defaults.DefaultCorazaWasmOCIReference
+	if advertise != "" {
+		if _, _, err := net.SplitHostPort(advertise); err != nil {
+			// A bracketed IPv6 literal is already a complete host; JoinHostPort
+			// would wrap it a second time.
+			host := strings.TrimSuffix(strings.TrimPrefix(advertise, "["), "]")
+			advertise = net.JoinHostPort(host, strconv.Itoa(cfg.xdsPort))
+		}
+	}
+
+	assetBaseURL := cfg.assetBaseURL
+	if assetBaseURL == "" && advertise != "" {
+		assetBaseURL = "https://" + advertise
+	}
+
+	caPEM, err := os.ReadFile(cfg.xdsCAPath)
+	if err != nil {
+		setupLog.Info("xDS CA bundle unavailable; Engine reconciliation will report TLSNotConfigured",
+			"path", cfg.xdsCAPath, "error", err.Error())
+		caPEM = nil
+	}
+
+	return controller.ECDSConfig{
+		AdvertiseAddress: advertise,
+		ListenPort:       listenPort(cfg.xdsBindAddress),
+		CAPEM:            caPEM,
+	}, assetBaseURL
+}
+
+// listenPort returns the port the ECDS listener actually binds. The Engine
+// NetworkPolicy must allow this port, not the advertised default.
+func listenPort(address string) int32 {
+	_, portText, err := net.SplitHostPort(address)
+	if err != nil {
+		return 0
+	}
+	port, err := strconv.ParseUint(portText, 10, 16)
+	if err != nil || port == 0 {
+		return 0
+	}
+	return int32(port)
 }
 
 func logFlags() {
@@ -226,8 +365,9 @@ func buildMetricsServerOptions(cfg config, tlsOpts []func(*tls.Config)) metricss
 }
 
 // buildCacheOptions returns cache options that scope the NetworkPolicy informer
-// to the operator namespace. Without this, the controller would require
-// cluster-wide list/watch on NetworkPolicies.
+// to the operator namespace, and the Pod informer to Gateway data-plane pods
+// (label-selected, with the churny parts of PodStatus stripped). Without this,
+// the controllers would cache every Pod and NetworkPolicy in the cluster.
 func buildCacheOptions(operatorNamespace string) ctrlcache.Options {
 	return ctrlcache.Options{
 		DefaultTransform: ctrlcache.TransformStripManagedFields(),
@@ -237,11 +377,15 @@ func buildCacheOptions(operatorNamespace string) ctrlcache.Options {
 					operatorNamespace: {},
 				},
 			},
+			&corev1.Pod{}: {
+				Label:     xds.GatewayPodSelector(),
+				Transform: xds.GatewayPodTransform,
+			},
 		},
 	}
 }
 
-func setupCacheServer(mgr ctrl.Manager, cfg config, kubeClient *kubernetes.Clientset) *cache.RuleSetCache {
+func setupRuleSetCache(cfg config) *cache.RuleSetCache {
 	rulesetCache := cache.NewRuleSetCache()
 	rulesetCache.SetLogger(ctrl.Log.WithName("ruleset-cache"))
 	gcConfig := &cache.GarbageCollectionConfig{
@@ -255,29 +399,12 @@ func setupCacheServer(mgr ctrl.Manager, cfg config, kubeClient *kubernetes.Clien
 		os.Exit(1)
 	}
 
-	tokenReview := kubeClient.AuthenticationV1().TokenReviews()
-	cacheServer := cache.NewServer(rulesetCache, fmt.Sprintf(":%d", cfg.cacheServerPort), ctrl.Log, gcConfig, tokenReview)
-	if err := mgr.Add(cacheServer); err != nil {
-		setupLog.Error(err, "unable to add cache server to manager")
-		os.Exit(1)
-	}
+	// The legacy HTTP rule server is intentionally not registered: ECDS is the
+	// only delivery path. The package and its tests are retained.
 	return rulesetCache
 }
 
-func setupIstioPrerequisites(mgr ctrl.Manager, cfg config, podNamespace string) {
-	if cfg.operatorName == "" {
-		setupLog.Info("Skipping Istio prerequisites: --operator-name not set")
-		return
-	}
-
-	istioPrereqs := controller.NewIstioPrerequisites(mgr.GetClient(), mgr.GetAPIReader(), cfg.operatorName, podNamespace, cfg.istioRevision)
-	if err := mgr.Add(istioPrereqs); err != nil {
-		setupLog.Error(err, "unable to add Istio prerequisites runnable to manager")
-		os.Exit(1)
-	}
-}
-
-func setupHealthChecks(mgr ctrl.Manager) {
+func setupHealthChecks(mgr ctrl.Manager, deps *xds.Dependencies) {
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
 		setupLog.Error(err, "unable to set up health check")
 		os.Exit(1)
@@ -286,32 +413,16 @@ func setupHealthChecks(mgr ctrl.Manager) {
 		setupLog.Error(err, "unable to set up ready check")
 		os.Exit(1)
 	}
-}
 
-// -----------------------------------------------------------------------------
-// Validation
-// -----------------------------------------------------------------------------
-
-func validateDefaultWasmImage(ref string) error {
-	if ref == "" {
-		return errors.New("must be non-empty")
+	checks := map[string]func() error{
+		"xds-assets":      deps.CheckAssets,
+		"xds-server":      deps.CheckServer,
+		"xds-publication": deps.CheckPublication,
 	}
-	if len(ref) > wafv1alpha1.MaxImageLen {
-		return fmt.Errorf("must be at most %d characters (got %d)", wafv1alpha1.MaxImageLen, len(ref))
-	}
-	if !strings.HasPrefix(ref, "oci://") {
-		return errors.New("must be an OCI reference starting with oci://")
-	}
-	return nil
-}
-
-func validateFlags(cfg config) {
-	if cfg.envoyClusterName == "" {
-		setupLog.Error(errors.New("missing required flag"), "envoy-cluster-name is required")
-		os.Exit(1)
-	}
-	if err := validateDefaultWasmImage(cfg.defaultWasmImage); err != nil {
-		setupLog.Error(err, "invalid default-wasm-image")
-		os.Exit(1)
+	for name, check := range checks {
+		if err := mgr.AddReadyzCheck(name, func(_ *http.Request) error { return check() }); err != nil {
+			setupLog.Error(err, "unable to set up xDS readiness check", "check", name)
+			os.Exit(1)
+		}
 	}
 }

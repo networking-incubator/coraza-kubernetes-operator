@@ -1,0 +1,8 @@
+schema_version: 1
+module: envoy-coraza
+file: plugin.wasm
+sha256: 93a44bbb96c751218e4c00d479e4c14358122a389acca16205b1e4d0dc5f9476
+git_sha: dev
+coraza_version: dev
+proxy_wasm_sdk_version: dev
+crs_version: none

@@ -10,11 +10,15 @@ import (
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/validation"
+	"k8s.io/client-go/util/workqueue"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/event"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
+	logf "sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	wafv1alpha1 "github.com/networking-incubator/coraza-kubernetes-operator/api/v1alpha1"
@@ -83,8 +87,8 @@ func (r *EngineReconciler) rejectTarget(ctx context.Context, log logr.Logger, re
 }
 
 // cleanupNotAccepted removes child resources that were created when the Engine
-// was previously accepted (WasmPlugin, Telemetry, NetworkPolicy, cached token). This
-// prevents stale WasmPlugins from enforcing rules for an Engine that is no
+// was previously accepted (EnvoyFilter, Telemetry, NetworkPolicy). This
+// prevents a stale EnvoyFilter from enforcing rules for an Engine that is no
 // longer accepted due to TargetNotFound or TargetConflict.
 func (r *EngineReconciler) cleanupNotAccepted(ctx context.Context, log logr.Logger, req ctrl.Request, engine *wafv1alpha1.Engine) error {
 	telemetry := &unstructured.Unstructured{}
@@ -95,31 +99,24 @@ func (r *EngineReconciler) cleanupNotAccepted(ctx context.Context, log logr.Logg
 		return err
 	}
 
-	wasmPlugin := &unstructured.Unstructured{}
-	wasmPlugin.SetGroupVersionKind(schema.GroupVersionKind{
-		Group:   "extensions.istio.io",
-		Version: "v1alpha1",
-		Kind:    "WasmPlugin",
-	})
-	wpName := wasmPluginName(engine.Name)
-	err := r.Get(ctx, types.NamespacedName{Name: wpName, Namespace: engine.Namespace}, wasmPlugin)
+	envoyFilter := &unstructured.Unstructured{}
+	envoyFilter.SetGroupVersionKind(envoyFilterGVK)
+	efName := envoyFilterName(engine.Name)
+	err := r.Get(ctx, types.NamespacedName{Name: efName, Namespace: engine.Namespace}, envoyFilter)
 	if err == nil {
-		if delErr := r.Delete(ctx, wasmPlugin); client.IgnoreNotFound(delErr) != nil {
-			logAPIError(log, req, "Engine", delErr, "Failed to delete WasmPlugin for not-accepted Engine", wasmPlugin)
+		if delErr := r.Delete(ctx, envoyFilter); client.IgnoreNotFound(delErr) != nil {
+			logAPIError(log, req, "Engine", delErr, "Failed to delete EnvoyFilter for not-accepted Engine", envoyFilter)
 			return delErr
 		}
-		logInfo(log, req, "Engine", "Deleted WasmPlugin for not-accepted Engine", "wasmPlugin", wpName)
+		logInfo(log, req, "Engine", "Deleted EnvoyFilter for not-accepted Engine", "envoyFilter", efName)
 	} else if !apierrors.IsNotFound(err) {
-		logAPIError(log, req, "Engine", err, "Failed to get WasmPlugin for cleanup", nil)
+		logAPIError(log, req, "Engine", err, "Failed to get EnvoyFilter for cleanup", nil)
 		return err
 	}
 
 	if err := r.cleanupNetworkPolicy(ctx, log, req); err != nil {
 		return err
 	}
-
-	tokenKey := fmt.Sprintf("%s/%s/%s", engine.Namespace, engine.Name, engine.Spec.RuleSet.Name)
-	r.tokenStore.Delete(tokenKey)
 
 	return nil
 }
@@ -202,4 +199,137 @@ func (r *EngineReconciler) hasTargetConflict(ctx context.Context, log logr.Logge
 
 	logInfo(log, req, "Engine", "Target conflict detected", "winner", winnerName, "gateway", engine.Spec.Target.Name)
 	return true, winnerName, nil
+}
+
+// -----------------------------------------------------------------------------
+// EngineReconciler - Map Funcs
+// -----------------------------------------------------------------------------
+
+// findEnginesForRuleSet maps a RuleSet to the Engines in the same namespace that reference it.
+func (r *EngineReconciler) findEnginesForRuleSet(ctx context.Context, ruleSet client.Object) []reconcile.Request {
+	log := logf.FromContext(ctx)
+
+	var engineList wafv1alpha1.EngineList
+	if err := r.List(ctx, &engineList, client.InNamespace(ruleSet.GetNamespace())); err != nil {
+		log.Error(err, "Engine: Failed to list Engines", "namespace", ruleSet.GetNamespace())
+		return nil
+	}
+
+	return collectRequests(engineList.Items, func(e *wafv1alpha1.Engine) bool {
+		return e.Spec.RuleSet.Name == ruleSet.GetName()
+	})
+}
+
+// findEnginesForGatewayClass maps a GatewayClass change to enabled Engines
+// whose target Gateway references that class. GatewayClasses are cluster scoped,
+// so Engines must be considered across namespaces.
+func (r *EngineReconciler) findEnginesForGatewayClass(ctx context.Context, gatewayClass client.Object) []reconcile.Request {
+	log := logf.FromContext(ctx)
+	var engineList wafv1alpha1.EngineList
+	if err := r.List(ctx, &engineList); err != nil {
+		log.Error(err, "Engine: Failed to list Engines for GatewayClass", "gatewayClass", gatewayClass.GetName())
+		return nil
+	}
+
+	return collectRequests(engineList.Items, func(engine *wafv1alpha1.Engine) bool {
+		if !observabilityEnabled(engine) || !hasGatewayTarget(engine) {
+			return false
+		}
+		var gateway gatewayv1.Gateway
+		if err := r.Get(ctx, client.ObjectKey{Namespace: engine.Namespace, Name: engine.Spec.Target.Name}, &gateway); err != nil {
+			log.Error(err, "Engine: Failed to get Gateway for GatewayClass", "engine", engine.Name, "namespace", engine.Namespace, "gateway", engine.Spec.Target.Name)
+			return true
+		}
+		return string(gateway.Spec.GatewayClassName) == gatewayClass.GetName()
+	})
+}
+
+// findEnginesForGateway maps a Gateway to the Engines in the same namespace
+// that target this specific Gateway by name. Uses the spec.target index.
+func (r *EngineReconciler) findEnginesForGateway(ctx context.Context, gateway client.Object) []reconcile.Request {
+	log := logf.FromContext(ctx)
+
+	var engineList wafv1alpha1.EngineList
+	if err := r.List(ctx, &engineList,
+		client.InNamespace(gateway.GetNamespace()),
+		client.MatchingFields{engineTargetIndex: engineTargetKey(wafv1alpha1.EngineTargetTypeGateway, gateway.GetName())},
+	); err != nil {
+		log.Error(err, "Engine: Failed to list Engines", "namespace", gateway.GetNamespace())
+		return nil
+	}
+
+	return collectRequests(engineList.Items, func(e *wafv1alpha1.Engine) bool {
+		// we collect all of the items, given we are already matching them using the index of 'engineTargetIndex'
+		return true
+	})
+}
+
+// findCompetingEngines maps an Engine to all other Engines in the same
+// namespace that target the same Gateway. Called by competingEngineHandler on
+// create, delete, and generation-changing updates. Uses the spec.target index.
+func (r *EngineReconciler) findCompetingEngines(ctx context.Context, obj client.Object) []reconcile.Request {
+	log := logf.FromContext(ctx)
+
+	engine, ok := obj.(*wafv1alpha1.Engine)
+	if !ok {
+		return nil
+	}
+	if !hasGatewayTarget(engine) {
+		return nil
+	}
+
+	var engineList wafv1alpha1.EngineList
+	if err := r.List(ctx, &engineList,
+		client.InNamespace(engine.GetNamespace()),
+		client.MatchingFields{engineTargetIndex: engineTargetKey(engine.Spec.Target.Type, engine.Spec.Target.Name)},
+	); err != nil {
+		log.Error(err, "Engine: Failed to list Engines for conflict mapping", "namespace", engine.GetNamespace())
+		return nil
+	}
+
+	return collectRequests(engineList.Items, func(e *wafv1alpha1.Engine) bool {
+		return e.Name != engine.Name
+	})
+}
+
+// competingEngineHandler returns an EventHandler that requeues all competing
+// Engines when an Engine is created, deleted, or has its target changed.
+//
+// On Update events (filtered by the caller to generation-changing updates),
+// competitors for both the old and new targets are enqueued so that Engines
+// targeting the old Gateway can clear a stale TargetConflict.
+func (r *EngineReconciler) competingEngineHandler() handler.EventHandler {
+	enqueue := func(ctx context.Context, obj client.Object, q workqueue.TypedRateLimitingInterface[ctrl.Request]) {
+		for _, req := range r.findCompetingEngines(ctx, obj) {
+			q.Add(req)
+		}
+	}
+	return handler.Funcs{
+		CreateFunc: func(ctx context.Context, e event.CreateEvent, q workqueue.TypedRateLimitingInterface[ctrl.Request]) {
+			enqueue(ctx, e.Object, q)
+		},
+		DeleteFunc: func(ctx context.Context, e event.DeleteEvent, q workqueue.TypedRateLimitingInterface[ctrl.Request]) {
+			enqueue(ctx, e.Object, q)
+		},
+		UpdateFunc: func(ctx context.Context, e event.UpdateEvent, q workqueue.TypedRateLimitingInterface[ctrl.Request]) {
+			enqueue(ctx, e.ObjectOld, q)
+			enqueue(ctx, e.ObjectNew, q)
+		},
+	}
+}
+
+// findEnginesForPod maps a Pod to the Engines in the same namespace whose
+// workload selector matches the Pod's labels.
+func (r *EngineReconciler) findEnginesForPod(ctx context.Context, pod client.Object) []reconcile.Request {
+	log := logf.FromContext(ctx)
+
+	var engineList wafv1alpha1.EngineList
+	if err := r.List(ctx, &engineList, client.InNamespace(pod.GetNamespace())); err != nil {
+		log.Error(err, "Engine: Failed to list Engines", "namespace", pod.GetNamespace())
+		return nil
+	}
+
+	return collectRequests(engineList.Items, func(e *wafv1alpha1.Engine) bool {
+		return engineMatchesLabels(e, pod.GetLabels())
+	})
 }

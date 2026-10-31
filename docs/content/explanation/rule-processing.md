@@ -21,7 +21,7 @@ The aggregated rule body is compiled using the [Coraza](https://github.com/coraz
 - Resolution of rule dependencies (such as chain rules).
 - Linking of data files when `@pmFromFile` or similar directives are used.
 
-If compilation fails, the RuleSet enters a `Degraded` state with reason `InvalidRuleSet`, and the error message is included in the condition. The failed revision is not cached.
+If compilation fails, the RuleSet enters a `Degraded` state with reason `InvalidRuleSet`, and the error message is included in the condition. The failed content is not accepted for delivery.
 
 ## Data files
 
@@ -42,21 +42,21 @@ When unsupported rules are detected:
 
 - The RuleSet is marked `Degraded` with reason `UnsupportedRules`.
 - The condition message lists each unsupported rule ID, its category, and a brief description.
-- The rejected revision is **not cached**. Any previously cached valid revision continues to be served.
+- The rejected content is **not accepted for delivery**. The last accepted ECDS snapshot stays published.
 - The RuleSet is not automatically requeued. The user must remove or replace the unsupported rules to produce a new valid revision.
 
-This behavior can be overridden with the annotation `waf.k8s.coraza.io/skip-unsupported-rules-check: "true"`. The issues are still logged and reported in the status, but the RuleSet is cached normally.
+This behavior can be overridden with the annotation `waf.k8s.coraza.io/skip-unsupported-rules-check: "true"`. The issues are still logged and reported in the status, but the RuleSet is accepted normally.
 
-## Cache entry lifecycle
+## Rule publication
 
-When rules are successfully compiled and validated, the result is stored in the in-memory RuleSet cache. The cache uses the RuleSet's `namespace/name` as the key.
+When rules are successfully compiled and validated, the operator renders an ECDS snapshot for every Engine bound to the RuleSet and streams it to Envoy. The snapshot version is the hash of the Engine-version input, not of the payload bytes: the schema and rendering versions, the Engine identity, the RuleSet UID and content hash, the failure and empty-rules policies, observability flags, the WASM binary URL and digest, and the VM settings. A rule or RuleData change moves it through the RuleSet content hash; an Engine or delivery setting change moves it too.
 
-Each cache entry is identified by a UUID that changes with each successful compilation. WASM plugins poll the `/rules/{key}/latest` endpoint to check for a new UUID, and fetch the full ruleset from `/rules/{key}` when a change is detected.
-
-Entries are evicted by the garbage collector based on age and total cache size. See [Architecture]({{< relref "/explanation/architecture" >}}) for the cache configuration parameters.
+Envoy applies a new snapshot in place: Gateway pods do not restart and the module bytes are not sent again. See [Istio WASM Integration]({{< relref "/explanation/istio-wasm-integration" >}}) for the delivery details.
 
 ## Last-known-good behavior
 
-If a RuleSet update introduces invalid or unsupported rules, the new revision is rejected and the previous valid revision remains in the cache. WASM plugins continue to enforce the last-known-good rules until the issue is resolved and a new valid revision is compiled.
+If a RuleSet update introduces unsupported rules, the new revision is rejected and the last accepted snapshot stays applied. The plugin continues to enforce the last-known-good rules until the issue is resolved and a new valid revision is accepted and published.
 
-This design ensures that a bad rule update does not leave Gateways unprotected.
+If the update fails aggregate validation, the RuleSet becomes `Degraded` with `InvalidRuleSet`. The Engine clears its accepted configuration and stops distributing that snapshot; an already-running proxy keeps the WAF it has, but a new or reconnecting proxy has only its bootstrap policy until the RuleSet is fixed and re-accepted. Missing RuleData or RuleSource inputs can be a wait state and keep the last accepted configuration instead.
+
+These paths keep a bad rule update from replacing a working WAF with an empty one, but they do not guarantee WAF coverage for proxies that start while the desired state is invalid.

@@ -6,10 +6,12 @@ spec:
   rules: |
     SecRuleEngine On
     SecRequestBodyAccess On
+    SecRequestBodyLimit 13107200
     SecResponseBodyAccess Off
-    SecAuditLog /dev/stdout
     SecAuditLogFormat JSON
     SecAuditEngine RelevantOnly
+    SecRule REQUEST_HEADERS:Content-Type "@rx ^application/json(?:\s*;|$)" \
+      "id:900,phase:1,t:none,t:lowercase,pass,nolog,ctl:requestBodyProcessor=JSON"
 ---
 apiVersion: waf.k8s.coraza.io/v1alpha1
 kind: RuleSource

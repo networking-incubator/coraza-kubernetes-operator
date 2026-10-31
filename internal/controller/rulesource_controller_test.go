@@ -73,6 +73,36 @@ func TestRuleSourceReconciler_InvalidRules(t *testing.T) {
 	assert.Equal(t, float64(1), gatherValidationCounter(t, reg, "invalid"))
 }
 
+func TestRuleSourceReconciler_AuditLogTargets(t *testing.T) {
+	ctx := context.Background()
+
+	valid := utils.NewTestRuleSource("rs-ctrl-audit-stream", testNamespace,
+		"SecRuleEngine On\nSecAuditEngine On\nSecAuditLogType Serial\nSecAuditLogFormat JSON")
+	require.NoError(t, k8sClient.Create(ctx, valid))
+	t.Cleanup(func() { _ = k8sClient.Delete(ctx, valid) })
+
+	rec := &RuleSourceReconciler{Client: k8sClient, Recorder: utils.NewTestRecorder()}
+	_, err := rec.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: valid.Name, Namespace: valid.Namespace}})
+	require.NoError(t, err)
+	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: valid.Name, Namespace: valid.Namespace}, valid))
+	ready := apimeta.FindStatusCondition(valid.Status.Conditions, conditionReady)
+	require.NotNil(t, ready)
+	assert.Equal(t, ruleSourceReadyReasonValidated, ready.Reason)
+
+	invalid := utils.NewTestRuleSource("rs-ctrl-audit-file", testNamespace,
+		"SecRuleEngine On\nSecAuditEngine On\nSecAuditLog /var/log/audit.log")
+	require.NoError(t, k8sClient.Create(ctx, invalid))
+	t.Cleanup(func() { _ = k8sClient.Delete(ctx, invalid) })
+
+	_, err = rec.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: invalid.Name, Namespace: invalid.Namespace}})
+	require.NoError(t, err)
+	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: invalid.Name, Namespace: invalid.Namespace}, invalid))
+	deg := apimeta.FindStatusCondition(invalid.Status.Conditions, conditionDegraded)
+	require.NotNil(t, deg)
+	assert.Equal(t, ruleSourceDegradedReasonInvalidRules, deg.Reason)
+	assert.Contains(t, deg.Message, "SecAuditLog is not supported by envoy-coraza")
+}
+
 func TestRuleSourceReconciler_PatchOnlyFragment(t *testing.T) {
 	ctx := context.Background()
 	rs := utils.NewTestRuleSource("rs-ctrl-patch-only", testNamespace,
@@ -128,6 +158,62 @@ func TestRuleSourceReconciler_MalformedPatchOnlyFragment(t *testing.T) {
 	assert.Equal(t, float64(0), gatherValidationCounter(t, reg, "valid"))
 	assert.Equal(t, 0, testutil.CollectAndCount(reg, "coraza_rulesource_validation_duration_seconds"),
 		"skipped outcomes must not emit validation duration histograms")
+}
+
+// TestRuleSourceReconciler_PatchOnlyFragmentWithBadInclude covers the guard for
+// patch-only fragments: Coraza is skipped, but an Include the plugin cannot
+// resolve must still be rejected at source level.
+func TestRuleSourceReconciler_PatchOnlyFragmentWithBadInclude(t *testing.T) {
+	ctx := context.Background()
+	rs := utils.NewTestRuleSource("rs-ctrl-patch-bad-include", testNamespace,
+		"SecRuleRemoveById 1\nInclude @notanalias")
+	require.NoError(t, k8sClient.Create(ctx, rs))
+	t.Cleanup(func() { _ = k8sClient.Delete(ctx, rs) })
+
+	reg := prometheus.NewRegistry()
+	m, err := NewCorazaMetrics(reg)
+	require.NoError(t, err)
+
+	rec := &RuleSourceReconciler{Client: k8sClient, Recorder: utils.NewTestRecorder(), Metrics: m}
+	_, err = rec.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: rs.Name, Namespace: rs.Namespace}})
+	require.NoError(t, err)
+
+	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: rs.Name, Namespace: rs.Namespace}, rs))
+	deg := apimeta.FindStatusCondition(rs.Status.Conditions, conditionDegraded)
+	require.NotNil(t, deg)
+	assert.Equal(t, metav1.ConditionTrue, deg.Status)
+	assert.Equal(t, ruleSourceDegradedReasonInvalidRules, deg.Reason)
+	assert.Contains(t, deg.Message, "crs/crs-setup.conf")
+	assert.Equal(t, float64(1), gatherValidationCounter(t, reg, "invalid"))
+	assert.Equal(t, float64(0), gatherValidationCounter(t, reg, "skipped"))
+}
+
+// TestRuleSourceReconciler_CRSWithoutBundledCRS covers the release build
+// (crs_version: none): a crs/ include resolves nothing in a module without
+// embed-crs, so the source must be Degraded instead of Ready with a zero-rule
+// WAF downstream.
+func TestRuleSourceReconciler_CRSWithoutBundledCRS(t *testing.T) {
+	ctx := context.Background()
+	rs := utils.NewTestRuleSource("rs-ctrl-no-crs", testNamespace,
+		"SecRuleEngine On\nInclude crs/crs-setup.conf\nInclude crs/rules/*.conf")
+	require.NoError(t, k8sClient.Create(ctx, rs))
+	t.Cleanup(func() { _ = k8sClient.Delete(ctx, rs) })
+
+	reg := prometheus.NewRegistry()
+	m, err := NewCorazaMetrics(reg)
+	require.NoError(t, err)
+
+	rec := &RuleSourceReconciler{Client: k8sClient, Recorder: utils.NewTestRecorder(), Metrics: m}
+	_, err = rec.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: rs.Name, Namespace: rs.Namespace}})
+	require.NoError(t, err)
+
+	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: rs.Name, Namespace: rs.Namespace}, rs))
+	deg := apimeta.FindStatusCondition(rs.Status.Conditions, conditionDegraded)
+	require.NotNil(t, deg)
+	assert.Equal(t, metav1.ConditionTrue, deg.Status)
+	assert.Equal(t, ruleSourceDegradedReasonInvalidRules, deg.Reason)
+	assert.Contains(t, deg.Message, "does not include OWASP CRS")
+	assert.Contains(t, deg.Message, "make wasm.crs")
 }
 
 func TestRuleSourceReconciler_MetricsNotIncrementedOnResync(t *testing.T) {
