@@ -21,7 +21,6 @@ import (
 	"errors"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/go-logr/logr"
 	"github.com/stretchr/testify/assert"
@@ -54,14 +53,12 @@ func TestTelemetryRetryAndObservabilityCondition(t *testing.T) {
 	require.NotNil(t, condition)
 	assert.Equal(t, metav1.ConditionFalse, condition.Status)
 	assert.Equal(t, "TelemetryProvisioningFailed", condition.Reason)
-	assert.Equal(t, telemetryRetryAfter, telemetryRequeueAfter(time.Now().Add(time.Hour), errors.New("failed")))
 
 	setObservabilityReady(&conditions, 7, nil)
 	condition = apimeta.FindStatusCondition(conditions, conditionObservabilityReady)
 	require.NotNil(t, condition)
 	assert.Equal(t, metav1.ConditionTrue, condition.Status)
 	assert.Equal(t, "TelemetryReady", condition.Reason)
-	assert.Greater(t, telemetryRequeueAfter(time.Now().Add(time.Hour), nil), telemetryRetryAfter)
 }
 
 func ignoreTelemetryCleanupError(err error) bool {

@@ -40,7 +40,7 @@ func init() {
 // +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].status`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 // +kubebuilder:validation:XValidation:rule="has(self.spec.files) && size(self.spec.files) > 0",message="files must be non-empty"
-// +kubebuilder:validation:XValidation:rule="has(self.spec.files) ? self.spec.files.all(k, k.matches('^[-._a-zA-Z0-9]+$') && size(k) <= 253) : true",message="files keys must be valid data file names (alphanumeric, '-', '_', '.'; max 253 chars)"
+// +kubebuilder:validation:XValidation:rule="has(self.spec.files) ? self.spec.files.all(k, k.matches('^[-._a-zA-Z0-9]+$') && size(k) <= 253 && k != '.' && k != '..') : true",message="files keys must be valid data file names (alphanumeric, '-', '_', '.'; not '.' or '..'; max 253 chars)"
 type RuleData struct {
 	metav1.TypeMeta `json:",inline"`
 

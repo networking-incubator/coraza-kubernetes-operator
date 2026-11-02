@@ -6,10 +6,16 @@ spec:
   rules: |
     SecRuleEngine On
     SecRequestBodyAccess On
+    SecRequestBodyLimit 13107200
     SecResponseBodyAccess Off
-    SecAuditLog /dev/stdout
     SecAuditLogFormat JSON
     SecAuditEngine RelevantOnly
+    SecRule REQUEST_HEADERS:Content-Type "@rx ^application/json(?:\s*;|$)" \
+      "id:900,phase:1,t:none,t:lowercase,pass,nolog,ctl:requestBodyProcessor=JSON"
+    SecRule REQUEST_HEADERS:Content-Type "^application/[a-z0-9.-]+\+json" \
+      "id:901,phase:1,t:none,t:lowercase,pass,nolog,ctl:requestBodyProcessor=JSON"
+    SecRule ARGUMENTS_LIMIT_REACHED "@eq 1" \
+      "id:902,phase:2,deny,status:403,log,msg:'Request argument limit exceeded'"
 ---
 apiVersion: waf.k8s.coraza.io/v1alpha1
 kind: RuleSource

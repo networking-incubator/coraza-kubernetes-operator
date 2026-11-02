@@ -1,0 +1,67 @@
+{{- if and (not .Values.tls.existingSecret) .Values.tls.generate }}
+{{- /* The generated Secret always uses the default keys; a custom name would
+leave the listener looking for a file that does not exist. */}}
+{{- if or
+      (ne (.Values.tls.certName | default "tls.crt") "tls.crt")
+      (ne (.Values.tls.keyName | default "tls.key") "tls.key")
+      (ne (.Values.tls.caName | default "ca.crt") "ca.crt") }}
+{{- fail "tls.certName, tls.keyName and tls.caName must keep their default names when tls.generate=true; use tls.existingSecret for custom key names" }}
+{{- end }}
+{{- /*
+Serving certificate for ECDS and the WASM asset endpoint. `helm install` /
+`helm upgrade` generate one when needed and reuse the existing Secret across
+upgrades via `lookup`, so the CA is not rotated on every render.
+
+The reuse only works with `helm install` / `helm upgrade`. `lookup` returns
+nothing under `helm template`, `--dry-run`, and GitOps renderers (Argo CD,
+Flux), so those flows take the generate branch and mint a fresh CA on EVERY
+render. That breaks the trust bundle inlined into EnvoyFilters: every ECDS
+stream fails TLS. Static release bundles and GitOps pipelines must set
+tls.generate=false and provide the Secret themselves (tls.existingSecret, or
+a certificate manager such as cert-manager).
+
+The generated CA and leaf are valid for 365 days and are reused until the
+Secret is deleted. Rotate by deleting the Secret and re-running
+`helm upgrade` (helm-managed installs only). Changes to `tls.sans` do not
+update a reused Secret; rotate the certificate and restart the operator before
+using a newly added hostname.
+*/ -}}
+{{- $fullname := include "coraza-operator.fullname" . }}
+{{- $secretName := printf "%s-serving-cert" $fullname }}
+{{- $existing := lookup "v1" "Secret" .Release.Namespace $secretName }}
+{{- if $existing }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $secretName }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "coraza-operator.labels" . | nindent 4 }}
+type: kubernetes.io/tls
+data:
+  ca.crt: {{ index $existing.data "ca.crt" }}
+  tls.crt: {{ index $existing.data "tls.crt" }}
+  tls.key: {{ index $existing.data "tls.key" }}
+{{- else }}
+{{- $ca := genCA (printf "%s-ca" $fullname) 365 }}
+{{- $dnsNames := list
+      $fullname
+      (printf "%s.%s" $fullname .Release.Namespace)
+      (printf "%s.%s.svc" $fullname .Release.Namespace)
+      (printf "%s.%s.svc.cluster.local" $fullname .Release.Namespace) }}
+{{- $dnsNames = concat $dnsNames (.Values.tls.sans | default list) }}
+{{- $cert := genSignedCert $fullname nil $dnsNames 365 $ca }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $secretName }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "coraza-operator.labels" . | nindent 4 }}
+type: kubernetes.io/tls
+data:
+  ca.crt: {{ $ca.Cert | b64enc }}
+  tls.crt: {{ $cert.Cert | b64enc }}
+  tls.key: {{ $cert.Key | b64enc }}
+{{- end }}
+{{- end }}

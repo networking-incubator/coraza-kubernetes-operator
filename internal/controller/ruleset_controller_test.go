@@ -37,6 +37,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	wafv1alpha1 "github.com/networking-incubator/coraza-kubernetes-operator/api/v1alpha1"
+	"github.com/networking-incubator/coraza-kubernetes-operator/internal/ecds/render"
+	"github.com/networking-incubator/coraza-kubernetes-operator/internal/rulesets/assemble"
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/rulesets/cache"
 	"github.com/networking-incubator/coraza-kubernetes-operator/test/utils"
 )
@@ -217,17 +219,16 @@ func TestRuleSetReconciler_ReconcileRuleSources(t *testing.T) {
 			nn := types.NamespacedName{Name: ruleSet.Name, Namespace: ruleSet.Namespace}
 			result, err := reconcileRuleSetWithRuleSources(ctx, t, nn, reconciler)
 
-			t.Log("Verifying cache was populated with combined rules")
+			t.Log("Verifying accepted content matches the assembled rules")
 			require.NoError(t, err)
 			assert.Equal(t, reconcile.Result{}, result)
-			cacheKey := testNamespace + "/" + tt.ruleSetName
-			entry, ok := ruleSetCache.Get(cacheKey)
-			require.True(t, ok, "Cache entry should exist")
-			assert.Equal(t, tt.expectedRules, entry.Rules)
-			assert.NotEmpty(t, entry.UUID)
+			require.NoError(t, k8sClient.Get(ctx, nn, ruleSet))
+			require.NotNil(t, ruleSet.Status.AcceptedContent)
+			assert.Equal(t, ruleSet.Generation, ruleSet.Status.AcceptedContent.ObservedGeneration)
+			assert.Equal(t, expectedRuleSetContentHash(t, ctx, nn), ruleSet.Status.AcceptedContent.ContentHash)
 
-			assert.True(t, recorder.HasEvent("Normal", "RulesCached"),
-				"expected Normal/RulesCached event; got: %v", recorder.Events)
+			assert.True(t, recorder.HasEvent("Normal", "RulesAccepted"),
+				"expected Normal/RulesAccepted event; got: %v", recorder.Events)
 		})
 	}
 }
@@ -268,12 +269,12 @@ func TestRuleSetReconciler_MissingRuleSource(t *testing.T) {
 		},
 	})
 
-	t.Log("Verifying cache was not populated due to missing RuleSource")
+	t.Log("Verifying nothing was accepted due to missing RuleSource")
 	require.NoError(t, err)
 	assert.Equal(t, reconcile.Result{}, result, "Should requeue when RuleSource is not found")
-	cacheKey := testNamespace + "/missing-src-ruleset"
-	_, ok := ruleSetCache.Get(cacheKey)
-	assert.False(t, ok)
+	var got wafv1alpha1.RuleSet
+	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: ruleSet.Name, Namespace: ruleSet.Namespace}, &got))
+	assert.Nil(t, got.Status.AcceptedContent)
 
 	assert.True(t, recorder.HasEvent("Warning", "RuleSourceNotFound"),
 		"expected Warning/RuleSourceNotFound event; got: %v", recorder.Events)
@@ -373,9 +374,10 @@ func TestRuleSetReconciler_UpdateCache(t *testing.T) {
 	require.NoError(t, err)
 
 	t.Log("Updating RuleSource with new rules")
-	cacheKey := testNamespace + "/update-ruleset"
-	entry1, _ := ruleSetCache.Get(cacheKey)
-	uuid1 := entry1.UUID
+	require.NoError(t, k8sClient.Get(ctx, nn, ruleSet))
+	require.NotNil(t, ruleSet.Status.AcceptedContent)
+	before := *ruleSet.Status.AcceptedContent
+
 	var updatedRS wafv1alpha1.RuleSource
 	err = k8sClient.Get(ctx, types.NamespacedName{Name: "update-rules", Namespace: testNamespace}, &updatedRS)
 	require.NoError(t, err)
@@ -383,14 +385,17 @@ func TestRuleSetReconciler_UpdateCache(t *testing.T) {
 	err = k8sClient.Update(ctx, &updatedRS)
 	require.NoError(t, err)
 
-	t.Log("Reconciling after RuleSource update to refresh cache")
+	t.Log("Reconciling after RuleSource update to refresh accepted content")
 	_, err = reconcileRuleSetWithRuleSources(ctx, t, nn, reconciler)
 	require.NoError(t, err)
 
-	t.Log("Verifying cache was updated with new rules and UUID changed")
-	entry2, _ := ruleSetCache.Get(cacheKey)
-	assert.Equal(t, "SecDefaultAction \"phase:2,log,auditlog,pass\"", entry2.Rules)
-	assert.NotEqual(t, uuid1, entry2.UUID, "UUID should change when rules are updated")
+	t.Log("Verifying accepted content was updated with new rules")
+	require.NoError(t, k8sClient.Get(ctx, nn, ruleSet))
+	require.NotNil(t, ruleSet.Status.AcceptedContent)
+	after := *ruleSet.Status.AcceptedContent
+	assert.Equal(t, before.ObservedGeneration, after.ObservedGeneration)
+	assert.NotEqual(t, before.ContentHash, after.ContentHash, "content hash should change when rules are updated")
+	assert.Equal(t, expectedRuleSetContentHash(t, ctx, nn), after.ContentHash)
 }
 
 func TestRuleSetReconciler_MissingRuleData(t *testing.T) {
@@ -433,9 +438,9 @@ func TestRuleSetReconciler_MissingRuleData(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, reconcile.Result{}, result)
 
-	cacheKey := testNamespace + "/missing-data-ruleset"
-	_, ok := ruleSetCache.Get(cacheKey)
-	assert.False(t, ok, "cache should be empty when RuleData is missing")
+	var got wafv1alpha1.RuleSet
+	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: ruleSet.Name, Namespace: ruleSet.Namespace}, &got))
+	assert.Nil(t, got.Status.AcceptedContent, "nothing should be accepted when RuleData is missing")
 
 	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: ruleSet.Name, Namespace: ruleSet.Namespace}, ruleSet))
 	ready := apimeta.FindStatusCondition(ruleSet.Status.Conditions, "Ready")
@@ -505,15 +510,28 @@ func TestRuleSetReconciler_DataSourcesDuplicateFileKeysLastListedWins(t *testing
 		Recorder: utils.NewTestRecorder(),
 		Cache:    ruleSetCache,
 	}
-	_, err := reconcileRuleSetWithRuleSources(ctx, t, types.NamespacedName{Name: ruleSet.Name, Namespace: ruleSet.Namespace}, reconciler)
+	nn := types.NamespacedName{Name: ruleSet.Name, Namespace: ruleSet.Namespace}
+	_, err := reconcileRuleSetWithRuleSources(ctx, t, nn, reconciler)
 	require.NoError(t, err)
 
-	cacheKey := testNamespace + "/dup-key-ruleset"
-	entry, ok := ruleSetCache.Get(cacheKey)
-	require.True(t, ok)
-	require.Contains(t, entry.DataFiles, "overlap.data")
-	assert.Equal(t, []byte("bravo"), entry.DataFiles["overlap.data"],
+	require.NoError(t, k8sClient.Get(ctx, nn, ruleSet))
+	require.NotNil(t, ruleSet.Status.AcceptedContent)
+
+	const dupRule = `SecRule ARGS "@pmFromFile overlap.data" "id:77777,phase:1,pass,nolog"`
+	bravoHash, err := render.RuleSetContentHash(assemble.Content{
+		Rules:     dupRule,
+		DataFiles: map[string][]byte{"overlap.data": []byte("bravo")},
+	})
+	require.NoError(t, err)
+	alphaHash, err := render.RuleSetContentHash(assemble.Content{
+		Rules:     dupRule,
+		DataFiles: map[string][]byte{"overlap.data": []byte("alpha")},
+	})
+	require.NoError(t, err)
+
+	assert.Equal(t, bravoHash, ruleSet.Status.AcceptedContent.ContentHash,
 		"later-listed RuleData should overwrite the same files map key")
+	assert.NotEqual(t, alphaHash, ruleSet.Status.AcceptedContent.ContentHash)
 }
 
 func TestRuleSetReconciler_ValidateRules(t *testing.T) {
@@ -672,7 +690,7 @@ func TestRuleSetReconciler_ValidateRules(t *testing.T) {
 		require.NoError(t, err)
 		ready := apimeta.FindStatusCondition(ruleSet.Status.Conditions, "Ready")
 		assert.Equal(t, metav1.ConditionTrue, ready.Status)
-		assert.Equal(t, "RulesCached", ready.Reason)
+		assert.Equal(t, "RulesAccepted", ready.Reason)
 	})
 
 	t.Run("ruleset using a valid data source should pass", func(t *testing.T) {
@@ -705,7 +723,7 @@ func TestRuleSetReconciler_ValidateRules(t *testing.T) {
 		require.NoError(t, err)
 		ready := apimeta.FindStatusCondition(ruleSet.Status.Conditions, "Ready")
 		assert.Equal(t, metav1.ConditionTrue, ready.Status)
-		assert.Equal(t, "RulesCached", ready.Reason)
+		assert.Equal(t, "RulesAccepted", ready.Reason)
 	})
 
 	t.Run("ruleset referring missing RuleSource should fail", func(t *testing.T) {
@@ -818,10 +836,10 @@ func TestRuleSetReconciler_UnsupportedRules(t *testing.T) {
 		require.NoError(t, err, "should not return error (non-retriable)")
 		assert.Equal(t, reconcile.Result{}, result)
 
-		t.Log("Verifying cache was NOT populated")
-		cacheKey := testNamespace + "/unsupported-ruleset"
-		_, ok := ruleSetCache.Get(cacheKey)
-		assert.False(t, ok, "cache should be empty for rejected ruleset")
+		t.Log("Verifying nothing was accepted")
+		var got wafv1alpha1.RuleSet
+		require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: ruleSet.Name, Namespace: ruleSet.Namespace}, &got))
+		assert.Nil(t, got.Status.AcceptedContent, "nothing should be accepted for a rejected ruleset")
 
 		t.Log("Verifying status conditions")
 		require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{
@@ -888,24 +906,20 @@ func TestRuleSetReconciler_UnsupportedRules(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, reconcile.Result{}, result)
 
-		t.Log("Verifying cache WAS populated")
-		cacheKey := testNamespace + "/supported-ruleset"
-		entry, ok := ruleSetCache.Get(cacheKey)
-		assert.True(t, ok, "cache should contain entry for valid ruleset")
-		assert.Contains(t, entry.Rules, "id:1")
+		t.Log("Verifying content was accepted")
+		nn := types.NamespacedName{Name: ruleSet.Name, Namespace: ruleSet.Namespace}
+		require.NoError(t, k8sClient.Get(ctx, nn, ruleSet))
+		require.NotNil(t, ruleSet.Status.AcceptedContent)
+		assert.Equal(t, expectedRuleSetContentHash(t, ctx, nn), ruleSet.Status.AcceptedContent.ContentHash)
 
 		t.Log("Verifying Ready status")
-		require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{
-			Name:      ruleSet.Name,
-			Namespace: ruleSet.Namespace,
-		}, ruleSet))
 		ready := apimeta.FindStatusCondition(ruleSet.Status.Conditions, "Ready")
 		require.NotNil(t, ready)
 		assert.Equal(t, metav1.ConditionTrue, ready.Status)
-		assert.Equal(t, "RulesCached", ready.Reason)
+		assert.Equal(t, "RulesAccepted", ready.Reason)
 
-		assert.True(t, recorder.HasEvent("Normal", "RulesCached"),
-			"expected Normal/RulesCached event; got: %v", recorder.Events)
+		assert.True(t, recorder.HasEvent("Normal", "RulesAccepted"),
+			"expected Normal/RulesAccepted event; got: %v", recorder.Events)
 	})
 
 	t.Run("ruleset mixing supported and unsupported rules should be rejected", func(t *testing.T) {
@@ -960,9 +974,9 @@ func TestRuleSetReconciler_UnsupportedRules(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, reconcile.Result{}, result)
 
-		cacheKey := testNamespace + "/mixed-ruleset"
-		_, ok := ruleSetCache.Get(cacheKey)
-		assert.False(t, ok, "cache should be empty for rejected ruleset")
+		var got wafv1alpha1.RuleSet
+		require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: ruleSet.Name, Namespace: ruleSet.Namespace}, &got))
+		assert.Nil(t, got.Status.AcceptedContent, "nothing should be accepted for a rejected ruleset")
 
 		assert.True(t, recorder.HasEvent("Warning", "UnsupportedRules"),
 			"expected Warning/UnsupportedRules event; got: %v", recorder.Events)
@@ -970,18 +984,10 @@ func TestRuleSetReconciler_UnsupportedRules(t *testing.T) {
 
 	t.Run("previously valid cache entry is preserved when ruleset update introduces unsupported rules", func(t *testing.T) {
 		ruleSetCache := cache.NewRuleSetCache()
-		cacheKey := testNamespace + "/update-to-unsupported"
 
-		t.Log("Pre-populating cache to simulate a previously valid reconciliation")
-		const previousRules = `SecCollectionTimeout 1`
-		ruleSetCache.Put(cacheKey, previousRules, nil)
-		prior, ok := ruleSetCache.Get(cacheKey)
-		require.True(t, ok, "pre-condition: cache entry should exist")
-		priorUUID := prior.UUID
-
-		t.Log("Creating RuleSource with unsupported rules (simulating a bad update)")
-		rs := utils.NewTestRuleSource("update-to-unsupported-rules-src", testNamespace,
-			`SecRule ARGS "@rx error" "id:922110,phase:2,deny,status:403,msg:'Bad update'"`)
+		t.Log("Creating a valid RuleSource and accepting its content")
+		const validRule = `SecCollectionTimeout 1`
+		rs := utils.NewTestRuleSource("update-to-unsupported-rules-src", testNamespace, validRule)
 		require.NoError(t, k8sClient.Create(ctx, rs))
 		t.Cleanup(func() {
 			if err := k8sClient.Delete(ctx, rs); err != nil {
@@ -1009,18 +1015,36 @@ func TestRuleSetReconciler_UnsupportedRules(t *testing.T) {
 			Recorder: recorder,
 			Cache:    ruleSetCache,
 		}
-		result, err := reconcileRuleSetWithRuleSources(ctx, t, types.NamespacedName{Name: ruleSet.Name, Namespace: ruleSet.Namespace}, reconciler)
+		nn := types.NamespacedName{Name: ruleSet.Name, Namespace: ruleSet.Namespace}
+		_, err := reconcileRuleSetWithRuleSources(ctx, t, nn, reconciler)
+		require.NoError(t, err)
+
+		require.NoError(t, k8sClient.Get(ctx, nn, ruleSet))
+		require.NotNil(t, ruleSet.Status.AcceptedContent)
+		accepted := *ruleSet.Status.AcceptedContent
+
+		t.Log("Updating RuleSource to an unsupported rule (simulating a bad update)")
+		var updated wafv1alpha1.RuleSource
+		require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: rs.Name, Namespace: rs.Namespace}, &updated))
+		updated.Spec.Rules = `SecRule ARGS "@rx error" "id:922110,phase:2,deny,status:403,msg:'Bad update'"`
+		require.NoError(t, k8sClient.Update(ctx, &updated))
+
+		result, err := reconcileRuleSetWithRuleSources(ctx, t, nn, reconciler)
 		require.NoError(t, err)
 		assert.Equal(t, reconcile.Result{}, result)
 
-		t.Log("Verifying the previously valid entry is still served (last-known-good)")
-		entry, ok := ruleSetCache.Get(cacheKey)
-		require.True(t, ok, "prior cache entry must be preserved when update is rejected")
-		assert.Equal(t, priorUUID, entry.UUID, "cache entry must not have changed")
-		assert.Equal(t, previousRules, entry.Rules, "previously cached rules must still be served")
+		require.NoError(t, k8sClient.Get(ctx, nn, ruleSet))
+		degraded := apimeta.FindStatusCondition(ruleSet.Status.Conditions, conditionDegraded)
+		require.NotNil(t, degraded)
+		assert.Equal(t, metav1.ConditionTrue, degraded.Status)
+		assert.Equal(t, "UnsupportedRules", degraded.Reason)
+
+		t.Log("Verifying the previously accepted content is preserved (last-known-good)")
+		require.NotNil(t, ruleSet.Status.AcceptedContent)
+		assert.Equal(t, accepted, *ruleSet.Status.AcceptedContent)
 	})
 
-	t.Run("ruleset with skip annotation should be cached with unsupported rules listed in status", func(t *testing.T) {
+	t.Run("ruleset with skip annotation should be accepted with unsupported rules listed in status", func(t *testing.T) {
 		ruleSetCache := cache.NewRuleSetCache()
 
 		t.Log("Creating RuleSource with an unsupported response body inspection rule")
@@ -1064,21 +1088,17 @@ func TestRuleSetReconciler_UnsupportedRules(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, reconcile.Result{}, result)
 
-		t.Log("Verifying cache WAS populated despite unsupported rules")
-		cacheKey := testNamespace + "/skip-annotation-ruleset"
-		entry, ok := ruleSetCache.Get(cacheKey)
-		assert.True(t, ok, "cache should contain entry when annotation overrides unsupported rules check")
-		assert.Contains(t, entry.Rules, "id:922110")
+		t.Log("Verifying content was accepted despite unsupported rules")
+		nn := types.NamespacedName{Name: ruleSet.Name, Namespace: ruleSet.Namespace}
+		require.NoError(t, k8sClient.Get(ctx, nn, ruleSet))
+		require.NotNil(t, ruleSet.Status.AcceptedContent)
+		assert.Equal(t, expectedRuleSetContentHash(t, ctx, nn), ruleSet.Status.AcceptedContent.ContentHash)
 
 		t.Log("Verifying Ready=True with unsupported rules listed in the message")
-		require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{
-			Name:      ruleSet.Name,
-			Namespace: ruleSet.Namespace,
-		}, ruleSet))
 		ready := apimeta.FindStatusCondition(ruleSet.Status.Conditions, "Ready")
 		require.NotNil(t, ready)
 		assert.Equal(t, metav1.ConditionTrue, ready.Status)
-		assert.Equal(t, "RulesCached", ready.Reason)
+		assert.Equal(t, "RulesAccepted", ready.Reason)
 		assert.Contains(t, ready.Message, "922110", "ready message should list the detected unsupported rule ID")
 
 		t.Log("Verifying Degraded condition is absent")
@@ -1090,7 +1110,7 @@ func TestRuleSetReconciler_UnsupportedRules(t *testing.T) {
 			"expected Warning/UnsupportedRules event even with annotation override; got: %v", recorder.Events)
 	})
 
-	t.Run("removing skip annotation degrades cached ruleset with unsupported rules", func(t *testing.T) {
+	t.Run("removing skip annotation degrades accepted ruleset with unsupported rules", func(t *testing.T) {
 		ruleSetCache := cache.NewRuleSetCache()
 
 		const unsupportedRule = `SecRule ARGS "@rx error" "id:922110,phase:2,deny,status:403,msg:'Multipart charset'"`
@@ -1189,11 +1209,8 @@ func TestRuleSetReconciler_DuplicateSourceReferences(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, reconcile.Result{}, result)
 
-	cacheKey := testNamespace + "/dup-src-ref-ruleset"
-	_, ok := ruleSetCache.Get(cacheKey)
-	assert.False(t, ok, "cache should be empty when duplicate sources are detected")
-
 	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: ruleSet.Name, Namespace: ruleSet.Namespace}, ruleSet))
+	assert.Nil(t, ruleSet.Status.AcceptedContent, "nothing should be accepted when duplicate sources are detected")
 	ready := apimeta.FindStatusCondition(ruleSet.Status.Conditions, "Ready")
 	require.NotNil(t, ready)
 	assert.Equal(t, metav1.ConditionFalse, ready.Status)
@@ -1257,11 +1274,8 @@ func TestRuleSetReconciler_DuplicateDataReferences(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, reconcile.Result{}, result)
 
-	cacheKey := testNamespace + "/dup-data-ref-ruleset"
-	_, ok := ruleSetCache.Get(cacheKey)
-	assert.False(t, ok, "cache should be empty when duplicate data refs are detected")
-
 	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: ruleSet.Name, Namespace: ruleSet.Namespace}, ruleSet))
+	assert.Nil(t, ruleSet.Status.AcceptedContent, "nothing should be accepted when duplicate data refs are detected")
 	ready := apimeta.FindStatusCondition(ruleSet.Status.Conditions, "Ready")
 	require.NotNil(t, ready)
 	assert.Equal(t, metav1.ConditionFalse, ready.Status)
@@ -1720,67 +1734,11 @@ func TestRuleSetReconciler_MetricsNotIncrementedOnResync(t *testing.T) {
 	_, err = reconcileRuleSetWithRuleSources(ctx, t, nn, reconciler)
 	require.NoError(t, err)
 	assert.Equal(t, float64(1), gatherRuleSetValidationCounter(t, reg, "valid"))
-	assert.Equal(t, uint64(1), gatherCacheSetDurationSampleCount(t, reg))
 
 	_, err = reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: nn})
 	require.NoError(t, err)
 	assert.Equal(t, float64(1), gatherRuleSetValidationCounter(t, reg, "valid"),
-		"second reconcile with unchanged cached content must not increment validation counter")
-	assert.Equal(t, uint64(1), gatherCacheSetDurationSampleCount(t, reg),
-		"second reconcile with unchanged cached content must not observe cache duration")
-}
-
-func TestRuleSetReconciler_MetricsCacheDurationOnlyOnPut(t *testing.T) {
-	ctx, cleanup := setupTest(t)
-	t.Cleanup(cleanup)
-
-	src := utils.NewTestRuleSource("cache-dur-src", testNamespace,
-		`SecRule REQUEST_URI "@contains /r" "id:901,phase:1,pass,nolog"`)
-	require.NoError(t, k8sClient.Create(ctx, src))
-	t.Cleanup(func() { _ = k8sClient.Delete(ctx, src) })
-
-	ruleSet := utils.NewTestRuleSet(utils.RuleSetOptions{
-		Name:      "cache-dur-rs",
-		Namespace: testNamespace,
-		Sources:   []wafv1alpha1.SourceReference{{Name: "cache-dur-src"}},
-	})
-	require.NoError(t, k8sClient.Create(ctx, ruleSet))
-	t.Cleanup(func() { _ = k8sClient.Delete(ctx, ruleSet) })
-
-	ruleSetCache := cache.NewRuleSetCache()
-	reg := prometheus.NewRegistry()
-	m, err := NewCorazaMetrics(reg)
-	require.NoError(t, err)
-
-	reconciler := &RuleSetReconciler{
-		Client:   k8sClient,
-		Scheme:   scheme,
-		Recorder: utils.NewTestRecorder(),
-		Cache:    ruleSetCache,
-		Metrics:  m,
-	}
-
-	nn := types.NamespacedName{Name: ruleSet.Name, Namespace: ruleSet.Namespace}
-	_, err = reconcileRuleSetWithRuleSources(ctx, t, nn, reconciler)
-	require.NoError(t, err)
-	assert.Equal(t, uint64(1), gatherCacheSetDurationSampleCount(t, reg))
-
-	require.NoError(t, k8sClient.Get(ctx, nn, ruleSet))
-	patch := client.MergeFrom(ruleSet.DeepCopy())
-	setConditionFalse(&ruleSet.Status.Conditions, ruleSet.Generation, conditionReady, "StatusReset", "test reset")
-	require.NoError(t, k8sClient.Status().Patch(ctx, ruleSet, patch))
-
-	reg2 := prometheus.NewRegistry()
-	m2, err := NewCorazaMetrics(reg2)
-	require.NoError(t, err)
-	reconciler.Metrics = m2
-
-	_, err = reconcileRuleSetWithRuleSources(ctx, t, nn, reconciler)
-	require.NoError(t, err)
-	assert.Equal(t, uint64(0), gatherCacheSetDurationSampleCount(t, reg2),
-		"status-only reconcile with unchanged cache must not observe cache Put duration")
-	assert.Equal(t, uint64(1), gatherCacheSetDurationSampleCount(t, reg),
-		"original cache Put observation must be unchanged")
+		"second reconcile with unchanged accepted content must not increment validation counter")
 }
 
 // TestRuleSetReconciler_MetricsForgetOnNotFound verifies that a not-found
@@ -1946,7 +1904,7 @@ func TestRuleSetReconciler_MetricsForgetRuleDataOnSpecRemoval(t *testing.T) {
 	nn := types.NamespacedName{Name: ruleSet.Name, Namespace: ruleSet.Namespace}
 
 	// First reconcile: RuleData is referenced, so RecordRuleData must fire via
-	// the cache path in ruleset_controller_cache.go.
+	// the RuleData load path in ruleset_controller_rule_aggregation.go.
 	_, err = reconcileRuleSetWithRuleSources(ctx, t, nn, reconciler)
 	require.NoError(t, err)
 

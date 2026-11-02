@@ -277,6 +277,39 @@ func (s *Scenario) dumpOnFailure() {
 	for _, ns := range s.namespaces {
 		s.dumpNamespace(ns)
 	}
+	s.dumpOperatorLogs()
+}
+
+// dumpOperatorLogs tails the operator manager logs, which are cluster-scoped
+// and not part of any test namespace. Best effort: a missing pod or failed
+// log fetch must not fail the test.
+// diagnosticTimeout bounds each diagnostics call so a stalled API server
+// cannot hang the test before cleanup.
+const diagnosticTimeout = 15 * time.Second
+
+func (s *Scenario) dumpOperatorLogs() {
+	const (
+		operatorNamespace = "coraza-system"
+		operatorSelector  = "control-plane=coraza-controller-manager"
+	)
+	ctx, cancel := context.WithTimeout(context.Background(), diagnosticTimeout)
+	defer cancel()
+	pods, err := s.F.KubeClient.CoreV1().Pods(operatorNamespace).List(
+		ctx, metav1.ListOptions{LabelSelector: operatorSelector},
+	)
+	if err != nil {
+		s.T.Logf("[operator-logs] error listing pods: %v", err)
+		return
+	}
+	for _, pod := range pods.Items {
+		out, logErr := s.F.Kubectl(operatorNamespace, "logs", pod.Name, "-c", "manager",
+			"--tail=200", "--request-timeout=10s").CombinedOutput()
+		if logErr != nil {
+			s.T.Logf("[operator-logs] %s/%s: error: %v", pod.Name, "manager", logErr)
+			continue
+		}
+		s.T.Logf("[operator-logs] %s/%s:\n%s", pod.Name, "manager", string(out))
+	}
 }
 
 func (s *Scenario) dumpNamespace(ns string) {
@@ -286,11 +319,11 @@ func (s *Scenario) dumpNamespace(ns string) {
 		label string
 		args  []string
 	}{
-		{"engines", []string{"get", "engines.waf.k8s.coraza.io", "-o", "yaml"}},
-		{"rulesets", []string{"get", "rulesets.waf.k8s.coraza.io", "-o", "yaml"}},
-		{"wasmplugins", []string{"get", "wasmplugins.extensions.istio.io", "-o", "yaml"}},
-		{"events", []string{"get", "events", "--sort-by=.lastTimestamp"}},
-		{"pods", []string{"get", "pods", "-o", "wide"}},
+		{"engines", []string{"get", "engines.waf.k8s.coraza.io", "-o", "yaml", "--request-timeout=10s"}},
+		{"rulesets", []string{"get", "rulesets.waf.k8s.coraza.io", "-o", "yaml", "--request-timeout=10s"}},
+		{"envoyfilters", []string{"get", "envoyfilters.networking.istio.io", "-o", "yaml", "--request-timeout=10s"}},
+		{"events", []string{"get", "events", "--sort-by=.lastTimestamp", "--request-timeout=10s"}},
+		{"pods", []string{"get", "pods", "-o", "wide", "--request-timeout=10s"}},
 	}
 
 	for _, dc := range dumpCmds {
@@ -303,8 +336,10 @@ func (s *Scenario) dumpNamespace(ns string) {
 	}
 
 	// Collect pod logs for gateway pods in this namespace.
+	podCtx, cancelPods := context.WithTimeout(context.Background(), diagnosticTimeout)
+	defer cancelPods()
 	pods, err := s.F.KubeClient.CoreV1().Pods(ns).List(
-		context.Background(), metav1.ListOptions{},
+		podCtx, metav1.ListOptions{},
 	)
 	if err != nil {
 		s.T.Logf("[pod-logs] error listing pods: %v", err)
@@ -312,7 +347,7 @@ func (s *Scenario) dumpNamespace(ns string) {
 		for _, pod := range pods.Items {
 			for _, c := range pod.Spec.Containers {
 				out, logErr := s.F.Kubectl(ns, "logs", pod.Name, "-c", c.Name,
-					"--tail=50").CombinedOutput()
+					"--tail=50", "--request-timeout=10s").CombinedOutput()
 				if logErr != nil {
 					s.T.Logf("[pod-logs] %s/%s: error: %v", pod.Name, c.Name, logErr)
 					continue
@@ -345,7 +380,7 @@ func (s *Scenario) writeArtifacts(ns string) {
 	}{
 		{"engines.yaml", []string{"get", "engines.waf.k8s.coraza.io", "-o", "yaml"}},
 		{"rulesets.yaml", []string{"get", "rulesets.waf.k8s.coraza.io", "-o", "yaml"}},
-		{"wasmplugins.yaml", []string{"get", "wasmplugins.extensions.istio.io", "-o", "yaml"}},
+		{"envoyfilters.yaml", []string{"get", "envoyfilters.networking.istio.io", "-o", "yaml"}},
 		{"events.txt", []string{"get", "events", "--sort-by=.lastTimestamp"}},
 		{"pods.txt", []string{"describe", "pods"}},
 	}

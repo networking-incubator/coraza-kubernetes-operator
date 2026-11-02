@@ -59,6 +59,10 @@ spec:
             - --istio-revision={{ .Values.istio.revision }}
             {{- end }}
             - --operator-name={{ include "coraza-operator.fullname" . }}
+            - --xds-cert-path=/etc/coraza-tls
+            - --xds-cert-name={{ .Values.tls.certName | default "tls.crt" }}
+            - --xds-key-name={{ .Values.tls.keyName | default "tls.key" }}
+            - --xds-ca-path=/etc/coraza-tls/{{ .Values.tls.caName | default "ca.crt" }}
             {{- if .Values.defaultWasmImage }}
             - --default-wasm-image={{ .Values.defaultWasmImage }}
             {{- end }}
@@ -119,24 +123,30 @@ spec:
             periodSeconds: 10
             successThreshold: 1
             failureThreshold: 3
-          {{- if .Values.metrics.certSecret }}
           volumeMounts:
+            - name: xds-serving-cert
+              mountPath: /etc/coraza-tls
+              readOnly: true
+            {{- if .Values.metrics.certSecret }}
             - name: metrics-certs
               mountPath: /etc/metrics-certs
               readOnly: true
-          {{- end }}
+            {{- end }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
           {{- with .Values.resizePolicy }}
           resizePolicy:
             {{- toYaml . | nindent 12 }}
           {{- end }}
-      {{- if .Values.metrics.certSecret }}
       volumes:
+        - name: xds-serving-cert
+          secret:
+            secretName: {{ .Values.tls.existingSecret | default (printf "%s-serving-cert" (include "coraza-operator.fullname" .)) }}
+        {{- if .Values.metrics.certSecret }}
         - name: metrics-certs
           secret:
             secretName: {{ .Values.metrics.certSecret }}
-      {{- end }}
+        {{- end }}
       serviceAccountName: {{ include "coraza-operator.serviceAccountName" . }}
       terminationGracePeriodSeconds: 10
       {{- with .Values.nodeSelector }}

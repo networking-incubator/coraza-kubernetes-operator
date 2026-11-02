@@ -55,7 +55,73 @@ func TestValidatePMFromFileData(t *testing.T) {
 		assert.Contains(t, err.Error(), "want.data")
 	})
 
+	t.Run("pmf alias without data", func(t *testing.T) {
+		err := ValidatePMFromFileData(
+			`SecRule ARGS "@pmf /etc/passwd" "id:1,phase:1,pass"`,
+			nil,
+		)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "/etc/passwd")
+		assert.Contains(t, err.Error(), "spec.data")
+	})
+
+	t.Run("pmf alias with matching data", func(t *testing.T) {
+		err := ValidatePMFromFileData(
+			`SecRule ARGS "@pmf overlap.data" "id:1,phase:1,pass"`,
+			map[string][]byte{"overlap.data": []byte("a")},
+		)
+		assert.NoError(t, err)
+	})
+
+	// Coraza path-cleans the argument, so a leading ./ must resolve the same
+	// RuleData file instead of being rejected.
+	for _, argument := range []string{"./overlap.data", ".//overlap.data"} {
+		t.Run("pmf "+argument+" resolves the clean name", func(t *testing.T) {
+			assert.NoError(t, ValidatePMFromFileData(
+				`SecRule ARGS "@pmf `+argument+`" "id:1,phase:1,pass"`,
+				map[string][]byte{"overlap.data": []byte("a")},
+			))
+			err := ValidatePMFromFileData(
+				`SecRule ARGS "@pmf `+argument+`" "id:1,phase:1,pass"`,
+				map[string][]byte{"other.data": []byte("a")},
+			)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "overlap.data")
+		})
+	}
+
+	// The plugin serves the embedded CRS tree, so crs/... targets do not need
+	// RuleData. A typo there is a delivery risk the operator cannot verify.
+	t.Run("pmf embedded crs data is accepted without RuleData", func(t *testing.T) {
+		for _, dataFiles := range []map[string][]byte{nil, {}, {"other.data": []byte("x")}} {
+			assert.NoError(t, ValidatePMFromFileData(
+				`SecRule ARGS "@pmf crs/restricted-files.data" "id:1,phase:1,pass"`,
+				dataFiles,
+			))
+		}
+	})
+
+	t.Run("pmf traversal out of the embedded crs tree still needs RuleData", func(t *testing.T) {
+		err := ValidatePMFromFileData(
+			`SecRule ARGS "@pmf crs/../../etc/passwd" "id:1,phase:1,pass"`,
+			map[string][]byte{},
+		)
+		require.Error(t, err)
+	})
+
 	populatedData := map[string][]byte{"overlap.data": []byte("x")}
+
+	for _, operator := range []string{"@pmFromFile", "@pmf"} {
+		t.Run(operator+" rejects multiple file names", func(t *testing.T) {
+			err := ValidatePMFromFileData(
+				`SecRule ARGS "`+operator+` overlap.data other.data" "id:1,phase:1,pass"`,
+				map[string][]byte{"overlap.data": []byte("x"), "other.data": []byte("y")},
+			)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "single data file name")
+			assert.Contains(t, err.Error(), "overlap.data other.data")
+		})
+	}
 
 	t.Run("CRS comment prose ignored", func(t *testing.T) {
 		err := ValidatePMFromFileData(
@@ -91,4 +157,89 @@ func TestValidatePMFromFileData(t *testing.T) {
 		)
 		assert.NoError(t, err)
 	})
+
+	// Coraza joins a trailing-backslash continuation, so the scan must too or
+	// the operator file reference hides from the guard.
+	t.Run("continuation cannot hide a pmf argument", func(t *testing.T) {
+		err := ValidatePMFromFileData(
+			"SecRule ARGS \"@pmf \\\n/etc/passwd\" \"id:1,phase:1,pass\"",
+			nil,
+		)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "/etc/passwd")
+	})
+
+	t.Run("CRLF continuation cannot hide a pmf argument", func(t *testing.T) {
+		err := ValidatePMFromFileData(
+			"SecRule ARGS \"@pmf \\\r\n/etc/passwd\" \"id:1,phase:1,pass\"",
+			nil,
+		)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "/etc/passwd")
+	})
+
+	t.Run("continuation with a provided data file is accepted", func(t *testing.T) {
+		err := ValidatePMFromFileData(
+			"SecRule ARGS \"@pmFromFile \\\noverlap.data\" \"id:1,phase:1,pass\"",
+			populatedData,
+		)
+		assert.NoError(t, err)
+	})
+
+	// Both are legitimate Coraza rules: @pmf only counts as an operator when it
+	// starts the quoted rule argument.
+	t.Run("@pmf inside another operator is not an operator", func(t *testing.T) {
+		assert.NoError(t, ValidatePMFromFileData(
+			`SecRule ARGS "@rx @pmf foo" "id:1,phase:1,pass"`,
+			nil,
+		))
+	})
+
+	t.Run("@pmf inside an action message is not an operator", func(t *testing.T) {
+		assert.NoError(t, ValidatePMFromFileData(
+			`SecRule ARGS "@rx x" "id:1,phase:1,pass,msg:'use @pmf foo'"`,
+			nil,
+		))
+	})
+
+	t.Run("leading whitespace inside the quotes is not a pmf operator", func(t *testing.T) {
+		assert.NoError(t, ValidatePMFromFileData(
+			`SecRule ARGS " @pmf /etc/passwd" "id:1,phase:1,pass"`,
+			nil,
+		))
+	})
+
+	for _, operator := range []string{"@pmFromFile", "@pmf", "!@pmf", "!@pmFromFile"} {
+		t.Run(operator+" single token with data", func(t *testing.T) {
+			assert.NoError(t, ValidatePMFromFileData(
+				`SecRule ARGS "`+operator+` overlap.data" "id:1,phase:1,pass"`,
+				populatedData,
+			))
+		})
+
+		t.Run(operator+" single token without data", func(t *testing.T) {
+			require.Error(t, ValidatePMFromFileData(
+				`SecRule ARGS "`+operator+` overlap.data" "id:1,phase:1,pass"`,
+				nil,
+			))
+		})
+
+		t.Run(operator+" multi token", func(t *testing.T) {
+			err := ValidatePMFromFileData(
+				`SecRule ARGS "`+operator+` overlap.data other.data" "id:1,phase:1,pass"`,
+				map[string][]byte{"overlap.data": []byte("x"), "other.data": []byte("y")},
+			)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "single data file name")
+		})
+
+		t.Run(operator+" tab-separated absolute path", func(t *testing.T) {
+			err := ValidatePMFromFileData(
+				"SecRule ARGS \""+operator+"\t/etc/passwd\" \"id:1,phase:1,pass\"",
+				nil,
+			)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "/etc/passwd")
+		})
+	}
 }

@@ -25,6 +25,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/metrics"
 
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/rulesets/cache"
+	"github.com/networking-incubator/coraza-kubernetes-operator/internal/xds"
 )
 
 // -----------------------------------------------------------------------------
@@ -48,12 +49,23 @@ import (
 // cache server.
 const DefaultRuleSetCacheServerPort = 18080
 
+// Deps carries the manager-wide dependencies shared by controllers.
+type Deps struct {
+	KubeClient        kubernetes.Interface
+	RuleSetCache      *cache.RuleSetCache
+	IstioRevision     string
+	OperatorNamespace string
+	ECDSConfig        ECDSConfig
+	AssetBaseURL      string
+	XDS               *xds.Dependencies
+}
+
 // -----------------------------------------------------------------------------
 // Manager - Setup
 // -----------------------------------------------------------------------------
 
 // SetupControllers initializes all controllers
-func SetupControllers(mgr ctrl.Manager, rulesetCache *cache.RuleSetCache, envoyClusterName, istioRevision string, defaultWasmImage, operatorNamespace string, kubeClient kubernetes.Interface) error {
+func SetupControllers(mgr ctrl.Manager, deps Deps) error {
 	corazaMetrics, err := NewCorazaMetrics(metrics.Registry)
 	if err != nil {
 		return fmt.Errorf("register coraza metrics: %w", err)
@@ -63,7 +75,7 @@ func SetupControllers(mgr ctrl.Manager, rulesetCache *cache.RuleSetCache, envoyC
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
 		Recorder: mgr.GetEventRecorder("ruleset-controller"),
-		Cache:    rulesetCache,
+		Cache:    deps.RuleSetCache,
 		Metrics:  corazaMetrics,
 	}).SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("unable to create controller RuleSet: %w", err)
@@ -77,18 +89,42 @@ func SetupControllers(mgr ctrl.Manager, rulesetCache *cache.RuleSetCache, envoyC
 		return fmt.Errorf("unable to create controller RuleSource: %w", err)
 	}
 
+	xdsLimits := xds.DefaultLimits()
+	if deps.XDS != nil {
+		xdsLimits = deps.XDS.Limits
+	}
+
 	if err := (&EngineReconciler{
-		Client:                    mgr.GetClient(),
-		Scheme:                    mgr.GetScheme(),
-		Recorder:                  mgr.GetEventRecorder("engine-controller"),
-		Metrics:                   corazaMetrics,
-		kubeClient:                kubeClient,
-		ruleSetCacheServerCluster: envoyClusterName,
-		istioRevision:             istioRevision,
-		defaultWasmImage:          defaultWasmImage,
-		operatorNamespace:         operatorNamespace,
+		Client:            mgr.GetClient(),
+		Scheme:            mgr.GetScheme(),
+		Recorder:          mgr.GetEventRecorder("engine-controller"),
+		Metrics:           corazaMetrics,
+		kubeClient:        deps.KubeClient,
+		istioRevision:     deps.IstioRevision,
+		xdsConfig:         deps.ECDSConfig,
+		assetBaseURL:      deps.AssetBaseURL,
+		operatorNamespace: deps.OperatorNamespace,
+		Limits:            xdsLimits,
 	}).SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("unable to create controller Engine: %w", err)
+	}
+
+	if deps.XDS != nil {
+		if err := (&PublicationReconciler{
+			Client:    mgr.GetClient(),
+			APIReader: mgr.GetAPIReader(),
+			Scheme:    mgr.GetScheme(),
+			Store:     deps.XDS.Store,
+			Authz:     deps.XDS.Authz,
+			Readiness: deps.XDS.Readiness,
+			Metrics:   deps.XDS.Metrics,
+			Limits:    deps.XDS.Limits,
+		}).SetupWithManager(mgr); err != nil {
+			return fmt.Errorf("unable to create controller Publication: %w", err)
+		}
+		if err := mgr.Add(deps.XDS.Startup); err != nil {
+			return fmt.Errorf("add xDS publication startup: %w", err)
+		}
 	}
 
 	return nil
