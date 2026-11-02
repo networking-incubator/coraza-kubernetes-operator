@@ -186,3 +186,18 @@ func TestCRSTuningByIDBeforeIncludeIsRejected(t *testing.T) {
 	_, err := coraza.NewWAF(BuildWAFConfig(rules, nil))
 	require.Error(t, err, "tuning before the CRS Include must fail like it does at runtime")
 }
+
+// TestCRSTuningByIDBetweenSetupAndRulesIsRejected covers the setup include:
+// crs/crs-setup.conf defines no CRS rules, so tuning a CRS rule by ID after it
+// but before the rules include fails at runtime and must fail validation too.
+func TestCRSTuningByIDBetweenSetupAndRulesIsRejected(t *testing.T) {
+	useCRSModule(t)
+
+	rules := "SecRuleEngine On\n" +
+		"Include crs/crs-setup.conf\n" +
+		`SecRuleUpdateActionById 942100 "deny,status:403"` + "\n" +
+		"Include crs/rules/*.conf"
+
+	_, err := coraza.NewWAF(BuildWAFConfig(rules, nil))
+	require.Error(t, err, "the setup include does not load CRS rules")
+}

@@ -75,6 +75,18 @@ var crsPatchByIDPattern = regexp.MustCompile(`(?im)^secrule(?:updatetarget|updat
 // that exact ID is too contrived to matter.
 var ruleIDActionPattern = regexp.MustCompile(`(?i)\bid:[ \t]*'?(\d+)`)
 
+// crsRulesLoaded reports whether an Include line loads CRS rule files.
+// crs/crs-setup.conf defines no rules, so a tuning directive after it but
+// before the rules include still cannot address a CRS rule at runtime.
+func crsRulesLoaded(line string) bool {
+	for _, target := range crsIncludeTargets(line) {
+		if strings.HasPrefix(target, "crs/rules/") {
+			return true
+		}
+	}
+	return false
+}
+
 // crsTuningStandInRules returns a SecRule definition for every rule ID a
 // SecRuleUpdateTargetById or SecRuleUpdateActionById directive addresses
 // without a definition in rules or in the RuleData files it Includes. The
@@ -95,7 +107,7 @@ func crsTuningStandInRules(rules string, dataFiles map[string][]byte) string {
 	var walk func(name, text string, crsLoaded bool) bool
 	walk = func(name, text string, crsLoaded bool) bool {
 		for _, line := range strings.Split(joinActiveRuleLines(text), "\n") {
-			if len(crsIncludeTargets(line)) > 0 {
+			if crsRulesLoaded(line) {
 				crsLoaded = true
 				continue
 			}
