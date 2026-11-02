@@ -53,11 +53,11 @@ func TestReconciliation(t *testing.T) {
 		GatewayName: "reconcile-gw",
 	})
 	s.ExpectEngineReady(ns, "engine")
-	s.ExpectWasmPluginExists(ns, "coraza-engine-engine")
+	s.ExpectEnvoyFilterExists(ns, "coraza-engine-engine")
 
 	s.Step("verify operator emitted expected events")
-	s.ExpectEvent(ns, framework.EventMatch{Type: "Normal", Reason: "RulesCached"})
-	s.ExpectEvent(ns, framework.EventMatch{Type: "Normal", Reason: "WasmPluginCreated"})
+	s.ExpectEvent(ns, framework.EventMatch{Type: "Normal", Reason: "RulesAccepted"})
+	s.ExpectEvent(ns, framework.EventMatch{Type: "Normal", Reason: "ConfigurationAccepted"})
 
 	s.Step("deploy echo backend")
 	s.CreateEchoBackend(ns, "echo")

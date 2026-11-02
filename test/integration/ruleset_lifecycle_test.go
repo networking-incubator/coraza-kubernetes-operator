@@ -76,7 +76,7 @@ func TestRuleSetDeletion(t *testing.T) {
 }
 
 // TestEngineDeleteRecreate verifies that deleting and recreating an Engine
-// properly cleans up and recreates the WasmPlugin.
+// properly cleans up and recreates the EnvoyFilter.
 func TestEngineDeleteRecreate(t *testing.T) {
 	t.Parallel()
 	s := fw.NewScenario(t)
@@ -98,7 +98,7 @@ func TestEngineDeleteRecreate(t *testing.T) {
 		GatewayName: "gw",
 	})
 	s.ExpectEngineReady(ns, "engine")
-	s.ExpectWasmPluginExists(ns, "coraza-engine-engine")
+	s.ExpectEnvoyFilterExists(ns, "coraza-engine-engine")
 
 	s.Step("deploy backend")
 	s.CreateEchoBackend(ns, "echo")
@@ -115,8 +115,8 @@ func TestEngineDeleteRecreate(t *testing.T) {
 		t.Fatalf("failed to delete engine: %v", err)
 	}
 
-	s.Step("verify WasmPlugin is cleaned up")
-	s.ExpectResourceGone(ns, "coraza-engine-engine", framework.WasmPluginGVR)
+	s.Step("verify EnvoyFilter is cleaned up")
+	s.ExpectResourceGone(ns, "coraza-engine-engine", framework.EnvoyFilterGVR)
 
 	s.Step("update rules for second engine")
 	s.UpdateRuleSource(ns, "block-rules", framework.SimpleBlockRule(9102, "secondblock"))
@@ -127,7 +127,7 @@ func TestEngineDeleteRecreate(t *testing.T) {
 		GatewayName: "gw",
 	})
 	s.ExpectEngineReady(ns, "engine")
-	s.ExpectWasmPluginExists(ns, "coraza-engine-engine")
+	s.ExpectEnvoyFilterExists(ns, "coraza-engine-engine")
 
 	s.Step("verify new rules are applied")
 	gw.ExpectBlocked("/?test=secondblock")

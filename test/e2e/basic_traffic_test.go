@@ -71,7 +71,7 @@ func TestE2E_BasicTraffic(t *testing.T) {
 
 	s.Step("wait for engine ready")
 	s.ExpectEngineReady(ns, "engine")
-	s.ExpectWasmPluginExists(ns, "coraza-engine-engine")
+	s.ExpectEnvoyFilterExists(ns, "coraza-engine-engine")
 
 	// -------------------------------------------------------------------------
 	// Step 4: Deploy backend and verify WAF enforcement
@@ -88,9 +88,11 @@ func TestE2E_BasicTraffic(t *testing.T) {
 	s.Step("setup proxy to gateway")
 	gw := s.ProxyToGateway(ns, "istio-gateway")
 
-	s.Step("verify malicious traffic is blocked")
-	gw.ExpectBlocked("/?test=blocked")
-
+	// The fail-closed bootstrap also returns 403, so prove the WAF is active
+	// with a request it must allow before asserting that it blocks the attack.
 	s.Step("verify clean traffic is allowed")
 	gw.ExpectAllowed("/?test=safe")
+
+	s.Step("verify malicious traffic is blocked")
+	gw.ExpectBlocked("/?test=blocked")
 }
