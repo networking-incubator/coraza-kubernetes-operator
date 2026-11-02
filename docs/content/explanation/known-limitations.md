@@ -5,6 +5,12 @@ weight: 40
 description: "Behavioral differences and limitations when running Coraza WAF with Istio in WASM mode."
 ---
 
+> **Baseline note:** these results were measured against the previous Go
+> `coraza-proxy-wasm` plugin. The operator now bundles the `envoy-coraza` filter
+> from `coraza-rs`; this matrix must be re-run before the counts or categories
+> are treated as current.
+
+
 This page describes known limitations when running the Coraza WAF with Istio using WASM mode. These limitations are specific to the WASM execution environment and do not apply to all deployment modes.
 
 ## Overview

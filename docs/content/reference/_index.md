@@ -18,6 +18,7 @@ Reference documentation provides precise, complete descriptions of the operator'
 
 - [Helm Chart Values]({{< relref "helm-values" >}})
 - [Operator CLI Flags]({{< relref "operator-cli-flags" >}})
+- [ECDS Plugin Contract]({{< relref "ecds-plugin-contract" >}})
 
 ## Tools
 

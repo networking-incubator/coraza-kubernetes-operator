@@ -37,7 +37,7 @@ The Engine's target Gateway has been validated. Only one Engine may target a giv
 
 ### Ready
 
-The Engine is deployed and attached to a Gateway.
+The Engine's configuration has been accepted and the EnvoyFilter is attached to the Gateway. When the `Ready` condition is `True`, the **reason** is `ConfigurationAccepted`: the configuration rendered from the accepted RuleSet content was provisioned.
 
 ```bash
 kubectl get engine my-engine -n my-namespace
@@ -45,7 +45,7 @@ kubectl get engine my-engine -n my-namespace
 
 ### Progressing
 
-The Engine is being reconciled. This is normal during creation or after updates.
+The Engine is being reconciled. This is normal during creation or after updates. While the referenced RuleSet has not accepted content for its current generation, the **reason** is `AwaitingRuleSetAcceptance` (the message explains what the RuleSet is waiting for).
 
 ### Degraded
 
@@ -55,11 +55,34 @@ The Engine could not reach its desired state. Common reasons:
 |--------|-------------|------------|
 | `RuleSetNotFound` | The referenced RuleSet does not exist. | Verify the RuleSet name and namespace in the Engine spec. |
 | `RuleSetDegraded` | The referenced RuleSet is in a Degraded state. | Check the RuleSet status: `kubectl describe ruleset <name>`. |
+| `RuleSetInputsUnavailable` | A RuleSource or RuleData the accepted RuleSet references could not be loaded (for example it was deleted). The Engine keeps its last accepted configuration while the input is missing. | Recreate the missing object or fix the reference; the RuleSet must re-accept its content. |
+| `InvalidRuleSet` | The accepted RuleSet content cannot be assembled, or it exceeds the operator's delivery limits (`xds-max-decoded-data-bytes`, `xds-max-data-files`, rule text size). | Reduce the RuleData size or file count, or raise the limit if it stays below the plugin caps. |
+| `RenderFailed` | The rendered ECDS payload cannot be delivered (it exceeds `xds-max-message-bytes` or the plugin's 8 MiB configuration cap) or rendering failed. | Reduce RuleData or rule text, or raise `xds-max-message-bytes`. |
 | `InvalidConfiguration` | The Engine spec contains an invalid configuration. | Check the condition message for details and fix the Engine spec. |
-| `ProvisioningFailed` | Failed to create or update the WasmPlugin resource. | Check operator logs and RBAC permissions. |
-| `NetworkPolicyFailed` | Failed to apply the NetworkPolicy for the cache server. | Check operator logs and RBAC permissions. |
-| `ServiceAccountFailed` | Failed to ensure the cache client ServiceAccount. | Check operator logs and RBAC permissions. |
-| `TokenFailed` | Failed to ensure the cache client token. | Check operator logs and RBAC permissions. |
+| `ProvisioningFailed` | Failed to create or update the EnvoyFilter resource. | Check operator logs and RBAC permissions. |
+| `NetworkPolicyFailed` | Failed to apply the NetworkPolicy that restricts access to the operator's xDS listener. | Check operator logs and RBAC permissions. |
+| `TLSNotConfigured` | The operator has no verified CA chain for its xDS serving certificate. | Set `--xds-ca-path` to the CA bundle Gateways use to verify the operator certificate. |
+
+The operator clears `status.acceptedConfiguration` when the Engine reports
+`RenderFailed` for an oversized payload, `RuleSetNotFound`, or a `RuleSetDegraded`
+state the record cannot be reconstructed from (a recreated RuleSet or
+`RejectedContent`). That removes the accepted configuration from the ECDS serving
+plane, so an already-running proxy keeps the snapshot it already received but no
+longer gets updates, and a new or restarted proxy gets no WAF coverage until the
+Engine accepts a configuration again. An ordinary aggregate-validation failure
+(`InvalidRuleSet`), an Engine-side assembly failure, and wait states (a degraded
+RuleSet that is only missing RuleData, a `RuleSetInputsUnavailable` input, or a
+RuleSet that has not accepted the current generation) keep the last good accepted
+configuration and snapshot instead, so an already-running proxy stays protected by
+the previous rules. A cleared record is not a fail-closed signal on its own: a fresh
+Gateway pod receives no WAF configuration from the operator for this Engine.
+
+An accepted configuration recorded before the operator restarted must be reconstructed
+by every replica. If one cannot be reconstructed, the replica stays unready for the
+ECDS plane for up to two minutes and then reports the record and starts serving anyway,
+keeping the last snapshot it already had. Readiness never turns a stale snapshot into a
+fail-closed Gateway; the record is reported in operator logs and the
+`coraza_xds_cold_reconstruction_failures_total` metric instead.
 
 ## RuleSource Conditions
 
@@ -100,7 +123,9 @@ The RuleData has been loaded by a RuleSet reconciliation.
 
 ### Ready
 
-The rules have been compiled, validated, and cached. When the `Ready` condition is `True`, the **reason** is typically `RulesCached`.
+The rules have been compiled, validated, and accepted for delivery over ECDS. When the `Ready` condition is `True`, the **reason** is typically `RulesAccepted`.
+
+`Ready` only means the RuleSet content is accepted. Delivery limits are enforced when an **Engine** accepts and publishes the configuration, so a RuleSet whose content exceeds those limits is still accepted while every Engine referencing it reports `Degraded`.
 
 ### Progressing
 
@@ -108,12 +133,13 @@ The RuleSet is being processed. This happens when the **RuleSet** or a reference
 
 ### Degraded
 
-The RuleSet could not be compiled or cached. Common reasons:
+The RuleSet could not be compiled or accepted. Common reasons:
 
 | Reason | Description | Resolution |
 |--------|-------------|------------|
 | `UnsupportedRules` | The RuleSet contains rules not supported in the current execution environment. | Remove the unsupported rules, or add the annotation `waf.k8s.coraza.io/skip-unsupported-rules-check: "true"` to the RuleSet. |
-| `InvalidRuleSet` | Aggregate validation failed (including `@pmFromFile` references that are not backed by a key in merged **RuleData**). | Add or fix `spec.data` so every `@pmFromFile` basename exists in the referenced RuleData objects; fix other SecLang issues in the message. |
+| `InvalidRuleSet` | Aggregate validation failed (including `@pmFromFile` references that are not backed by a key in merged **RuleData**). The Engine keeps its last accepted configuration. | Add or fix `spec.data` so every `@pmFromFile` basename exists in the referenced RuleData objects; fix other SecLang issues in the message. |
+| `RejectedContent` | The content violates the delivery contract: a host-file directive, an unsupported `Include` target, or a request-body limit `envoy-coraza` would reject. The Engine clears its accepted configuration. | Remove the directive or include, or set `SecRequestBodyLimit` at or below 16 MiB; see the ECDS plugin contract. |
 | `ReferencedRuleSourceInvalid` | A referenced **RuleSource** is in `Degraded` with `InvalidRules` for its current spec generation. | Fix the **RuleSource** `spec.rules` (see that object’s status message). |
 | `RuleSourceNotFound` | A RuleSource named in `spec.sources` does not exist. | Create the RuleSource or correct the name; it must be in the same namespace as the RuleSet. |
 | `RuleSourceAccessError` | The operator could not read a referenced RuleSource. | Check RBAC and API errors in operator logs. |
@@ -169,9 +195,9 @@ kubectl describe rulesource <name> -n my-namespace
    kubectl get gateways -n my-namespace
    ```
 
-2. Check that the WasmPlugin was created:
+2. Check that the EnvoyFilter was created:
    ```bash
-   kubectl get wasmplugin -n my-namespace
+   kubectl get envoyfilter -n my-namespace
    ```
 
 3. Check the Gateway proxy logs for Coraza output:
