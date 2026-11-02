@@ -15,5 +15,9 @@
 !go.mod
 !go.sum
 
+# Re-include the embedded WASM bundle (go:embed in internal/assets)
+!internal/assets/
+!internal/assets/**
+
 # Ignore test files
 **/*_test.go

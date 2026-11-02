@@ -10,6 +10,7 @@ import json
 import os
 import re
 import sys
+import time
 
 from lib import (
     HELM_CHART_DIR, HELM_RELEASE_NAME,
@@ -192,12 +193,70 @@ spec:
   ipAddressPools:
   - kube-services
 """
-    run(f"echo '{manifests}' | kubectl --context {context} apply --server-side -f -")
+    # The MetalLB validating webhook can lag behind the controller rollout on a
+    # fresh cluster; retry until it accepts the pool.
+    for attempt in range(1, 7):
+        if run(
+            f"echo '{manifests}' | kubectl --context {context} apply --server-side -f -",
+            check=False,
+        ).returncode == 0:
+            return
+        print(f"MetalLB webhook not ready (attempt {attempt}), retrying in 5s", file=sys.stderr)
+        time.sleep(5)
+    die("Failed to create the MetalLB IPAddressPool after 6 attempts")
 
 
 # ---------------------------------------------------------------------------
 # Istio (Sail Operator)
 # ---------------------------------------------------------------------------
+
+
+def resolve_sail_version(istio_version: str) -> str:
+    """Pick a Sail operator chart that supports the requested Istio version.
+
+    Sail chart releases share the Istio minor version they ship, so an override
+    on a different minor can never manage the requested control plane.
+    """
+    minor = ".".join(istio_version.split(".")[:2])
+    override = os.environ.get("SAIL_OPERATOR_VERSION", "").strip()
+    if override:
+        if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", override):
+            die(f"invalid SAIL_OPERATOR_VERSION: {override!r} (expected X.Y.Z)")
+        if ".".join(override.split(".")[:2]) != minor:
+            die(
+                f"SAIL_OPERATOR_VERSION {override} does not match ISTIO_VERSION "
+                f"{istio_version}: the Sail operator chart must use Istio minor {minor}.x"
+            )
+        return override
+
+    result = run(
+        "helm search repo sail-operator/sail-operator --versions -o json",
+        check=False, capture_output=True,
+    )
+    if result.returncode == 0:
+        try:
+            entries = json.loads(result.stdout or "[]")
+        except json.JSONDecodeError:
+            entries = []
+        versions = [
+            entry.get("version", "")
+            for entry in entries
+            if isinstance(entry, dict)
+        ]
+        matching = [
+            version for version in versions
+            if re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version)
+            and version.startswith(minor + ".")
+        ]
+        if matching:
+            newest = max(matching, key=lambda version: tuple(int(part) for part in version.split(".")))
+            return newest
+
+    die(
+        f"no sail-operator chart found for Istio {minor}: "
+        f"set SAIL_OPERATOR_VERSION to a {minor}.x release"
+    )
+    return ""  # unreachable
 
 
 def deploy_istio_sail(context: str) -> None:
@@ -207,6 +266,9 @@ def deploy_istio_sail(context: str) -> None:
     print("Deploying Istio Sail Operator")
     run(f"helm repo add sail-operator {SAIL_REPO}")
     run("helm repo update")
+
+    sail_version = resolve_sail_version(istio_version)
+    print(f"Using Sail operator {sail_version} for Istio {istio_version}")
     run(f"kubectl --context {context} create namespace sail-operator", check=False)
 
     result = run(
@@ -217,7 +279,7 @@ def deploy_istio_sail(context: str) -> None:
     if result.returncode != 0:
         run(
             f"helm install sail-operator sail-operator/sail-operator "
-            f"--version {istio_version} "
+            f"--version {sail_version} "
             f"--namespace sail-operator --kube-context {context}"
         )
     else:

@@ -93,6 +93,29 @@ jobs:
       - name: set up docker buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
+      # The image embeds the reviewed coraza-rs envoy-coraza module, built from
+      # the commit pinned in the Makefile (CORAZA_RS_VERSION). The release
+      # build does not embed CRS (WASM_CRS=0). The build links the WASI stubs so
+      # the artifact loads on Envoy <1.40 (Istio 1.31).
+      # The operator serves the module from its own /wasm/<digest>.wasm route;
+      # Envoy rejects redirecting asset URLs, so never point an Engine url at a
+      # GitHub release asset.
+      - name: build and bundle envoy-coraza module
+        run: |
+          set -eu
+          mkdir -p dist/wasm
+          make wasm.plugin WASM_MODULE_OUT=dist/wasm/plugin.wasm WASM_CRS=0
+          make wasm.bundle WASM_MODULE=dist/wasm/plugin.wasm WASM_CRS=0
+          make wasm.verify
+          cp internal/assets/plugin.manifest.yaml dist/wasm/
+          (cd dist/wasm && sha256sum plugin.wasm > plugin.wasm.sha256)
+
+      - name: upload wasm artifacts
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: wasm-bundle
+          path: dist/wasm/
+
       - name: log in to ghcr
         uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         with:
@@ -233,6 +256,12 @@ jobs:
           name: manifests
           path: dist/
 
+      - name: download bundled wasm artifacts
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: wasm-bundle
+          path: dist/wasm/
+
       # IMPORTANT: draft release — a maintainer must validate and publish manually.
       # The chart .tgz is included here (not in a separate chart-releaser step)
       # so that pages.yml can generate the Helm repo index directly from release
@@ -267,6 +296,9 @@ jobs:
             dist/kubectl-coraza-linux-arm64
             dist/kubectl-coraza-darwin-amd64
             dist/kubectl-coraza-darwin-arm64
+            dist/wasm/plugin.wasm
+            dist/wasm/plugin.wasm.sha256
+            dist/wasm/plugin.manifest.yaml
           )
 
           for f in "${ASSETS[@]}"; do
