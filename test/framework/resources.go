@@ -35,7 +35,6 @@ import (
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	wafv1alpha1 "github.com/networking-incubator/coraza-kubernetes-operator/api/v1alpha1"
-	"github.com/networking-incubator/coraza-kubernetes-operator/internal/defaults"
 )
 
 // Resource builders, GVRs, and CRUD helpers for integration tests.
@@ -87,9 +86,9 @@ var (
 		Group: "gateway.networking.k8s.io", Version: "v1", Resource: "httproutes",
 	}
 
-	// WasmPluginGVR is the GroupVersionResource for WasmPlugin resources.
-	WasmPluginGVR = schema.GroupVersionResource{
-		Group: "extensions.istio.io", Version: "v1alpha1", Resource: "wasmplugins",
+	// EnvoyFilterGVR is the GroupVersionResource for Istio EnvoyFilter resources.
+	EnvoyFilterGVR = schema.GroupVersionResource{
+		Group: "networking.istio.io", Version: "v1alpha3", Resource: "envoyfilters",
 	}
 
 	// TelemetryGVR is the GroupVersionResource for Istio Telemetry resources.
@@ -110,10 +109,6 @@ type EngineOpts struct {
 	// GatewayName is the name of the Gateway resource to target.
 	GatewayName string
 
-	// WasmImage is the OCI image for the WASM plugin. Defaults to the
-	// CORAZA_WASM_IMAGE env var, or a built-in default.
-	WasmImage string
-
 	// FailurePolicy determines behavior when the WAF is not ready.
 	// Defaults to wafv1alpha1.FailurePolicyFail.
 	FailurePolicy wafv1alpha1.FailurePolicy
@@ -129,13 +124,6 @@ type EngineOpts struct {
 // -----------------------------------------------------------------------------
 // Defaults
 // -----------------------------------------------------------------------------
-
-func defaultWasmImage() string {
-	if img := os.Getenv("CORAZA_WASM_IMAGE"); img != "" {
-		return img
-	}
-	return defaults.DefaultCorazaWasmOCIReference
-}
 
 const fallbackEchoImage = "registry.k8s.io/gateway-api/conformance/echo-basic:v0.1.0"
 
@@ -249,9 +237,6 @@ func BuildRuleSet(namespace, name string, sourceNames, dataNames []string) *unst
 
 // BuildEngine builds an unstructured Engine object.
 func BuildEngine(namespace, name string, opts EngineOpts) *unstructured.Unstructured {
-	if opts.WasmImage == "" {
-		opts.WasmImage = defaultWasmImage()
-	}
 	if opts.FailurePolicy == "" {
 		opts.FailurePolicy = wafv1alpha1.FailurePolicyFail
 	}
@@ -293,9 +278,9 @@ func BuildEngine(namespace, name string, opts EngineOpts) *unstructured.Unstruct
 			},
 			Driver: wafv1alpha1.DriverConfig{
 				Type: wafv1alpha1.DriverTypeWasm,
-				Wasm: &wafv1alpha1.WasmDriverConfig{
-					Image: opts.WasmImage,
-				},
+				// Keep the URL and digest empty so the bundled-module default
+				// path is exercised.
+				Wasm: &wafv1alpha1.WasmDriverConfig{},
 			},
 		},
 	}

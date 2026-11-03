@@ -48,7 +48,7 @@ Run `make observability.grafana.url` to print credentials and dashboard UIDs.
 
 | Section | What to look for |
 |---------|------------------|
-| Health summary | Recording-rule stats (engines/rulesets not ready, cache hit ratio). **Cache hit ratio** shows no data when Envoy is not polling the cache (idle). |
+| Health summary | Recording-rule stats (engines/rulesets not ready, cache hit ratio). **Cache hit ratio** covers the legacy rules cache, which the ECDS path never reads, so it shows no data. |
 | Validation | `coraza_*_validations_total` rates and latency — spikes on bad rule edits |
 | Cache RED / USE | Request rates, auth failures, size vs limit, cache Put duration |
 | Kubernetes API & workqueue | `rest_client_*` pressure and controller queue retries |

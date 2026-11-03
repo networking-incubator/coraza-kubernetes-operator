@@ -735,6 +735,7 @@ func gatherNamespaceGauge(t *testing.T, reg *prometheus.Registry, metricName, ns
 	return 0
 }
 
+//nolint:unused // retained helper for the disabled cache-server metrics tests
 func gatherCacheSetDurationSampleCount(t *testing.T, reg *prometheus.Registry) uint64 {
 	t.Helper()
 	gathered, err := reg.Gather()

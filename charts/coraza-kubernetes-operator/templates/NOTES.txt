@@ -10,13 +10,21 @@ WARNING: HA is not currently supported (see issue #38).
 Running multiple replicas may cause undefined behavior.
 {{- end }}
 
+{{- if and (not .Values.tls.existingSecret) .Values.tls.generate }}
+
+WARNING: a self-signed serving certificate (365-day CA and leaf) was generated
+for this release. It is reused across `helm upgrade` via `lookup`, which only
+works for `helm install`/`helm upgrade`. `helm template` and GitOps tools
+(Argo CD, Flux) cannot reuse the Secret and would regenerate the CA on every
+sync. For those flows set tls.generate=false and provide tls.existingSecret
+(or manage the certificate with cert-manager).
+{{- end }}
+
 {{- if .Values.istio.revision }}
 Istio integration is configured (revision: {{ .Values.istio.revision }}).
 {{- else }}
 Istio integration uses the default control plane (no Istio revision label).
 {{- end }}
-ServiceEntry and DestinationRule have been created for the ruleset cache.
-
 To get started, create a RuleSource, RuleSet, and Engine:
 
   https://networking-incubator.github.io/coraza-kubernetes-operator/latest/tutorials

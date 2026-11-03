@@ -5,16 +5,13 @@ name: operatorhub-opp-pr
 permissions:
   contents: read
 
+# Disabled until the bundle can supply the xDS serving certificate
+# (https://github.com/networking-incubator/coraza-kubernetes-operator/issues/578).
+# This job installs the published :latest controller image, which predates the
+# ECDS manager flags and cannot serve this PR's bundle. Re-enable with a
+# PR-built image (or after :latest is rebuilt from main) and the OLM fix.
 on:
-  pull_request:
-    branches: [main]
-    paths:
-      - "charts/coraza-kubernetes-operator/**"
-      - "hack/generate_bundle.py"
-      - "hack/operatorhub_opp_test.sh"
-      - "bundle/**"
-      - "config/crd/**"
-      - "Makefile"
+  workflow_dispatch:
 
 jobs:
   opp-kiwi:

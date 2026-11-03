@@ -16,18 +16,7 @@ rules:
   resources:
   - serviceaccounts
   verbs:
-  - create
   - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
-  - ""
-  resources:
-  - serviceaccounts/token
-  verbs:
-  - create
 - apiGroups:
   - ""
   - events.k8s.io
@@ -36,12 +25,6 @@ rules:
   verbs:
   - create
   - patch
-- apiGroups:
-  - apps
-  resources:
-  - deployments
-  verbs:
-  - get
 - apiGroups:
   - authentication.k8s.io
   resources:
@@ -67,18 +50,6 @@ rules:
   - update
   - watch
 - apiGroups:
-  - extensions.istio.io
-  resources:
-  - wasmplugins
-  verbs:
-  - create
-  - delete
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
   - gateway.networking.k8s.io
   resources:
   - gatewayclasses
@@ -90,13 +61,15 @@ rules:
 - apiGroups:
   - networking.istio.io
   resources:
-  - destinationrules
-  - serviceentries
+  - envoyfilters
   verbs:
   - create
+  - delete
   - get
+  - list
   - patch
   - update
+  - watch
 - apiGroups:
   - telemetry.istio.io
   resources:

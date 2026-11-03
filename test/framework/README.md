@@ -22,9 +22,11 @@ The framework has three layers:
 | `KIND_CLUSTER_NAME` | Connects to a kind cluster via `kind get kubeconfig` |
 | `KUBECONFIG` | Fallback: connects via standard kubeconfig |
 | `ISTIO_GATEWAY_REVISION` | If set, `CreateGateway` / `BuildGateway` add `metadata.labels["istio.io/rev"]` with this value. Empty omits the label (default-revision Istio). Kind Makefile targets default to `coraza`; on OpenShift use e.g. `openshift-gateway` to match your operator Helm `istio.revision`, or leave unset/empty when not using a named revision. |
-| `CORAZA_WASM_IMAGE` | Override the default WASM plugin OCI image |
 | `ECHO_IMAGE` | Override the default echo backend image |
 | `ARTIFACTS_DIR` | If set, write diagnostic dumps (YAML, logs, events) to this directory on test failure |
+
+Engines built by the framework always use the operator's bundled module; there
+is no framework-level module override.
 
 ## Quick Start
 
@@ -105,7 +107,6 @@ SecRule ARGS "@contains attack" "id:1,phase:2,deny,status:403"`)
 | `ExpectEngineDegraded(ns, name)` | Poll until Engine condition Degraded=True |
 | `ExpectGatewayProgrammed(ns, name)` | Poll until Gateway condition Programmed=True |
 | `ExpectGatewayAccepted(ns, name)` | Poll until Gateway condition Accepted=True |
-| `ExpectWasmPluginExists(ns, name)` | Poll until WasmPlugin exists |
 | `ExpectResourceGone(ns, name, gvr)` | Poll until resource is deleted |
 | `ExpectCondition(ns, name, gvr, type, status)` | Generic condition poll |
 | `ExpectCreateFails(msg, fn)` | Assert fn returns error containing msg |

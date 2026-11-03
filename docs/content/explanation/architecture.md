@@ -20,10 +20,10 @@ The data flows through these components:
 RuleSource / RuleData
        |
        v
-RuleSetReconciler  --compile and validate-->  RuleSetCache (HTTP server)
+RuleSetReconciler  --compile and validate-->  ECDS resource (per Engine)
                                                     |
                                                     v
-                                          WASM plugin in Envoy (polls cache)
+                                   EnvoyFilter + WASM plugin in Envoy
                                                     |
                                                     v
                                             Traffic filtering
@@ -39,10 +39,10 @@ The RuleSet controller watches **RuleSet** resources and the **RuleSource** and 
 2. If `spec.data` is set, loads each **RuleData** and merges `spec.files` (later objects override duplicate filenames).
 3. Compiles and validates the rules using the Coraza engine.
 4. Checks for rules that are unsupported in the current execution environment (such as WASM mode).
-5. On success, stores the compiled ruleset in the shared cache.
+5. On success, records the accepted content hash in the RuleSet status.
 6. Updates the RuleSet status conditions.
 
-If compilation fails or unsupported rules are detected, the new revision is rejected. Any previously cached valid revision continues to be served until the issues are resolved.
+If compilation fails or unsupported rules are detected, the new revision is rejected. The last accepted record may remain available for status and audit, while the Engine's distributable snapshot follows the accepted-record rules described in [Rule processing]({{< relref "/explanation/rule-processing" >}}).
 
 ### EngineReconciler
 
@@ -50,31 +50,20 @@ The Engine controller watches Engine resources, their referenced RuleSets, Gatew
 
 1. Verifies that the referenced RuleSet is in a Ready state.
 2. Discovers Gateway pods that match the Engine's target name (via the GEP-1762 label selector).
-3. Creates or updates an Istio WasmPlugin resource via server-side apply, configuring the WASM plugin to poll the cache server for the specified RuleSet.
-4. Creates a NetworkPolicy to allow Gateway pods to reach the cache server.
-5. Manages a ServiceAccount token for authenticated cache access.
+3. Creates or updates an Istio EnvoyFilter that inserts the WASM filter and publishes the accepted RuleSet over ECDS (see [Istio WASM Integration]({{< relref "/explanation/istio-wasm-integration" >}})).
+4. Creates a NetworkPolicy to allow Gateway pods to reach the operator's ECDS listener.
+5. Authorizes the Gateway's ECDS subscription: the Gateway authenticates with its own pod ServiceAccount token (validated by TokenReview), and the operator maps that ServiceAccount to the Engine's target Gateway.
 6. Updates the Engine status with matched Gateways and conditions.
 
 Dataplane `coraza_waf_*` metrics use Istio OpenTelemetry access logs and a platform-owned central collector. For an observability-enabled Engine, the reconciler creates the Gateway-scoped Telemetry; it does not create OTC sidecars or patch Gateways for telemetry inject.
 
-## RuleSet Cache Server
+## ECDS and Asset Serving
 
-The cache is an in-memory, versioned HTTP server that runs within the operator process on port 18080 (configurable). It serves two endpoints:
+The active delivery path is ECDS, not the legacy HTTP rule server. The operator serves ECDS and the digest-addressed WASM asset route on one TLS listener (port 18080 by default). The retained `/rules` cache-server implementation is not started in the default deployment.
 
-| Endpoint | Purpose |
-|----------|---------|
-| `GET /rules/{namespace/name}` | Returns the full compiled ruleset as a JSON `RuleSetEntry`. |
-| `GET /rules/{namespace/name}/latest` | Returns metadata (UUID and timestamp) about the latest cached version. |
+The ECDS serving plane is built per replica. It reconstructs accepted content from Kubernetes state, verifies the accepted hashes, and serves only matching snapshots. See [Istio WASM Integration]({{< relref "/explanation/istio-wasm-integration" >}}) for the transport and attachment details.
 
-The cache keys are the `namespace/name` of the RuleSet resource. Cache entries are garbage-collected based on:
-
-- **Maximum age** (`--cache-max-age`, default 24 hours) -- entries older than this are removed.
-- **Maximum size** (`--cache-max-size`, default 100 MB) -- when the total cache size exceeds this, the oldest entries are evicted.
-- **GC interval** (`--cache-gc-interval`, default 5 minutes) -- how often the garbage collector runs.
-
-## Istio Prerequisites
-
-When the `--operator-name` flag is set, the operator creates a ServiceEntry and DestinationRule at startup via server-side apply. These resources make the cache server discoverable within the Istio mesh so that WASM plugins running in Gateway pods can reach it.
+The ECDS path does not depend on CKO-created ServiceEntry or DestinationRule resources. Gateway access is controlled by the Engine NetworkPolicy and the platform's network policy/egress controls.
 
 ## Controller Manager
 

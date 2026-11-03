@@ -39,6 +39,16 @@ jobs:
       - name: check for uncommitted changes
         run: git diff --exit-code || (echo "generated files have uncommitted changes. run 'make manifests generate helm.sync' and commit the results." && exit 1)
 
+      # The operator image must carry the real module, not the 8-byte build
+      # fixture: Envoy fetches /wasm/<digest>.wasm and rejects the fixture with
+      # "Missing or unknown Proxy-Wasm ABI version". Build the pinned
+      # coraza-rs module before the image so integration/conformance jobs load it.
+      - name: build and bundle WASM module
+        run: |
+          make wasm.plugin WASM_CRS=0
+          make wasm.bundle WASM_MODULE=.cache/wasm/envoy_coraza.wasm WASM_CRS=0
+          make wasm.verify
+
       - name: build container image
         run: make build.image
 

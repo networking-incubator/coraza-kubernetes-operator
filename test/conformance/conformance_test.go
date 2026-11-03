@@ -148,23 +148,25 @@ func TestCoreRuleSetConformance(t *testing.T) {
 
 	s.Step("wait for engine ready")
 	s.ExpectEngineReady(ns, "conformance-engine")
-	s.ExpectWasmPluginExists(ns, "coraza-engine-conformance-engine")
+	s.ExpectEnvoyFilterExists(ns, "coraza-engine-conformance-engine")
 
 	s.Step("wait for gateway pod rollout to complete")
 	s.WaitForGatewayPodStable(ns, gwName)
 
 	s.Step("verify operator emitted expected events")
-	s.ExpectEvent(ns, framework.EventMatch{Type: "Normal", Reason: "RulesCached"})
-	s.ExpectEvent(ns, framework.EventMatch{Type: "Normal", Reason: "WasmPluginCreated"})
+	s.ExpectEvent(ns, framework.EventMatch{Type: "Normal", Reason: "RulesAccepted"})
+	s.ExpectEvent(ns, framework.EventMatch{Type: "Normal", Reason: "ConfigurationAccepted"})
 
 	s.Step("wait for WASM plugin to load rules")
 	gw := s.ProxyToGateway(ns, gwName)
 	require.Eventually(t, func() bool {
-		resp := gw.Get("/probe-cko-readiness")
-		s.T.Logf("received response when checking for WASM readiness: %+v", resp)
-		return resp.Err == nil && resp.StatusCode == 403
+		// Fail-closed bootstrap also returns 403, so require a safe request to reach the backend.
+		allowed := gw.Get("/")
+		probe := gw.Get("/probe-cko-readiness")
+		s.T.Logf("received responses when checking for WASM readiness: allowed=%+v probe=%+v", allowed, probe)
+		return allowed.Err == nil && allowed.StatusCode == 200 && probe.Err == nil && probe.StatusCode == 403
 	}, framework.WasmEnforcementTimeout, framework.DefaultInterval,
-		"CRS-triggering payload not blocked; WASM plugin may not have loaded rules")
+		"normal traffic did not pass and readiness probe was not blocked; WASM plugin may not have loaded rules")
 
 	// -------------------------------------------------------------------------
 	// Step 5: Start logstreaming and proxy, and fix FTW configuration
@@ -275,9 +277,36 @@ func TestCoreRuleSetConformance(t *testing.T) {
 	}
 	totalFailed := len(res.Stats.Failed)
 	if totalFailed > 0 {
-		t.Errorf("[fatal] %d failed tests: %v", totalFailed, res.Stats.Failed)
+		// FTW proves a rule matched by reading the gateway log between marker
+		// requests. The module's log write and the marker request are served by
+		// different Envoy workers, so under load a rule line can land after the
+		// end marker and the window misses it. Retry the failed tests once: a
+		// real rule gap fails again, a marker race does not (see #577).
+		runnerConfig.Include = failedTestPattern(res.Stats.Failed)
+		retried, retryErr := runner.Run(runnerConfig, tests, testOutput)
+		require.NoError(t, retryErr, "error retrying failed conformance tests")
+		if stillFailed := retried.Stats.Failed; len(stillFailed) > 0 {
+			t.Errorf("[fatal] %d test(s) still failed after one retry: %v (first pass: %v)",
+				len(stillFailed), stillFailed, res.Stats.Failed)
+		} else {
+			t.Logf("[info] %d test(s) passed on retry: %v", totalFailed, res.Stats.Failed)
+		}
 	}
 
+}
+
+// failedTestPattern matches exactly the given FTW test IDs, so a retry runs
+// only the tests that failed the first pass.
+func failedTestPattern(ids []string) *regexp.Regexp {
+	return regexp.MustCompile("^(" + strings.Join(ids, "|") + ")$")
+}
+
+func TestFailedTestPattern(t *testing.T) {
+	pattern := failedTestPattern([]string{"920640-10", "944300-76"})
+	require.True(t, pattern.MatchString("920640-10"))
+	require.True(t, pattern.MatchString("944300-76"))
+	require.False(t, pattern.MatchString("920640-1"), "a prefix of a failed ID must not match")
+	require.False(t, pattern.MatchString("x920640-10"))
 }
 
 // -----------------------------------------------------------------------------

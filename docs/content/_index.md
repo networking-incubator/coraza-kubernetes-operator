@@ -37,7 +37,7 @@ Rules are compiled, validated, and cached before being served to engines.
 {{% /blocks/feature %}}
 
 {{% blocks/feature icon="fa-sync-alt" title="Live Rule Updates" %}}
-Rules are polled by engines at configurable intervals,
+Rule updates are pushed to Envoy over ECDS,
 enabling updates without restarts or redeployments.
 {{% /blocks/feature %}}
 

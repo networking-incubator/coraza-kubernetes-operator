@@ -65,27 +65,24 @@ const (
 // plugin.
 //
 // +kubebuilder:validation:MinProperties=0
-// +kubebuilder:validation:XValidation:rule="!has(self.image) || self.image.matches('^oci://')",message="image must start with oci:// when set"
-// +kubebuilder:validation:XValidation:rule="!has(self.image) || size(self.image) <= 1024",message="image must be at most 1024 characters when set"
+// +kubebuilder:validation:XValidation:rule="(has(self.url) && has(self.sha256)) || (!has(self.url) && !has(self.sha256))",message="url and sha256 must be set together; omit both to use the bundled module"
+// +kubebuilder:validation:XValidation:rule="!has(self.url) || (self.url.matches('^https://[^/@]+(/|$)') && !self.url.contains('?') && !self.url.contains('#'))",message="url must be an https URL without userinfo, query, or fragment"
+// +kubebuilder:validation:XValidation:rule="!has(self.sha256) || self.sha256.matches('^[0-9a-f]{64}$')",message="sha256 must be 64 lowercase hexadecimal characters"
 type WasmDriverConfig struct {
-	// image is the OCI image reference for the Coraza WASM plugin.
-	// If omitted the operator uses its configured default WASM OCI reference
-	// (--default-wasm-image / CORAZA_DEFAULT_WASM_IMAGE).
+	// url is an HTTPS URL serving raw WASM bytes. It must be set together
+	// with sha256. When both url and sha256 are omitted, the operator uses its
+	// bundled module.
 	//
 	// +optional
 	// +kubebuilder:validation:MinLength=1
-	// +kubebuilder:validation:MaxLength=1024
-	Image string `json:"image,omitempty"`
+	// +kubebuilder:validation:MaxLength=2048
+	URL string `json:"url,omitempty"`
 
-	// imagePullSecret is the name of a Kubernetes Secret in the same namespace
-	// as the Engine that contains Docker registry credentials for pulling the
-	// WASM OCI image.
+	// sha256 is the lowercase hexadecimal SHA-256 of the raw WASM bytes
+	// served at url. It must be set together with url.
 	//
 	// +optional
-	// +kubebuilder:validation:MinLength=1
-	// +kubebuilder:validation:MaxLength=253
-	ImagePullSecret string `json:"imagePullSecret,omitempty"`
+	// +kubebuilder:validation:MinLength=64
+	// +kubebuilder:validation:MaxLength=64
+	SHA256 string `json:"sha256,omitempty"`
 }
-
-// MaxImageLen must match the CEL size constraint on WasmDriverConfig.Image.
-const MaxImageLen = 1024

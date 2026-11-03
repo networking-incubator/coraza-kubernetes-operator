@@ -27,6 +27,7 @@ import (
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -34,6 +35,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+
+	wafv1alpha1 "github.com/networking-incubator/coraza-kubernetes-operator/api/v1alpha1"
 )
 
 // -----------------------------------------------------------------------------
@@ -235,6 +238,9 @@ func truncateEventNote(msg string) string {
 // patchDegraded marks a resource as Degraded, emits a Warning event, and
 // patches the status in a single call. It consolidates the repeated pattern of
 // Eventf → DeepCopy → apply status → Status().Patch → logConditionTransitions on success.
+// Optional mutations run after the merge baseline is taken, so a caller can
+// drop fields (e.g. an accepted record that cannot be delivered) in the same
+// patch.
 func patchDegraded(
 	ctx context.Context,
 	statusWriter client.StatusWriter,
@@ -246,10 +252,14 @@ func patchDegraded(
 	conditions *[]metav1.Condition,
 	generation int64,
 	reason, message string,
+	mutate ...func(),
 ) error {
 	recorder.Eventf(obj, nil, "Warning", reason, "Reconcile", truncateEventNote(message))
 	patch := client.MergeFrom(obj.DeepCopyObject().(client.Object))
 	before := snapshotConditions(*conditions)
+	for _, m := range mutate {
+		m()
+	}
 	applyStatusConditionDegraded(conditions, generation, reason, message)
 	if err := statusWriter.Patch(ctx, obj, patch); err != nil {
 		logAPIError(log, req, kind, err, "Failed to patch status", obj)
@@ -405,14 +415,35 @@ func serverSideApply(ctx context.Context, c client.Client, desired *unstructured
 	return nil
 }
 
-// buildCacheReadyMessage constructs the Ready condition message after successful
-// caching. When unsupportedMsg is non-empty (annotation override active), the
-// detected unsupported rules are appended so they remain visible in the status.
-func buildCacheReadyMessage(namespace, name, unsupportedMsg string) string {
-	msg := fmt.Sprintf("Successfully cached rules for %s/%s", namespace, name)
+// buildAcceptReadyMessage constructs the Ready condition message after a
+// successful acceptance. When unsupportedMsg is non-empty (annotation override
+// active), the detected unsupported rules are appended so they remain visible
+// in the status.
+func buildAcceptReadyMessage(namespace, name, unsupportedMsg string) string {
+	msg := fmt.Sprintf("Successfully accepted rules for %s/%s", namespace, name)
 	if unsupportedMsg != "" {
 		msg += "\n[annotation override] " + unsupportedMsg
 	}
 
 	return msg
+}
+
+// -----------------------------------------------------------------------------
+// Engine Helpers
+// -----------------------------------------------------------------------------
+
+// engineMatchesLabels reports whether the Engine's derived workload selector
+// matches the given labels.
+func engineMatchesLabels(engine *wafv1alpha1.Engine, podLabels map[string]string) bool {
+	ws := targetLabelSelector(engine)
+	if ws == nil {
+		return false
+	}
+
+	selector, err := metav1.LabelSelectorAsSelector(ws)
+	if err != nil {
+		return false
+	}
+
+	return selector.Matches(labels.Set(podLabels))
 }
