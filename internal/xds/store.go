@@ -34,21 +34,28 @@ import (
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/ecds/render"
 )
 
-// SnapshotStore publishes one ECDS snapshot per Engine into go-control-plane's
-// SnapshotCache. The cache key is "<namespace>/<engine>", which the stream
-// callbacks write into node.id after authorization.
+// SnapshotStore publishes one shared ECDS snapshot per Engine and isolated
+// retry snapshots per proxy into go-control-plane's SnapshotCache.
 type SnapshotStore struct {
 	cache cachev3.SnapshotCache
 
-	mu   sync.RWMutex
-	meta map[string]Snapshot
+	mu      sync.RWMutex
+	meta    map[string]Snapshot
+	proxies map[string]*proxySnapshot
+}
+
+type proxySnapshot struct {
+	engineKey    string
+	active       int
+	retryUnacked bool
 }
 
 // NewSnapshotStore returns an empty snapshot store.
 func NewSnapshotStore() *SnapshotStore {
 	return &SnapshotStore{
-		cache: cachev3.NewSnapshotCache(false, cachev3.IDHash{}, nil),
-		meta:  make(map[string]Snapshot),
+		cache:   cachev3.NewSnapshotCache(false, cachev3.IDHash{}, nil),
+		meta:    make(map[string]Snapshot),
+		proxies: make(map[string]*proxySnapshot),
 	}
 }
 
@@ -72,28 +79,37 @@ func (s *SnapshotStore) Replace(snapshot *Snapshot) error {
 		return err
 	}
 	s.meta[key] = *snapshot
+	for proxyKey, proxy := range s.proxies {
+		if proxy.engineKey != key {
+			continue
+		}
+		proxy.retryUnacked = false
+		if proxy.active == 0 {
+			s.cache.ClearSnapshot(proxyKey)
+			delete(s.proxies, proxyKey)
+			continue
+		}
+		if err := s.cache.SetSnapshot(context.Background(), proxyKey, compiled); err != nil {
+			return fmt.Errorf("update proxy snapshot %q: %w", proxyKey, err)
+		}
+	}
 	return nil
 }
 
-// BumpRejected republishes the snapshot for one ECDS resource under a derived
-// version and VM ID so Envoy re-applies a rejected typed configuration. The
-// accepted resource and version recorded for the Engine are left untouched.
+// BumpRejected publishes a derived snapshot for one proxy so Envoy re-applies a
+// rejected typed configuration without changing the Engine's shared snapshot.
 // acceptedVersion must still be the current snapshot version; a concurrent
 // Replace with newer content makes the retry stale and it is skipped.
-func (s *SnapshotStore) BumpRejected(resourceName, acceptedVersion string, attempt int) error {
+func (s *SnapshotStore) BumpRejected(resourceName, proxyKey, acceptedVersion string, attempt int) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	var key string
-	var meta Snapshot
-	for candidate, snapshot := range s.meta {
-		if snapshot.ResourceName == resourceName {
-			key, meta = candidate, snapshot
-			break
-		}
-	}
-	if key == "" {
+	key, meta, ok := s.snapshotForResourceLocked(resourceName)
+	if !ok {
 		return fmt.Errorf("no snapshot for resource %q", resourceName)
+	}
+	if proxyKey == "" || proxyKey == key {
+		return errors.New("a distinct proxy cache key is required")
 	}
 	// An empty version cannot identify the rejected snapshot (for example a
 	// first-message NACK); retrying the current snapshot is safe because it
@@ -101,15 +117,35 @@ func (s *SnapshotStore) BumpRejected(resourceName, acceptedVersion string, attem
 	if acceptedVersion != "" && meta.Version != acceptedVersion {
 		return fmt.Errorf("snapshot for resource %q advanced from %q to %q", resourceName, acceptedVersion, meta.Version)
 	}
+	proxy := s.proxies[proxyKey]
+	if proxy != nil && proxy.engineKey != key {
+		return fmt.Errorf("proxy cache key %q belongs to another Engine", proxyKey)
+	}
 
+	compiled, err := rejectedSnapshot(meta, attempt)
+	if err != nil {
+		return err
+	}
+	if err := s.cache.SetSnapshot(context.Background(), proxyKey, compiled); err != nil {
+		return err
+	}
+	if proxy == nil {
+		proxy = &proxySnapshot{engineKey: key}
+		s.proxies[proxyKey] = proxy
+	}
+	proxy.retryUnacked = true
+	return nil
+}
+
+func rejectedSnapshot(meta Snapshot, attempt int) (cachev3.ResourceSnapshot, error) {
 	retried := proto.Clone(meta.Resource).(*corev3.TypedExtensionConfig)
 	var wasm wasmhttp.Wasm
 	if err := retried.TypedConfig.UnmarshalTo(&wasm); err != nil {
-		return fmt.Errorf("decode rejected WASM configuration: %w", err)
+		return nil, fmt.Errorf("decode rejected WASM configuration: %w", err)
 	}
 	vm := wasm.GetConfig().GetVmConfig()
 	if vm == nil {
-		return errors.New("rejected WASM configuration has no VM")
+		return nil, errors.New("rejected WASM configuration has no VM")
 	}
 	// Envoy remembers the typed-config hash even after a NACK, so a version-only
 	// retry is skipped and the filter is never created. Changing the VM ID makes
@@ -119,16 +155,126 @@ func (s *SnapshotStore) BumpRejected(resourceName, acceptedVersion string, attem
 	vm.VmId = fmt.Sprintf("%s.retry%d", vm.VmId, attempt)
 	typed, err := anypb.New(&wasm)
 	if err != nil {
-		return fmt.Errorf("encode retry WASM configuration: %w", err)
+		return nil, fmt.Errorf("encode retry WASM configuration: %w", err)
 	}
 	retried.TypedConfig = typed
 	compiled, err := cachev3.NewSnapshot(fmt.Sprintf("%s.retry%d", meta.Version, attempt), map[resource.Type][]cachetypes.Resource{
 		resource.ExtensionConfigType: {retried},
 	})
 	if err != nil {
-		return fmt.Errorf("build retry snapshot: %w", err)
+		return nil, fmt.Errorf("build retry snapshot: %w", err)
 	}
-	return s.cache.SetSnapshot(context.Background(), key, compiled)
+	return compiled, nil
+}
+
+// BindRejectedRetry attaches a stream to its retry snapshot. A reconnect after
+// an accepted retry can recreate the derived resource from its version_info.
+func (s *SnapshotStore) BindRejectedRetry(resourceName, proxyKey, version string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	key, meta, ok := s.snapshotForResourceLocked(resourceName)
+	if !ok {
+		return false, nil
+	}
+	proxy := s.proxies[proxyKey]
+	if proxy != nil && proxy.engineKey != key {
+		return false, fmt.Errorf("proxy cache key %q belongs to another Engine", proxyKey)
+	}
+	if proxy != nil {
+		cached, err := s.cache.GetSnapshot(proxyKey)
+		if err == nil {
+			cachedVersion := cached.GetVersion(resource.ExtensionConfigType)
+			if retryAttempt(cachedVersion) > 0 && retryBase(cachedVersion) == meta.Version {
+				proxy.active++
+				return true, nil
+			}
+		}
+	}
+	attempt := retryAttempt(version)
+	if attempt == 0 || retryBase(version) != meta.Version {
+		return false, nil
+	}
+	compiled, err := rejectedSnapshot(meta, attempt)
+	if err != nil {
+		return false, err
+	}
+	if err := s.cache.SetSnapshot(context.Background(), proxyKey, compiled); err != nil {
+		return false, err
+	}
+	if proxy == nil {
+		proxy = &proxySnapshot{engineKey: key}
+		s.proxies[proxyKey] = proxy
+	}
+	proxy.active++
+	return true, nil
+}
+
+// CurrentVersionFor returns a proxy's current retry version when present, or
+// the Engine's accepted version otherwise.
+func (s *SnapshotStore) CurrentVersionFor(resourceName, proxyKey string) (string, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	key, meta, ok := s.snapshotForResourceLocked(resourceName)
+	if !ok {
+		return "", fmt.Errorf("no snapshot for resource %q", resourceName)
+	}
+	if proxy := s.proxies[proxyKey]; proxy != nil && proxy.engineKey == key {
+		if cached, err := s.cache.GetSnapshot(proxyKey); err == nil {
+			version := cached.GetVersion(resource.ExtensionConfigType)
+			if retryAttempt(version) > 0 && retryBase(version) == meta.Version {
+				return version, nil
+			}
+		}
+	}
+	cached, err := s.cache.GetSnapshot(key)
+	if err != nil {
+		return "", err
+	}
+	return cached.GetVersion(resource.ExtensionConfigType), nil
+}
+
+// AckRejected marks a proxy's derived version as accepted.
+func (s *SnapshotStore) AckRejected(proxyKey, version string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	proxy := s.proxies[proxyKey]
+	if proxy == nil || retryAttempt(version) == 0 {
+		return
+	}
+	cached, err := s.cache.GetSnapshot(proxyKey)
+	if err == nil && cached.GetVersion(resource.ExtensionConfigType) == version {
+		proxy.retryUnacked = false
+	}
+}
+
+// ReleaseRejectedRetry drops a stream's reference to a proxy retry snapshot.
+func (s *SnapshotStore) ReleaseRejectedRetry(proxyKey string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	proxy := s.proxies[proxyKey]
+	if proxy == nil {
+		return
+	}
+	if proxy.active > 0 {
+		proxy.active--
+	}
+	if proxy.active == 0 && !proxy.retryUnacked {
+		s.cache.ClearSnapshot(proxyKey)
+		delete(s.proxies, proxyKey)
+	}
+}
+
+func (s *SnapshotStore) snapshotForResourceLocked(resourceName string) (string, Snapshot, bool) {
+	for key, snapshot := range s.meta {
+		if snapshot.ResourceName == resourceName {
+			return key, snapshot, true
+		}
+	}
+	return "", Snapshot{}, false
 }
 
 // DeleteEngine removes an Engine's snapshot and any open watches.
@@ -138,25 +284,27 @@ func (s *SnapshotStore) DeleteEngine(namespace, engineName string) {
 	defer s.mu.Unlock()
 	s.cache.ClearSnapshot(key)
 	delete(s.meta, key)
+	for proxyKey, proxy := range s.proxies {
+		if proxy.engineKey == key {
+			s.cache.ClearSnapshot(proxyKey)
+			delete(s.proxies, proxyKey)
+		}
+	}
 }
 
-// CurrentVersion returns the live cache version for an ECDS resource. It is the
-// version a proxy is rejecting when a NACK arrives on a fresh stream, before
-// this server has sent a response whose nonce it can match.
+// CurrentVersion returns the Engine's shared ECDS version for a resource.
 func (s *SnapshotStore) CurrentVersion(resourceName string) (string, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	for key, meta := range s.meta {
-		if meta.ResourceName != resourceName {
-			continue
-		}
-		cached, err := s.cache.GetSnapshot(key)
-		if err != nil {
-			return "", err
-		}
-		return cached.GetVersion(resource.ExtensionConfigType), nil
+	key, _, ok := s.snapshotForResourceLocked(resourceName)
+	if !ok {
+		return "", fmt.Errorf("no snapshot for resource %q", resourceName)
 	}
-	return "", fmt.Errorf("no snapshot for resource %q", resourceName)
+	cached, err := s.cache.GetSnapshot(key)
+	if err != nil {
+		return "", err
+	}
+	return cached.GetVersion(resource.ExtensionConfigType), nil
 }
 
 // Get returns the published version for an Engine key ("namespace/name").

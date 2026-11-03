@@ -74,12 +74,18 @@ func TestSnapshotStoreBumpKeepsAcceptedVersion(t *testing.T) {
 		Resource:     original,
 	}))
 
-	require.NoError(t, store.BumpRejected("coraza.waf.ns.engine.uid", "sha256:v1", 1))
+	proxyKey := proxyCacheKey("ns/engine", Identity{}, "proxy-1")
+	require.NoError(t, store.BumpRejected("coraza.waf.ns.engine.uid", proxyKey, "sha256:v1", 1))
 
 	cached, err := store.cache.GetSnapshot("ns/engine")
 	require.NoError(t, err)
-	assert.Equal(t, "sha256:v1.retry1", cached.GetVersion(resource.ExtensionConfigType))
-	retried := cached.GetResources(resource.ExtensionConfigType)[original.Name].(*corev3.TypedExtensionConfig)
+	assert.Equal(t, "sha256:v1", cached.GetVersion(resource.ExtensionConfigType))
+	assert.True(t, proto.Equal(original, cached.GetResources(resource.ExtensionConfigType)[original.Name]))
+
+	retryCache, err := store.cache.GetSnapshot(proxyKey)
+	require.NoError(t, err)
+	assert.Equal(t, "sha256:v1.retry1", retryCache.GetVersion(resource.ExtensionConfigType))
+	retried := retryCache.GetResources(resource.ExtensionConfigType)[original.Name].(*corev3.TypedExtensionConfig)
 	assert.False(t, proto.Equal(original.TypedConfig, retried.TypedConfig), "Envoy skips identical typed configs even after a NACK")
 	var retryWasm wasmhttp.Wasm
 	require.NoError(t, retried.TypedConfig.UnmarshalTo(&retryWasm))
@@ -94,7 +100,7 @@ func TestSnapshotStoreBumpKeepsAcceptedVersion(t *testing.T) {
 	snapshot, ok := store.Get("ns/engine")
 	require.True(t, ok)
 	assert.Equal(t, "sha256:v1", snapshot.Version, "the accepted version must not change")
-	assert.Error(t, store.BumpRejected("missing", "sha256:v1", 1))
+	assert.Error(t, store.BumpRejected("missing", proxyKey, "sha256:v1", 1))
 }
 
 func TestSnapshotStoreRejectsEmptySnapshot(t *testing.T) {
@@ -106,6 +112,7 @@ func TestSnapshotStoreRejectsEmptySnapshot(t *testing.T) {
 func TestSnapshotStoreBumpSkipsStaleRetry(t *testing.T) {
 	store := NewSnapshotStore()
 	resourceName := "coraza.waf.ns.engine.uid"
+	proxyKey := proxyCacheKey("ns/engine", Identity{}, "proxy-1")
 	original := &corev3.TypedExtensionConfig{Name: resourceName, TypedConfig: mustWasm(t, "coraza-uid")}
 	require.NoError(t, store.Replace(&Snapshot{
 		ResourceName: resourceName,
@@ -124,7 +131,7 @@ func TestSnapshotStoreBumpSkipsStaleRetry(t *testing.T) {
 		Version:      "sha256:v2",
 		Resource:     &corev3.TypedExtensionConfig{Name: resourceName, TypedConfig: mustWasm(t, "coraza-uid-v2")},
 	}))
-	assert.Error(t, store.BumpRejected(resourceName, "sha256:v1", 1))
+	assert.Error(t, store.BumpRejected(resourceName, proxyKey, "sha256:v1", 1))
 
 	cached, err := store.cache.GetSnapshot("ns/engine")
 	require.NoError(t, err)
