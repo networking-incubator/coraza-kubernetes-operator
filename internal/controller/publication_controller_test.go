@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/rand"
 	"strings"
 	"sync"
 	"testing"
@@ -779,16 +780,33 @@ func TestValidateRenderedPayloadReservesTheEnvelope(t *testing.T) {
 		return out
 	}
 
+	// Compression makes the rules-to-wire-size mapping non-linear, so the
+	// boundary is exercised with incompressible rule text from a fixed seed.
 	room := limits.MaxMessageBytes - messageEnvelopeBytes - proto.Size(artifact(publicationRules).Resource)
 	require.Positive(t, room)
 
-	atLimit := artifact(publicationRules + strings.Repeat("x", room))
-	require.Equal(t, limits.MaxMessageBytes-messageEnvelopeBytes, proto.Size(atLimit.Resource))
+	// The envelope base64-expands its gzip member by 4/3, so even
+	// incompressible rule text lands well under one byte of wire size per
+	// byte of text; the two cases bracket the limit instead of pinning it to
+	// the byte.
+	atLimit := artifact(publicationRules + incompressibleRules(t, room/2))
 	require.NoError(t, validateRenderedPayload(atLimit, limits))
 	require.LessOrEqual(t, sentMessageBytes(t, atLimit), limits.MaxMessageBytes)
 
-	over := artifact(publicationRules + strings.Repeat("x", room+1))
+	over := artifact(publicationRules + incompressibleRules(t, room*2))
 	require.ErrorContains(t, validateRenderedPayload(over, limits), "message limit of 8192")
+}
+
+// incompressibleRules returns n bytes of rule text that gzip cannot shrink,
+// from a fixed seed so the boundary test is deterministic.
+func incompressibleRules(t *testing.T, n int) string {
+	t.Helper()
+	rng := rand.New(rand.NewSource(580))
+	out := make([]byte, n)
+	for i := range out {
+		out[i] = byte('!' + rng.Intn(94)) // printable, deterministic, high-entropy
+	}
+	return string(out)
 }
 
 // Pod authorization changes arrive without any spec/label change, so the

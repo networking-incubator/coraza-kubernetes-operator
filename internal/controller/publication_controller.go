@@ -448,8 +448,11 @@ func validateRenderedPayload(artifact render.Artifact, limits xds.Limits) error 
 	if size := proto.Size(artifact.Resource) + messageEnvelopeBytes; size > limits.MaxMessageBytes {
 		return fmt.Errorf("ECDS response size %d exceeds the message limit of %d", size, limits.MaxMessageBytes)
 	}
-	// envoy-coraza rejects a plugin configuration above its own cap, so a
-	// payload that only fits the gRPC message would still be NACKed.
+	// envoy-coraza rejects a decompressed configuration above its own cap, so
+	// a payload that only fits the gRPC message would still be NACKed. The
+	// decompressed cap is enforced at render time; the compressed envelope on
+	// the wire can only be smaller than the document it carries, so this
+	// bounds it too.
 	if len(artifact.Payload) > render.MaxConfigurationBytes {
 		return fmt.Errorf("ECDS payload %d exceeds the plugin configuration limit of %d", len(artifact.Payload), render.MaxConfigurationBytes)
 	}

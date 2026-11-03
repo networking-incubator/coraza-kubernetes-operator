@@ -13,8 +13,19 @@ independently of either repository. `schema_version` is an operator-side marker;
 
 ## Runtime configuration JSON
 
-The ECDS resource carries this JSON in `PluginConfig.configuration`
-(`google.protobuf.StringValue`):
+The ECDS resource carries the runtime configuration in
+`PluginConfig.configuration` (`google.protobuf.StringValue`) as a
+`config_gzip_b64` envelope: the JSON document below gzip-compressed into one
+member and encoded as standard padded base64. The envelope is the only
+top-level key; the plugin rejects it combined with any other key or nested
+inside itself. The gzip member is rendered with a zero header (no timestamp,
+name, comment or extra field) at a fixed compression level, so every operator
+replica produces identical bytes for the same configuration. The plugin's
+8 MiB configuration cap bounds both the encoded `PluginConfig.configuration`
+and the decompressed document; the operator checks the decompressed document
+before wrapping and the encoded envelope at publication, and the gRPC message
+limit (16 MiB by default) bounds the ECDS response carrying the envelope.
+Decoded, the document is:
 
 ```json
 {
@@ -181,7 +192,7 @@ typed_config:
           sha256: <64hex>
     configuration:
       "@type": type.googleapis.com/google.protobuf.StringValue
-      value: "<runtime configuration JSON>"
+      value: "{\"config_gzip_b64\": \"<padded base64 of one gzip member holding the runtime configuration JSON>\"}"
 ```
 
 The wire profile is streaming state-of-the-world `ExtensionConfigDiscoveryService`
