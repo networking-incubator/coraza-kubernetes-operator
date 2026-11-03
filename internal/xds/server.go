@@ -412,9 +412,10 @@ func (s *Server) onStreamRequest(streamID int64, req *discoveryv3.DiscoveryReque
 
 	if req.GetResponseNonce() != "" {
 		s.Metrics.Ack()
-		entry.mu.Lock()
-		entry.cancelRetryLocked()
-		entry.mu.Unlock()
+		// Do not cancel a pending retry here: Envoy sends an ACK for the last
+		// accepted version immediately after a cold-start NACK, and the retry
+		// has not published its derived version yet. Only stream close cancels
+		// it, so a rejected configuration is still republished.
 		s.clearNack(entry)
 		s.Logger.Info("ECDS configuration accepted by proxy", "resource", entry.resourceName, "version", req.GetVersionInfo())
 	}
