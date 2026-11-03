@@ -165,6 +165,16 @@ func TestMain(m *testing.M) {
 		_ = testEnv.Stop()
 		os.Exit(1)
 	}
+	if err := testCache.(client.FieldIndexer).IndexField(context.Background(), &wafv1alpha1.Engine{}, engineRuleSetIndex, engineRuleSetIndexValues); err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to register Engine spec.ruleSet.name index: %v\n", err)
+		_ = testEnv.Stop()
+		os.Exit(1)
+	}
+	if err := testCache.(client.FieldIndexer).IndexField(context.Background(), &wafv1alpha1.Engine{}, engineTargetNameIndex, engineTargetNameIndexValues); err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to register Engine spec.target.name index: %v\n", err)
+		_ = testEnv.Stop()
+		os.Exit(1)
+	}
 	if err := testCache.(client.FieldIndexer).IndexField(context.Background(), &wafv1alpha1.RuleSet{}, "spec.sources.name", func(obj client.Object) []string {
 		rs := obj.(*wafv1alpha1.RuleSet)
 		names := make([]string, len(rs.Spec.Sources))

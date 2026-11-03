@@ -584,22 +584,36 @@ func hasGatewayLabel(object client.Object) bool {
 
 func (r *PublicationReconciler) mapRuleSet(ctx context.Context, object client.Object) []reconcile.Request {
 	var engines wafv1alpha1.EngineList
-	if err := r.List(ctx, &engines, client.InNamespace(object.GetNamespace())); err != nil {
+	if err := r.List(ctx, &engines,
+		client.InNamespace(object.GetNamespace()),
+		client.MatchingFields{engineRuleSetIndex: object.GetName()},
+	); err != nil {
 		return nil
 	}
 	requests := make([]reconcile.Request, 0, len(engines.Items))
 	for i := range engines.Items {
 		engine := &engines.Items[i]
-		if engine.Spec.RuleSet.Name == object.GetName() {
-			requests = append(requests, reconcile.Request{NamespacedName: types.NamespacedName{Namespace: engine.Namespace, Name: engine.Name}})
-		}
+		requests = append(requests, reconcile.Request{NamespacedName: types.NamespacedName{Namespace: engine.Namespace, Name: engine.Name}})
 	}
 	return requests
 }
 
 func (r *PublicationReconciler) mapRuleInput(ctx context.Context, object client.Object) []reconcile.Request {
+	index := ""
+	switch object.(type) {
+	case *wafv1alpha1.RuleSource:
+		index = "spec.sources.name"
+	case *wafv1alpha1.RuleData:
+		index = "spec.data.name"
+	default:
+		return nil
+	}
+
 	var ruleSets wafv1alpha1.RuleSetList
-	if err := r.List(ctx, &ruleSets, client.InNamespace(object.GetNamespace())); err != nil {
+	if err := r.List(ctx, &ruleSets,
+		client.InNamespace(object.GetNamespace()),
+		client.MatchingFields{index: object.GetName()},
+	); err != nil {
 		return nil
 	}
 
@@ -607,9 +621,6 @@ func (r *PublicationReconciler) mapRuleInput(ctx context.Context, object client.
 	seen := make(map[types.NamespacedName]struct{})
 	for i := range ruleSets.Items {
 		ruleSet := &ruleSets.Items[i]
-		if !ruleSetReferences(ruleSet, object) {
-			continue
-		}
 		for _, request := range r.mapRuleSet(ctx, ruleSet) {
 			if _, ok := seen[request.NamespacedName]; ok {
 				continue
@@ -619,24 +630,6 @@ func (r *PublicationReconciler) mapRuleInput(ctx context.Context, object client.
 		}
 	}
 	return requests
-}
-
-func ruleSetReferences(ruleSet *wafv1alpha1.RuleSet, object client.Object) bool {
-	switch object.(type) {
-	case *wafv1alpha1.RuleSource:
-		for _, source := range ruleSet.Spec.Sources {
-			if source.Name == object.GetName() {
-				return true
-			}
-		}
-	case *wafv1alpha1.RuleData:
-		for _, data := range ruleSet.Spec.Data {
-			if data.Name == object.GetName() {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 func (r *PublicationReconciler) mapGateway(ctx context.Context, object client.Object) []reconcile.Request {
@@ -653,15 +646,16 @@ func (r *PublicationReconciler) mapPod(ctx context.Context, object client.Object
 
 func (r *PublicationReconciler) enginesTargetingGateway(ctx context.Context, namespace, gateway string) []reconcile.Request {
 	var engines wafv1alpha1.EngineList
-	if err := r.List(ctx, &engines, client.InNamespace(namespace)); err != nil {
+	if err := r.List(ctx, &engines,
+		client.InNamespace(namespace),
+		client.MatchingFields{engineTargetNameIndex: gateway},
+	); err != nil {
 		return nil
 	}
 	requests := make([]reconcile.Request, 0, len(engines.Items))
 	for i := range engines.Items {
 		engine := &engines.Items[i]
-		if engine.Spec.Target.Type == wafv1alpha1.EngineTargetTypeGateway && engine.Spec.Target.Name == gateway {
-			requests = append(requests, reconcile.Request{NamespacedName: types.NamespacedName{Namespace: engine.Namespace, Name: engine.Name}})
-		}
+		requests = append(requests, reconcile.Request{NamespacedName: types.NamespacedName{Namespace: engine.Namespace, Name: engine.Name}})
 	}
 	return requests
 }

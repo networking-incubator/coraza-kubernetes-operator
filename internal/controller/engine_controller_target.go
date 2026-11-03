@@ -210,14 +210,15 @@ func (r *EngineReconciler) findEnginesForRuleSet(ctx context.Context, ruleSet cl
 	log := logf.FromContext(ctx)
 
 	var engineList wafv1alpha1.EngineList
-	if err := r.List(ctx, &engineList, client.InNamespace(ruleSet.GetNamespace())); err != nil {
+	if err := r.List(ctx, &engineList,
+		client.InNamespace(ruleSet.GetNamespace()),
+		client.MatchingFields{engineRuleSetIndex: ruleSet.GetName()},
+	); err != nil {
 		log.Error(err, "Engine: Failed to list Engines", "namespace", ruleSet.GetNamespace())
 		return nil
 	}
 
-	return collectRequests(engineList.Items, func(e *wafv1alpha1.Engine) bool {
-		return e.Spec.RuleSet.Name == ruleSet.GetName()
-	})
+	return collectRequests(engineList.Items, func(*wafv1alpha1.Engine) bool { return true })
 }
 
 // findEnginesForGatewayClass maps a GatewayClass change to enabled Engines
@@ -322,9 +323,16 @@ func (r *EngineReconciler) competingEngineHandler() handler.EventHandler {
 // workload selector matches the Pod's labels.
 func (r *EngineReconciler) findEnginesForPod(ctx context.Context, pod client.Object) []reconcile.Request {
 	log := logf.FromContext(ctx)
+	gateway, ok := pod.GetLabels()[gatewayNameLabel]
+	if !ok {
+		return nil
+	}
 
 	var engineList wafv1alpha1.EngineList
-	if err := r.List(ctx, &engineList, client.InNamespace(pod.GetNamespace())); err != nil {
+	if err := r.List(ctx, &engineList,
+		client.InNamespace(pod.GetNamespace()),
+		client.MatchingFields{engineTargetNameIndex: gateway},
+	); err != nil {
 		log.Error(err, "Engine: Failed to list Engines", "namespace", pod.GetNamespace())
 		return nil
 	}
