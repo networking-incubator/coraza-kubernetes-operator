@@ -17,8 +17,12 @@ limitations under the License.
 package render_test
 
 import (
+	"bytes"
+	"compress/gzip"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math/rand"
 	"strings"
 	"testing"
@@ -47,6 +51,29 @@ const (
 	testBinarySHA   = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
 	testResourceRef = "coraza.waf.shop.checkout.11111111-1111-4111-8111-111111111111"
 )
+
+// decodePayload reverses the config_gzip_b64 envelope, mirroring the pinned
+// envoy-coraza parser: one gzip member in standard padded base64 and nothing
+// else at the top level.
+func decodePayload(t *testing.T, payload []byte) string {
+	t.Helper()
+
+	var envelope struct {
+		ConfigGzipB64 string `json:"config_gzip_b64"`
+	}
+	require.NoError(t, json.Unmarshal(payload, &envelope))
+	require.NotEmpty(t, envelope.ConfigGzipB64, "payload must use the config_gzip_b64 envelope")
+
+	compressed, err := base64.StdEncoding.DecodeString(envelope.ConfigGzipB64)
+	require.NoError(t, err)
+
+	reader, err := gzip.NewReader(bytes.NewReader(compressed))
+	require.NoError(t, err)
+	plain, err := io.ReadAll(reader)
+	require.NoError(t, err)
+	require.NoError(t, reader.Close())
+	return string(plain)
+}
 
 func TestJSONMarshalDeterminism(t *testing.T) {
 	rng := rand.New(rand.NewSource(42))
@@ -184,15 +211,22 @@ func TestRenderGoldenPayload(t *testing.T) {
 	require.NoError(t, err)
 
 	want := `{"schema_version":2,"engine":"checkout","namespace":"shop","engine_uid":"11111111-1111-4111-8111-111111111111","driver_type":"wasm","empty_rules_policy":"Reject","failure_policy":"fail","enable_filter_state_logs":true,"directives_map":{"default":["SecRuleEngine On\nSecRule ARGS \"@attack\" \"id:1001,phase:2,deny,status:403\""]},"default_directives":"default","rule_data":{"blocked.txt":"attack\n"}}`
-	assert.Equal(t, want, string(artifact.Payload))
+	assert.Equal(t, want, decodePayload(t, artifact.Payload))
 	assert.Equal(t, testResourceRef, artifact.ResourceName)
 	// Pins the version hash so encoding changes cannot silently rehash
 	// every accepted Engine.
-	assert.Equal(t, "sha256:2a6695ef742ca4b2a7c4db004a327a44c4ce7893095663ad98cb7b4fefb52f70", artifact.Version)
+	assert.Equal(t, "sha256:eac8de31ad403a8aee403fe5ab9be2407dbfca076729e2dfe2df46e0d6769adb", artifact.Version)
 
 	for _, forbidden := range []string{"resourceVersion", "nonce", "timestamp", "token", "replica"} {
-		assert.NotContains(t, string(artifact.Payload), forbidden, "runtime payload must not carry non-content fields")
+		assert.NotContains(t, decodePayload(t, artifact.Payload), forbidden, "runtime payload must not carry non-content fields")
 	}
+
+	// The envelope must be smaller than the document it carries for this
+	// compressible fixture, and byte-identical across two renders.
+	assert.Less(t, len(artifact.Payload), len(want), "compressed envelope must be smaller than the plain document")
+	again, err := render.Render(input)
+	require.NoError(t, err)
+	assert.Equal(t, string(artifact.Payload), string(again.Payload), "gzip envelope must be deterministic")
 }
 
 func TestRenderResourceShape(t *testing.T) {
@@ -248,9 +282,10 @@ func TestRenderEmptyRulesPolicy(t *testing.T) {
 
 		artifact, err := render.Render(input)
 		require.NoError(t, err)
-		assert.Contains(t, string(artifact.Payload), `"directives_map":{"default":[""]}`)
-		assert.Contains(t, string(artifact.Payload), `"rule_data":{}`)
-		assert.Contains(t, string(artifact.Payload), `"empty_rules_policy":"Allow"`)
+		plain := decodePayload(t, artifact.Payload)
+		assert.Contains(t, plain, `"directives_map":{"default":[""]}`)
+		assert.Contains(t, plain, `"rule_data":{}`)
+		assert.Contains(t, plain, `"empty_rules_policy":"Allow"`)
 	})
 }
 
@@ -375,16 +410,17 @@ func TestRenderDataFiles(t *testing.T) {
 	require.NoError(t, err)
 
 	// Canonical JSON sorts keys, so rule_data order is deterministic.
-	assert.Contains(t, string(artifact.Payload),
+	plain := decodePayload(t, artifact.Payload)
+	assert.Contains(t, plain,
 		`"rule_data":{"aaa.data":"alpha","some.data":"evildata\nanotherevildata\n"}`)
-	assert.Contains(t, string(artifact.Payload), `"directives_map":{"default":["SecRule ARGS \"@pmFromFile some.data\"`)
+	assert.Contains(t, plain, `"directives_map":{"default":["SecRule ARGS \"@pmFromFile some.data\"`)
 
 	// The runtime payload must carry the schema version this build renders;
 	// publication no longer re-decodes the payload to check it.
 	var header struct {
 		SchemaVersion int `json:"schema_version"`
 	}
-	require.NoError(t, json.Unmarshal(artifact.Payload, &header))
+	require.NoError(t, json.Unmarshal([]byte(plain), &header))
 	assert.Equal(t, render.SchemaVersion, header.SchemaVersion)
 
 	// RuleData is delivered in the payload only; the module stays remote and
@@ -480,6 +516,11 @@ func TestRenderSizeEnvelope(t *testing.T) {
 	artifact, err := render.Render(input)
 	require.NoError(t, err)
 	assert.Less(t, len(artifact.Payload), maxECDSMessageBytes, "runtime payload must fit the message limit")
+
+	// CRS-sized rule text is highly repetitive, so the envelope must shrink
+	// it substantially, not merely re-encode it.
+	plain := len(decodePayload(t, artifact.Payload))
+	assert.Less(t, len(artifact.Payload), plain/2, "compressed envelope must at least halve a CRS-sized payload")
 
 	wire, err := proto.Marshal(artifact.Resource)
 	require.NoError(t, err)

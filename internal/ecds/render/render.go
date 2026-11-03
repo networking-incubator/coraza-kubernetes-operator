@@ -21,7 +21,10 @@ limitations under the License.
 package render
 
 import (
+	"bytes"
+	"compress/gzip"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -52,12 +55,13 @@ const (
 	// flat rules/data_files shape.
 	SchemaVersion = 2
 	// RenderingSchemaVersion is the rendering schema version. It is part of
-	// every engine version hash. Version 4 switches the payload to the
-	// coraza-rs configuration schema.
-	RenderingSchemaVersion = 4
+	// every engine version hash. Version 5 wraps the runtime payload in the
+	// envoy-coraza config_gzip_b64 envelope.
+	RenderingSchemaVersion = 5
 	// MaxConfigurationBytes is the envoy-coraza plugin's hard cap on one
-	// plugin configuration document (8 MiB). A larger ECDS payload is NACKed,
-	// so publication rejects it before it reaches a proxy.
+	// plugin configuration document (8 MiB), which for the config_gzip_b64
+	// envelope bounds the decompressed document. A larger ECDS payload is
+	// NACKed, so rendering rejects it before it reaches a proxy.
 	MaxConfigurationBytes = 8 << 20
 	// defaultPolicyName is the directives_map policy every Engine uses. The
 	// operator renders one policy and selects it as the default.
@@ -138,7 +142,7 @@ type AcceptedEngine struct {
 type Artifact struct {
 	ResourceName string
 	Version      string // "sha256:<64hex>"
-	Payload      []byte // deterministic runtime configuration JSON
+	Payload      []byte // deterministic config_gzip_b64 envelope around the runtime configuration JSON
 	Resource     *corev3.TypedExtensionConfig
 
 	// EmptyRulesPolicy, DriverType, EnableFilterStateLogs, and VM are the
@@ -303,6 +307,15 @@ func Render(in EngineInput) (Artifact, error) {
 	if err != nil {
 		return Artifact{}, fmt.Errorf("render runtime configuration: %w", err)
 	}
+	// The plugin's cap bounds the decompressed document the envelope carries,
+	// not the compressed bytes on the wire, so it is checked before wrapping.
+	if len(payload) > MaxConfigurationBytes {
+		return Artifact{}, fmt.Errorf("runtime configuration %d exceeds the plugin configuration limit of %d", len(payload), MaxConfigurationBytes)
+	}
+	payload, err = gzipB64Envelope(payload)
+	if err != nil {
+		return Artifact{}, err
+	}
 
 	version, err := engineVersion(in, driverType, emptyRulesPolicy, failurePolicy, runtime, vmID, codeTimeout)
 	if err != nil {
@@ -366,9 +379,31 @@ func Matches(accepted AcceptedEngine, a Artifact) error {
 	return nil
 }
 
-// runtimeConfig is the schema_version 2 JSON passed to envoy-coraza. The
-// operator's own identity fields are informational; the plugin reads
-// directives_map, default_directives, rule_data and enable_filter_state_logs
+// gzipB64Envelope wraps the plain JSON runtime configuration in the
+// envoy-coraza config_gzip_b64 envelope: one gzip member in standard padded
+// base64. The writer keeps its header zero (no timestamp, name, comment or
+// extra field) at a fixed level, so every replica renders identical bytes for
+// the same document.
+func gzipB64Envelope(plain []byte) ([]byte, error) {
+	var compressed bytes.Buffer
+	writer, err := gzip.NewWriterLevel(&compressed, gzip.BestCompression)
+	if err != nil {
+		return nil, fmt.Errorf("compress runtime configuration: %w", err)
+	}
+	if _, err := writer.Write(plain); err != nil {
+		return nil, fmt.Errorf("compress runtime configuration: %w", err)
+	}
+	if err := writer.Close(); err != nil {
+		return nil, fmt.Errorf("compress runtime configuration: %w", err)
+	}
+	return json.Marshal(struct {
+		ConfigGzipB64 string `json:"config_gzip_b64"`
+	}{base64.StdEncoding.EncodeToString(compressed.Bytes())})
+}
+
+// runtimeConfig is the schema_version 2 JSON wrapped by the config_gzip_b64
+// envelope. The operator's own identity fields are informational; the plugin
+// reads directives_map, default_directives, rule_data and enable_filter_state_logs
 // and ignores the rest.
 type runtimeConfig struct {
 	SchemaVersion         int                 `json:"schema_version"`
