@@ -18,6 +18,7 @@ package xds
 
 import (
 	"context"
+	"errors"
 	"net"
 	"sync"
 	"testing"
@@ -42,6 +43,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
 
@@ -60,6 +62,7 @@ type streamFixture struct {
 	authz         *AuthzIndex
 	streams       *StreamRegistry
 	metrics       *Metrics
+	fakeClient    *k8sfake.Clientset
 	conn          *grpc.ClientConn
 	client        extensionv3.ExtensionConfigDiscoveryServiceClient
 	resourceName  string
@@ -152,6 +155,7 @@ func newStreamFixtureWithLimits(t *testing.T, limits Limits) *streamFixture {
 		authz:        authz,
 		streams:      streams,
 		metrics:      metrics,
+		fakeClient:   fakeClient,
 		conn:         conn,
 		client:       extensionv3.NewExtensionConfigDiscoveryServiceClient(conn),
 		resourceName: resourceName,
@@ -1036,6 +1040,75 @@ func TestAuthSuccessIsNotCountedAsFailure(t *testing.T) {
 	if got := testutil.ToFloat64(fixture.metrics.authFailures.WithLabelValues("authenticated")); got != 0 {
 		t.Fatalf("authenticated counted as failure = %v, want 0", got)
 	}
+}
+
+func TestAuthFailureStormIsRateLimited(t *testing.T) {
+	limits := DefaultLimits()
+	limits.AuthFailureRate = 1
+	limits.AuthFailureBurst = 2
+	fixture := newStreamFixtureWithLimits(t, limits)
+	require.NoError(t, fixture.store.Replace(fixture.snapshot(t, "v1")))
+
+	tokens := []string{"invalid-1", "invalid-2", "invalid-3", "invalid-4", "invalid-5"}
+	for i, token := range tokens {
+		stream := fixture.open(t, token, fixture.resourceName)
+		want := codes.Unauthenticated
+		if i >= limits.AuthFailureBurst {
+			want = codes.ResourceExhausted
+		}
+		if code := recvCode(t, stream); code != want {
+			t.Fatalf("attempt %d code = %v, want %v", i+1, code, want)
+		}
+	}
+
+	if got := len(fixture.fakeClient.Actions()); got != limits.AuthFailureBurst {
+		t.Fatalf("TokenReview calls = %d, want %d", got, limits.AuthFailureBurst)
+	}
+	if got := testutil.ToFloat64(fixture.metrics.authThrottled); got != float64(len(tokens)-limits.AuthFailureBurst) {
+		t.Fatalf("throttled authentications = %v, want %d", got, len(tokens)-limits.AuthFailureBurst)
+	}
+}
+
+func TestAuthFailureLimiterIsPerPeerAndRecovers(t *testing.T) {
+	limits := DefaultLimits()
+	limits.AuthFailureRate = 1
+	limits.AuthFailureBurst = 1
+	fixture := newStreamFixtureWithLimits(t, limits)
+	now := time.Unix(1_000_000, 0)
+	fixture.server.Auth.failureLimiter.now = func() time.Time { return now }
+
+	firstPeer := &net.TCPAddr{IP: net.ParseIP("192.0.2.1"), Port: 1001}
+	if _, err := fixture.server.Auth.Authenticate(authContextWithPeer(validToken, firstPeer), validToken); err != nil {
+		t.Fatalf("valid token error = %v", err)
+	}
+	_, err := fixture.server.Auth.Authenticate(authContextWithPeer("invalid-1", firstPeer), "invalid-1")
+	if !errors.Is(err, ErrUnauthenticated) {
+		t.Fatalf("first invalid token error = %v, want ErrUnauthenticated", err)
+	}
+
+	// A new source port is the same peer and cannot reset its failure budget.
+	samePeer := &net.TCPAddr{IP: net.ParseIP("192.0.2.1"), Port: 1002}
+	_, err = fixture.server.Auth.Authenticate(authContextWithPeer("invalid-2", samePeer), "invalid-2")
+	if !errors.Is(err, ErrAuthRateLimited) {
+		t.Fatalf("second invalid token error = %v, want ErrAuthRateLimited", err)
+	}
+
+	otherPeer := &net.TCPAddr{IP: net.ParseIP("192.0.2.2"), Port: 1001}
+	fixture.server.Auth.cache.Delete(authenticationCacheKey(validToken, ""))
+	if _, err := fixture.server.Auth.Authenticate(authContextWithPeer(validToken, otherPeer), validToken); err != nil {
+		t.Fatalf("valid token from another peer error = %v", err)
+	}
+
+	now = now.Add(time.Second)
+	_, err = fixture.server.Auth.Authenticate(authContextWithPeer("invalid-3", samePeer), "invalid-3")
+	if !errors.Is(err, ErrUnauthenticated) {
+		t.Fatalf("invalid token after refill error = %v, want ErrUnauthenticated", err)
+	}
+}
+
+func authContextWithPeer(token string, addr net.Addr) context.Context {
+	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs(authorizationHeader, "Bearer "+token))
+	return peer.NewContext(ctx, &peer.Peer{Addr: addr})
 }
 
 type recvResult struct {

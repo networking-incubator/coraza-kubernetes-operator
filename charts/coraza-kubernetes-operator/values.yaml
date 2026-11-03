@@ -119,6 +119,12 @@ istio:
   # When empty, the operator does not set an Istio revision label on managed resources.
   revision: ""
 
+xds:
+  # Per-peer-IP token bucket for failed ECDS authentication attempts. Successful
+  # authentication does not consume the bucket.
+  authFailureRate: 10
+  authFailureBurst: 1024
+
 # Serving certificate for the ECDS and WASM asset endpoint. When existingSecret
 # is empty and generate is true, `helm install`/`helm upgrade` create a
 # self-signed CA and certificate valid for 365 days and reuse the generated

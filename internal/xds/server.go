@@ -172,11 +172,15 @@ type Server struct {
 
 // NewServer wires the go-control-plane server around the snapshot cache.
 func NewServer(store *SnapshotStore, auth *Authenticator, authz *AuthzIndex, streams *StreamRegistry, limits Limits, metrics *Metrics) *Server {
+	limits = limits.WithDefaults()
+	if auth != nil {
+		auth.failureLimiter = newAuthFailureLimiter(limits.AuthFailureRate, limits.AuthFailureBurst)
+	}
 	s := &Server{
 		Auth:         auth,
 		Authz:        authz,
 		Streams:      streams,
-		Limits:       limits.WithDefaults(),
+		Limits:       limits,
 		Metrics:      metrics,
 		Store:        store,
 		Logger:       logr.Discard(),
@@ -346,8 +350,7 @@ func (s *Server) onStreamRequest(streamID int64, req *discoveryv3.DiscoveryReque
 		}
 		identity, err := s.Auth.Authenticate(entry.ctx, token)
 		if err != nil {
-			s.Metrics.AuthFailure("error")
-			return status.Error(codes.Unauthenticated, "authentication failed")
+			return s.authenticationFailure(err)
 		}
 		cancel, _ := entry.ctx.Value(lifecycleKey{}).(context.CancelCauseFunc)
 		session, err := s.Streams.RegisterWithCancel(entry.ctx, cancel, "", *identity, token)
@@ -439,6 +442,15 @@ func (s *Server) onStreamRequest(streamID int64, req *discoveryv3.DiscoveryReque
 	}
 	req.Node.Id = s.watchNode(entry, name, entry.engineKey, req.GetVersionInfo())
 	return nil
+}
+
+func (s *Server) authenticationFailure(err error) error {
+	if errors.Is(err, ErrAuthRateLimited) {
+		s.Metrics.AuthThrottled()
+		return status.Error(codes.ResourceExhausted, "authentication rate limit exceeded")
+	}
+	s.Metrics.AuthFailure("error")
+	return status.Error(codes.Unauthenticated, "authentication failed")
 }
 
 // pinRequestNode uses the client ID only to partition proxy retries, never to authorize an Engine.

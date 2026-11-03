@@ -33,6 +33,7 @@ type Metrics struct {
 	nacks                   *prometheus.CounterVec
 	authFailures            *prometheus.CounterVec
 	authSuccesses           prometheus.Counter
+	authThrottled           prometheus.Counter
 	publicationLag          prometheus.GaugeFunc
 	lagMu                   sync.RWMutex
 	lagSource               func() float64
@@ -74,6 +75,10 @@ func NewMetrics(reg prometheus.Registerer) (*Metrics, error) {
 			Name: "coraza_xds_auth_successes_total",
 			Help: "Total ECDS streams successfully authenticated by this replica.",
 		}),
+		authThrottled: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "coraza_xds_auth_throttled_total",
+			Help: "Total ECDS authentication attempts rejected by the per-peer failure rate limit.",
+		}),
 		hashMismatch: prometheus.NewCounter(prometheus.CounterOpts{
 			Name: "coraza_xds_hash_mismatch_total",
 			Help: "Total accepted configurations whose local reconstruction did not match.",
@@ -106,6 +111,7 @@ func NewMetrics(reg prometheus.Registerer) (*Metrics, error) {
 	for _, collector := range []prometheus.Collector{
 		m.streamsActive, m.streamReconnects, m.streamLimitRejections, m.acks,
 		m.nacks, m.authFailures, m.authSuccesses,
+		m.authThrottled,
 		m.publicationLag, m.hashMismatch, m.coldReconstruction,
 		m.snapshotVersionInfo, m.wasmAssetRequests, m.bundledManifestVerified,
 	} {
@@ -174,6 +180,14 @@ func (m *Metrics) AuthSuccess() {
 		return
 	}
 	m.authSuccesses.Inc()
+}
+
+// AuthThrottled records an authentication attempt rejected by the failure limiter.
+func (m *Metrics) AuthThrottled() {
+	if m == nil {
+		return
+	}
+	m.authThrottled.Inc()
 }
 
 // SetPublicationLagSource installs the function that reports the age of the

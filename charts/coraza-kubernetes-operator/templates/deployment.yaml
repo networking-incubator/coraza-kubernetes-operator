@@ -63,6 +63,8 @@ spec:
             - --xds-cert-name={{ .Values.tls.certName | default "tls.crt" }}
             - --xds-key-name={{ .Values.tls.keyName | default "tls.key" }}
             - --xds-ca-path=/etc/coraza-tls/{{ .Values.tls.caName | default "ca.crt" }}
+            - --xds-auth-failure-rate={{ .Values.xds.authFailureRate }}
+            - --xds-auth-failure-burst={{ .Values.xds.authFailureBurst }}
             {{- if .Values.defaultWasmImage }}
             - --default-wasm-image={{ .Values.defaultWasmImage }}
             {{- end }}

@@ -25,6 +25,7 @@ import (
 	"cmp"
 	"flag"
 	"fmt"
+	"math"
 	"time"
 )
 
@@ -68,6 +69,12 @@ const (
 	// DefaultTokenReviewRetries is the number of retries after the first
 	// failed TokenReview call.
 	DefaultTokenReviewRetries = 2
+	// DefaultAuthFailureRate bounds failed authentication attempts per second
+	// from one peer IP after the burst is consumed.
+	DefaultAuthFailureRate float64 = 10
+	// DefaultAuthFailureBurst allows a fleet up to twice the default concurrent
+	// stream cap to reconnect through one peer IP at once.
+	DefaultAuthFailureBurst = 2 * DefaultMaxStreams
 )
 
 const (
@@ -114,6 +121,8 @@ type Limits struct {
 	AuthorizationMaxStaleness time.Duration
 	TokenReviewTimeout        time.Duration
 	TokenReviewRetries        int
+	AuthFailureRate           float64
+	AuthFailureBurst          int
 }
 
 // DefaultLimits returns the plan defaults.
@@ -131,6 +140,8 @@ func DefaultLimits() Limits {
 		AuthorizationMaxStaleness: DefaultAuthorizationMaxStaleness,
 		TokenReviewTimeout:        DefaultTokenReviewTimeout,
 		TokenReviewRetries:        DefaultTokenReviewRetries,
+		AuthFailureRate:           DefaultAuthFailureRate,
+		AuthFailureBurst:          DefaultAuthFailureBurst,
 	}
 }
 
@@ -161,6 +172,8 @@ func (l Limits) WithDefaults() Limits {
 	l.TokenReviewRevalidate = orDefault(l.TokenReviewRevalidate, defaults.TokenReviewRevalidate)
 	l.AuthorizationMaxStaleness = orDefault(l.AuthorizationMaxStaleness, defaults.AuthorizationMaxStaleness)
 	l.TokenReviewTimeout = orDefault(l.TokenReviewTimeout, defaults.TokenReviewTimeout)
+	l.AuthFailureRate = orDefault(l.AuthFailureRate, defaults.AuthFailureRate)
+	l.AuthFailureBurst = orDefault(l.AuthFailureBurst, defaults.AuthFailureBurst)
 	// Zero retries is meaningful, so only negatives clamp; no default applies.
 	l.TokenReviewRetries = max(l.TokenReviewRetries, 0)
 	return l
@@ -169,7 +182,16 @@ func (l Limits) WithDefaults() Limits {
 // Validate rejects limits the plugin cannot honour. Zero values pass and are
 // filled by WithDefaults.
 func (l Limits) Validate() error {
+	if math.IsNaN(l.AuthFailureRate) || math.IsInf(l.AuthFailureRate, 0) {
+		return fmt.Errorf("xds-auth-failure-rate %v must be finite", l.AuthFailureRate)
+	}
 	l = l.WithDefaults()
+	if l.AuthFailureRate <= 0 {
+		return fmt.Errorf("xds-auth-failure-rate %v must be positive", l.AuthFailureRate)
+	}
+	if l.AuthFailureBurst <= 0 {
+		return fmt.Errorf("xds-auth-failure-burst %d must be positive", l.AuthFailureBurst)
+	}
 	if l.TokenReviewRevalidate >= l.AuthorizationMaxStaleness {
 		return fmt.Errorf("xds-token-review-revalidate %s must be less than xds-authorization-max-staleness %s", l.TokenReviewRevalidate, l.AuthorizationMaxStaleness)
 	}
@@ -212,4 +234,8 @@ func (l *Limits) AddFlags(fs *flag.FlagSet) {
 		"Interval between open-stream TokenReview and authorization revalidation")
 	fs.DurationVar(&l.AuthorizationMaxStaleness, "xds-authorization-max-staleness", DefaultAuthorizationMaxStaleness,
 		"Maximum age of an authorization mapping before affected streams are closed")
+	fs.Float64Var(&l.AuthFailureRate, "xds-auth-failure-rate", DefaultAuthFailureRate,
+		"Maximum failed ECDS authentication attempts per second per peer IP")
+	fs.IntVar(&l.AuthFailureBurst, "xds-auth-failure-burst", DefaultAuthFailureBurst,
+		"Maximum burst of failed ECDS authentication attempts per peer IP")
 }
