@@ -40,6 +40,7 @@ import (
 	"google.golang.org/protobuf/types/known/wrapperspb"
 	"k8s.io/apimachinery/pkg/types"
 
+	"github.com/networking-incubator/coraza-kubernetes-operator/internal/assets"
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/rulesets/assemble"
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/rulesets/validation"
 )
@@ -90,6 +91,12 @@ type RuleSetAccepted struct {
 type BinaryRef struct {
 	URL    string
 	SHA256 string // 64 lowercase hex
+	// CRSVersion is the OWASP CRS release embedded in the selected module, or
+	// "none" when it is known to lack CRS. It is empty when the module's
+	// capability is unknown (an explicit custom module without a capability
+	// contract); rendering then rejects crs/ references instead of risking a
+	// zero-rule WAF.
+	CRSVersion string
 }
 
 // VMSettings controls the WASM VM configuration. Zero values select the
@@ -194,6 +201,21 @@ func RuleSetContentHash(content assemble.Content) (string, error) {
 	return digest(raw), nil
 }
 
+// selectedCRSVersion returns the CRS capability of the module this input
+// renders. Only identical bytes are treated as identical capability: when the
+// digest matches the bundled module the manifest's release applies, otherwise
+// an unset capability stays unknown.
+func (in EngineInput) selectedCRSVersion() string {
+	if in.Binary.CRSVersion != "" {
+		return in.Binary.CRSVersion
+	}
+	manifest, _, err := assets.ResolveDefault()
+	if err != nil || manifest.SHA256 != in.Binary.SHA256 {
+		return ""
+	}
+	return manifest.CRSVersion
+}
+
 // Render produces the complete ECDS resource for one Engine.
 func Render(in EngineInput) (Artifact, error) {
 	if in.Namespace == "" || in.Name == "" || in.UID == "" {
@@ -210,8 +232,9 @@ func Render(in EngineInput) (Artifact, error) {
 	}
 	// envoy-coraza has no embedded alias filesystem or glob expansion, so an
 	// Include the previous Go plugin resolved would NACK at configure time
-	// while the Engine reported Ready.
-	if err := validation.ValidateCorazaRSIncludes(in.Content.Rules, in.Content.DataFiles); err != nil {
+	// while the Engine reported Ready. Validate ability against the selected
+	// module, not the bundled one.
+	if err := validation.ValidateCorazaRSIncludesForModule(in.Content.Rules, in.Content.DataFiles, in.selectedCRSVersion()); err != nil {
 		return Artifact{}, err
 	}
 

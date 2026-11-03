@@ -30,7 +30,7 @@ Both tiers are rejected by default. For the complete list of affected rule IDs, 
 
 ## Overview
 
-Out of approximately 4,600 CoreRuleSet conformance tests, 60 tests are currently ignored and 43 are overridden with adjusted expectations, resulting in a ~98% pass rate. These fall into four categories:
+Out of approximately 4,600 CoreRuleSet conformance tests, 72 tests are currently ignored and 43 are overridden with adjusted expectations, resulting in a ~98% pass rate. These fall into five categories:
 
 | Category | Tests | Type | Impact |
 |----------|-------|------|--------|
@@ -38,6 +38,7 @@ Out of approximately 4,600 CoreRuleSet conformance tests, 60 tests are currently
 | Tool Limitations | 21 | Ignored | Requires alternative controls or monitoring |
 | Coraza/WASM Bugs | 20 | Ignored | Requires fixes in Coraza or coraza-proxy-wasm |
 | Under Investigation | 19 | Ignored | Requires further analysis |
+| coraza-rs Parity | 12 | Ignored | Re-baseline needed; tracked in [#556](https://github.com/networking-incubator/coraza-kubernetes-operator/issues/556) |
 
 ---
 
@@ -189,6 +190,14 @@ These require further analysis to determine appropriate action:
 
 ---
 
+## coraza-rs Parity (12 tests)
+
+These expectations were measured against the previous Go plugin and are ignored
+until they are re-baselined for `envoy-coraza`; they are not confirmed
+limitations. Tracking: [#556](https://github.com/networking-incubator/coraza-kubernetes-operator/issues/556).
+
+---
+
 ## Version Information
 
 - **Coraza**: v3.7.0
@@ -196,6 +205,6 @@ These require further analysis to determine appropriate action:
 - **Envoy/Istio**: WASM filter environment
 - **coraza-proxy-wasm**: Latest
 - **Documentation Date**: 2026-07-22
-- **Test Coverage**: ~98% pass rate (60 ignored + 43 overridden / ~4,600 total)
+- **Test Coverage**: ~98% pass rate (72 ignored + 43 overridden / ~4,600 total)
 
 For configuration details of ignored tests, see [test/conformance/ftw.yml](test/conformance/ftw.yml).

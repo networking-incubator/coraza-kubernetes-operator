@@ -36,7 +36,6 @@ import (
 
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/ecds/render"
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/rulesets/assemble"
-	"github.com/networking-incubator/coraza-kubernetes-operator/internal/rulesets/validation"
 )
 
 const (
@@ -525,28 +524,54 @@ func TestRenderRejectsUnsupportedIncludes(t *testing.T) {
 	}
 
 	// coraza-rs's native embedded-CRS namespace is supported by a module
-	// built with embed-crs.
-	orig := validation.BundledCRSVersion
-	validation.BundledCRSVersion = "v4.30.0"
-	t.Cleanup(func() { validation.BundledCRSVersion = orig })
-	_, err := render.Render(newEngineInput(t, assemble.Content{
+	// built with embed-crs, selected explicitly here.
+	input := newEngineInput(t, assemble.Content{
 		Rules: "SecRuleEngine On\nInclude crs/crs-setup.conf\nInclude crs/rules/*.conf",
-	}))
+	})
+	input.Binary.CRSVersion = "v4.30.0"
+	_, err := render.Render(input)
 	require.NoError(t, err)
+}
+
+// A custom module with a known capability may use crs/ references even though
+// the bundled module's capability is unrelated.
+func TestRenderUsesSelectedModuleCRSCapability(t *testing.T) {
+	input := newEngineInput(t, assemble.Content{
+		Rules: "SecRuleEngine On\nInclude crs/crs-setup.conf\nInclude crs/rules/*.conf",
+	})
+	input.Binary = render.BinaryRef{
+		URL:        "https://custom.example/plugin.wasm",
+		SHA256:     strings.Repeat("d", 64),
+		CRSVersion: "v4.30.0",
+	}
+	_, err := render.Render(input)
+	require.NoError(t, err)
+}
+
+// An explicit custom module has no capability metadata today. Its crs/
+// references must be rejected rather than assumed to match the bundled module.
+func TestRenderRejectsCRSForUnknownCustomModule(t *testing.T) {
+	input := newEngineInput(t, assemble.Content{
+		Rules: "SecRuleEngine On\nInclude crs/crs-setup.conf\nInclude crs/rules/*.conf",
+	})
+	input.Binary = render.BinaryRef{
+		URL:    "https://custom.example/plugin.wasm",
+		SHA256: strings.Repeat("d", 64),
+	}
+	_, err := render.Render(input)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "CRS capability is unknown")
 }
 
 // A module without embedded CRS resolves crs/ includes to nothing: the
 // payload would compile a zero-rule WAF while the Engine looked Ready, so
 // rendering rejects it (the committed fixture manifest records none).
 func TestRenderRejectsCRSWithoutBundledCRS(t *testing.T) {
-	// Pin the release build so a locally bundled CRS module cannot mask this.
-	orig := validation.BundledCRSVersion
-	validation.BundledCRSVersion = "none"
-	t.Cleanup(func() { validation.BundledCRSVersion = orig })
-
-	_, err := render.Render(newEngineInput(t, assemble.Content{
+	input := newEngineInput(t, assemble.Content{
 		Rules: "SecRuleEngine On\nInclude crs/crs-setup.conf\nInclude crs/rules/*.conf",
-	}))
+	})
+	input.Binary.CRSVersion = "none"
+	_, err := render.Render(input)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "does not include OWASP CRS")
 }

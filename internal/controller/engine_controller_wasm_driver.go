@@ -538,8 +538,9 @@ func (r *EngineReconciler) resolveBinaryRef(engine *wafv1alpha1.Engine) (render.
 			return render.BinaryRef{}, fmt.Errorf("resolve bundled WASM module: %w", err)
 		}
 		ref := render.BinaryRef{
-			URL:    strings.TrimRight(r.assetBaseURL, "/") + "/wasm/" + manifest.SHA256 + ".wasm",
-			SHA256: manifest.SHA256,
+			URL:        strings.TrimRight(r.assetBaseURL, "/") + "/wasm/" + manifest.SHA256 + ".wasm",
+			SHA256:     manifest.SHA256,
+			CRSVersion: manifest.CRSVersion,
 		}
 		if err := validateBinaryRefBasic(ref); err != nil {
 			return render.BinaryRef{}, fmt.Errorf("resolve bundled WASM module: %w", err)

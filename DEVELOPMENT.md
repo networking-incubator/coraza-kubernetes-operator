@@ -416,11 +416,28 @@ cluster; `make demo WASM_SOURCE=build` builds it from source instead. To test
 any artifact, bundle it first and run the deployment targets without
 `wasm.plugin`:
 
+Default (non-CRS) bundle:
+
 ```bash
-make wasm.bundle WASM_MODULE=/path/to/envoy_coraza.wasm   # add WASM_CRS=1 for a CRS build
-# A CRS build reads crs.pin from a coraza-rs checkout (CORAZA_RS_DIR, default .cache/coraza-rs):
+make wasm.bundle WASM_MODULE=/path/to/envoy_coraza.wasm
+```
+
+For a CRS-enabled artifact, run exactly one of these instead of the default
+command:
+
+```bash
+# Option A: read crs.pin from a coraza-rs checkout
 make wasm.bundle WASM_MODULE=/path/to/envoy_coraza.wasm WASM_CRS=1 CORAZA_RS_DIR=/path/to/coraza-rs
+```
+
+```bash
+# Option B: pass the CRS release directly
 make wasm.bundle WASM_MODULE=/path/to/envoy_coraza.wasm WASM_CRS=1 WASM_CRS_VERSION=<crs-version>
+```
+
+After the bundle command you selected:
+
+```bash
 make wasm.verify
 make cluster.kind
 kubectl --context kind-coraza-kubernetes-operator-integration -n coraza-system \

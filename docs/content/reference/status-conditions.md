@@ -64,18 +64,20 @@ The Engine could not reach its desired state. Common reasons:
 | `TLSNotConfigured` | The operator has no verified CA chain for its xDS serving certificate. | Set `--xds-ca-path` to the CA bundle Gateways use to verify the operator certificate. |
 
 The operator clears `status.acceptedConfiguration` when the Engine reports
-`RenderFailed` for an oversized payload, `RuleSetNotFound`, or a `RuleSetDegraded`
-state the record cannot be reconstructed from (a recreated RuleSet or
-`RejectedContent`). That removes the accepted configuration from the ECDS serving
-plane, so an already-running proxy keeps the snapshot it already received but no
-longer gets updates, and a new or restarted proxy gets no WAF coverage until the
-Engine accepts a configuration again. An ordinary aggregate-validation failure
-(`InvalidRuleSet`), an Engine-side assembly failure, and wait states (a degraded
-RuleSet that is only missing RuleData, a `RuleSetInputsUnavailable` input, or a
-RuleSet that has not accepted the current generation) keep the last good accepted
-configuration and snapshot instead, so an already-running proxy stays protected by
-the previous rules. A cleared record is not a fail-closed signal on its own: a fresh
-Gateway pod receives no WAF configuration from the operator for this Engine.
+`RenderFailed` for an oversized payload, `InvalidRuleSet` for content over the
+delivery limits, `RuleSetNotFound`, or a `RuleSetDegraded` state the record cannot
+be reconstructed from (a recreated RuleSet or `RejectedContent`). That removes the
+accepted configuration from the ECDS serving plane, so an already-running proxy
+keeps the snapshot it already received but no longer gets updates, and a new or
+restarted proxy gets no WAF coverage until the Engine accepts a configuration
+again. A RuleSet aggregate-validation failure (RuleSet reason `InvalidRuleSet`,
+reported on the Engine as `RuleSetDegraded`), an Engine-side assembly failure
+(`InvalidRuleSet`), and wait states (a degraded RuleSet that is only missing
+RuleData, a `RuleSetInputsUnavailable` input, or a RuleSet that has not accepted
+the current generation) keep the last good accepted configuration and snapshot
+instead, so an already-running proxy stays protected by the previous rules. A
+cleared record is not a fail-closed signal on its own: a fresh Gateway pod
+receives no WAF configuration from the operator for this Engine.
 
 An accepted configuration recorded before the operator restarted must be reconstructed
 by every replica. If one cannot be reconstructed, the replica stays unready for the

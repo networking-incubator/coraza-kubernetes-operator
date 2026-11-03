@@ -81,7 +81,7 @@ type Manifest struct {
 	ProxyWasmSDKVersion string `yaml:"proxy_wasm_sdk_version"`
 
 	// CRSVersion is the OWASP CoreRuleSet release embedded in the module, or
-	// empty when the module was built without the embed-crs feature.
+	// "none" when the module was built without the embed-crs feature.
 	CRSVersion string `yaml:"crs_version,omitempty"`
 }
 

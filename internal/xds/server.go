@@ -94,6 +94,7 @@ type lifecycleKey struct{}
 
 type serverStream struct {
 	ctx          context.Context
+	streamID     int64
 	identity     Identity
 	session      *StreamSession
 	resourceName string
@@ -105,6 +106,11 @@ type serverStream struct {
 	nackKey       string
 	authenticated atomic.Bool
 	authTimer     *time.Timer
+	// retryPending is true while a rejected-configuration retry is scheduled.
+	// retryTimer is that retry, kept so ACK and stream close can cancel it.
+	retryPending bool
+	retryTimer   *time.Timer
+	closed       bool
 }
 
 // Server serves ECDS with go-control-plane's SnapshotCache and stream handler.
@@ -266,7 +272,7 @@ func (s *Server) onStreamOpen(ctx context.Context, streamID int64, _ string) err
 	// established, so an auth failure is delivered as a gRPC status rather
 	// than an early stream reset. Bound how long a stream may stay idle before
 	// its first request so it cannot reserve a slot indefinitely.
-	entry := &serverStream{ctx: ctx}
+	entry := &serverStream{ctx: ctx, streamID: streamID}
 	deadline := s.authDeadline
 	if deadline <= 0 {
 		deadline = authenticationDeadline
@@ -406,6 +412,9 @@ func (s *Server) onStreamRequest(streamID int64, req *discoveryv3.DiscoveryReque
 
 	if req.GetResponseNonce() != "" {
 		s.Metrics.Ack()
+		entry.mu.Lock()
+		entry.cancelRetryLocked()
+		entry.mu.Unlock()
 		s.clearNack(entry)
 		s.Logger.Info("ECDS configuration accepted by proxy", "resource", entry.resourceName, "version", req.GetVersionInfo())
 	}
@@ -463,21 +472,76 @@ func (s *Server) resubscribeRejected(entry *serverStream, resourceName, rejected
 	// option: a stranded pod stays fail-closed forever, and the entry is
 	// reclaimed on ACK and stream close.
 	key := nackKey(resourceName, entry.session.ID)
+
+	// Envoy never re-applies a version it rejected, and the remote module fetch
+	// it started needs to finish first: publish a derived version and close the
+	// stream so the proxy resubscribes and applies it from the code cache.
+	// Repeated NACKs before the timer fires must not schedule more timers or
+	// advance the shared version more than once.
+	entry.mu.Lock()
+	if entry.retryPending || entry.closed {
+		entry.mu.Unlock()
+		return
+	}
+	entry.retryPending = true
+	entry.mu.Unlock()
+
+	// Record the budget before the timer exists: a zero RetryDelay can fire
+	// immediately, and a post-close recordNack would leak a map entry.
 	s.trackNack(entry, key)
 	state := s.recordNack(key, base)
 	s.Logger.Info("resubscribing proxy after rejected configuration",
 		"resource", resourceName, "version", rejectedVersion, "attempt", attempt, "rejections", state.attempts)
 
-	// Envoy never re-applies a version it rejected, and the remote module fetch
-	// it started needs to finish first: publish a derived version and close the
-	// stream so the proxy resubscribes and applies it from the code cache.
-	time.AfterFunc(nackDelay(s.RetryDelay, attempt), func() {
-		if err := s.Store.BumpRejected(resourceName, base, attempt); err != nil {
-			s.Logger.Error(err, "republish rejected configuration", "resource", resourceName)
-			return
-		}
-		s.Streams.ResetStream(entry.session.ID)
+	entry.mu.Lock()
+	if entry.closed || !entry.retryPending {
+		entry.cancelRetryLocked()
+		entry.mu.Unlock()
+		return
+	}
+	entry.retryTimer = time.AfterFunc(nackDelay(s.RetryDelay, attempt), func() {
+		s.runRejectedRetry(entry, resourceName, base, attempt)
 	})
+	entry.mu.Unlock()
+}
+
+// runRejectedRetry republishes a rejected configuration once the retry delay
+// elapses. It takes ownership of the pending retry under entry.mu first, so a
+// stream close or ACK can cancel it without leaving a callback that bumps the
+// shared snapshot afterwards.
+func (s *Server) runRejectedRetry(entry *serverStream, resourceName, base string, attempt int) {
+	entry.mu.Lock()
+	if entry.closed || !entry.retryPending {
+		entry.mu.Unlock()
+		return
+	}
+	entry.retryPending = false
+	entry.retryTimer = nil
+	// Keep entry.mu while checking registration and bumping. onStreamClosed
+	// takes the same lock before it marks the entry closed and removes it, so a
+	// retry either completes while the stream is still registered or is
+	// cancelled; it cannot mutate the shared snapshot after closure.
+	if _, ok := s.streams.Load(entry.streamID); !ok {
+		entry.mu.Unlock()
+		return
+	}
+	if err := s.Store.BumpRejected(resourceName, base, attempt); err != nil {
+		entry.mu.Unlock()
+		s.Logger.Error(err, "republish rejected configuration", "resource", resourceName)
+		return
+	}
+	entry.mu.Unlock()
+	s.Streams.ResetStream(entry.session.ID)
+}
+
+// cancelRetryLocked cancels a pending rejected-configuration retry. Caller
+// holds entry.mu.
+func (entry *serverStream) cancelRetryLocked() {
+	if entry.retryTimer != nil {
+		entry.retryTimer.Stop()
+		entry.retryTimer = nil
+	}
+	entry.retryPending = false
 }
 
 // nackDelay doubles the base delay for every retry rung of the same content,
@@ -588,19 +652,26 @@ func (s *Server) rejectedVersion(entry *serverStream, req *discoveryv3.Discovery
 }
 
 func (s *Server) onStreamClosed(streamID int64, _ *corev3.Node) {
-	raw, ok := s.streams.LoadAndDelete(streamID)
+	raw, ok := s.streams.Load(streamID)
 	if !ok {
 		// Rejected opens also trigger the closed callback; their slot was
 		// already rolled back.
 		return
 	}
-	s.openStreams.Add(-1)
 	entry := raw.(*serverStream)
 	entry.mu.Lock()
+	if entry.closed {
+		entry.mu.Unlock()
+		return
+	}
+	entry.closed = true
 	if entry.authTimer != nil {
 		entry.authTimer.Stop()
 	}
+	entry.cancelRetryLocked()
+	s.streams.Delete(streamID)
 	entry.mu.Unlock()
+	s.openStreams.Add(-1)
 	s.clearNack(entry)
 	if entry.session != nil {
 		s.Streams.Unregister(entry.session.ID)

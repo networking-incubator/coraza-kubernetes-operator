@@ -165,6 +165,7 @@ func TestResolveBinaryRef(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, utils.DefaultTestWasmURL, ref.URL)
 		assert.Equal(t, utils.DefaultTestWasmSHA256, ref.SHA256)
+		assert.Empty(t, ref.CRSVersion, "a custom module has no known CRS capability")
 	})
 
 	t.Run("omitted pair resolves the bundled module", func(t *testing.T) {
@@ -176,6 +177,7 @@ func TestResolveBinaryRef(t *testing.T) {
 		ref, err := reconciler.resolveBinaryRef(engine)
 		require.NoError(t, err)
 		assert.Equal(t, manifest.SHA256, ref.SHA256)
+		assert.Equal(t, manifest.CRSVersion, ref.CRSVersion)
 		assert.Equal(t, strings.TrimRight(testAssetBaseURL, "/")+"/wasm/"+manifest.SHA256+".wasm", ref.URL)
 	})
 

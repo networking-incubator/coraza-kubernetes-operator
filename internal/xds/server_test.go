@@ -19,6 +19,7 @@ package xds
 import (
 	"context"
 	"net"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -979,4 +980,73 @@ func expectResult(t *testing.T, results <-chan recvResult) *discoveryv3.Discover
 		t.Fatal("timed out waiting for a response")
 		return nil
 	}
+}
+
+// TestResubscribeRejectedSchedulesOneRetryPerStream pins the per-stream bound:
+// repeated NACKs while a retry is pending must not schedule more timers.
+func TestResubscribeRejectedSchedulesOneRetryPerStream(t *testing.T) {
+	fixture := newStreamFixture(t)
+	fixture.server.RetryDelay = time.Hour
+	entry := &serverStream{streamID: 41, session: &StreamSession{ID: 41}}
+
+	fixture.server.resubscribeRejected(entry, fixture.resourceName, "")
+	entry.mu.Lock()
+	first := entry.retryTimer
+	require.NotNil(t, first)
+	require.True(t, entry.retryPending)
+	entry.mu.Unlock()
+
+	fixture.server.resubscribeRejected(entry, fixture.resourceName, "")
+	entry.mu.Lock()
+	require.True(t, first == entry.retryTimer, "a second NACK replaced the pending retry")
+	entry.cancelRetryLocked()
+	entry.mu.Unlock()
+	fixture.server.clearNack(entry)
+}
+
+// TestRejectedRetryDoesNotRunAfterClose proves stream close cancels the pending
+// retry and a late callback cannot bump the shared snapshot afterwards.
+func TestRejectedRetryDoesNotRunAfterClose(t *testing.T) {
+	fixture := newStreamFixture(t)
+	require.NoError(t, fixture.store.Replace(fixture.snapshot(t, "v1")))
+	fixture.server.RetryDelay = time.Hour
+	entry := &serverStream{streamID: 42, session: &StreamSession{ID: 42}}
+	fixture.server.streams.Store(int64(42), entry)
+	fixture.server.openStreams.Add(1)
+	fixture.server.resubscribeRejected(entry, fixture.resourceName, "")
+	before, err := fixture.store.CurrentVersion(fixture.resourceName)
+	require.NoError(t, err)
+
+	fixture.server.onStreamClosed(42, nil)
+	entry.mu.Lock()
+	require.False(t, entry.retryPending)
+	require.Nil(t, entry.retryTimer)
+	entry.mu.Unlock()
+
+	// Simulate a callback that had already passed its scheduling check.
+	fixture.server.runRejectedRetry(entry, fixture.resourceName, "", 1)
+	after, err := fixture.store.CurrentVersion(fixture.resourceName)
+	require.NoError(t, err)
+	require.Equal(t, before, after, "a closed stream bumped the shared snapshot")
+}
+
+// TestRejectedRetryBumpsWhenActive proves the active path still republishes.
+func TestRejectedRetryBumpsWhenActive(t *testing.T) {
+	fixture := newStreamFixture(t)
+	require.NoError(t, fixture.store.Replace(fixture.snapshot(t, "v1")))
+	entry := &serverStream{streamID: 43, session: &StreamSession{ID: 43}}
+	fixture.server.streams.Store(int64(43), entry)
+	fixture.server.openStreams.Add(1)
+	entry.mu.Lock()
+	entry.retryPending = true
+	entry.mu.Unlock()
+
+	fixture.server.runRejectedRetry(entry, fixture.resourceName, "", 1)
+
+	version, err := fixture.store.CurrentVersion(fixture.resourceName)
+	require.NoError(t, err)
+	require.True(t, strings.HasSuffix(version, ".retry1"), version)
+	entry.mu.Lock()
+	require.False(t, entry.retryPending)
+	entry.mu.Unlock()
 }

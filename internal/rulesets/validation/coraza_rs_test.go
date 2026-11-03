@@ -65,3 +65,29 @@ func TestCorazaRSCrsIncludesValidate(t *testing.T) {
 Include crs/crs-setup.conf
 Include crs/rules/*.conf`, "crs", nil))
 }
+
+// TestValidateCorazaRSIncludesForModule pins the per-module capability
+// contract: an embedded release allows crs/ references, "none" is a known
+// no-CRS module, and an unknown capability is rejected conservatively.
+func TestValidateCorazaRSIncludesForModule(t *testing.T) {
+	include := "SecRuleEngine On\nInclude crs/crs-setup.conf\nInclude crs/rules/*.conf"
+	require.NoError(t, ValidateCorazaRSIncludesForModule(include, nil, "v4.30.0"))
+
+	err := ValidateCorazaRSIncludesForModule(include, nil, "none")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "does not include OWASP CRS")
+
+	err = ValidateCorazaRSIncludesForModule(include, nil, "")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "CRS capability is unknown")
+
+	data := `SecRule ARGS "@pmFromFile crs/restricted-files.data" "id:1,phase:1,pass"`
+	require.NoError(t, ValidateCorazaRSIncludesForModule(data, nil, "v4.30.0"))
+	require.Error(t, ValidateCorazaRSIncludesForModule(data, nil, "none"))
+	require.Error(t, ValidateCorazaRSIncludesForModule(data, nil, ""))
+
+	// Legacy aliases are rejected for every capability.
+	for _, version := range []string{"v4.30.0", "none", ""} {
+		require.Error(t, ValidateCorazaRSIncludesForModule("Include @owasp_crs/*.conf", nil, version), version)
+	}
+}

@@ -56,8 +56,13 @@ func moduleEmbedsCRS() bool {
 
 // The messages are static so tenant rule content cannot leak into status.
 var (
-	errNoBundledCRSInclude = errors.New("include of crs/... is not allowed: the bundled module does not include OWASP CRS (crs_version: none); use a module built with `make wasm.crs` or remove the crs/ include")
-	errNoBundledCRSData    = errors.New("@pmFromFile of crs/... is not allowed: the bundled module does not include OWASP CRS (crs_version: none); use a module built with `make wasm.crs` or remove the crs/ data reference")
+	errNoBundledCRSInclude = errors.New("include of crs/... is not allowed: the selected module does not include OWASP CRS (crs_version: none); use a module built with `make wasm.crs` or remove the crs/ include")
+	errNoBundledCRSData    = errors.New("@pmFromFile of crs/... is not allowed: the selected module does not include OWASP CRS (crs_version: none); use a module built with `make wasm.crs` or remove the crs/ data reference")
+	// A custom module's capability is not part of the current deploy contract
+	// (there is no metadata to trust), so crs/ references are rejected instead
+	// of risking a configuration that loads zero CRS rules.
+	errUnknownModuleCRSInclude = errors.New("include of crs/... cannot be verified for the selected module: its CRS capability is unknown; use the bundled module built with `make wasm.crs` or remove the crs/ include")
+	errUnknownModuleCRSData    = errors.New("@pmFromFile of crs/... cannot be verified for the selected module: its CRS capability is unknown; use the bundled module built with `make wasm.crs` or remove the crs/ data reference")
 )
 
 // -----------------------------------------------------------------------------
