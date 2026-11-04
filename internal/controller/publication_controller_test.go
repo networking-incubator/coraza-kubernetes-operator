@@ -37,6 +37,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -728,6 +729,148 @@ func TestPublicationReconcilerSetupWithoutLeaderElection(t *testing.T) {
 	reconciler := newPublicationReconciler(t)
 	require.NoError(t, reconciler.SetupWithManager(mgr),
 		"publication must run on every replica (NeedLeaderElection=false)")
+}
+
+type publicationMappingClient struct {
+	client.Client
+
+	engineListFilters        []client.MatchingFields
+	unindexedEngineListCalls int
+}
+
+func (c *publicationMappingClient) List(ctx context.Context, list client.ObjectList, opts ...client.ListOption) error {
+	if _, ok := list.(*wafv1alpha1.EngineList); ok {
+		indexed := false
+		for _, opt := range opts {
+			if fields, ok := opt.(client.MatchingFields); ok && len(fields) > 0 {
+				c.engineListFilters = append(c.engineListFilters, fields)
+				indexed = true
+				break
+			}
+		}
+		if !indexed {
+			c.unindexedEngineListCalls++
+			return errors.New("unindexed Engine list in mapping")
+		}
+	}
+	return c.Client.List(ctx, list, opts...)
+}
+
+func TestPublicationMappersUseFieldIndexes(t *testing.T) {
+	ctx := context.Background()
+	namespace := "publication-mapping"
+	sharedRuleSet := &wafv1alpha1.RuleSet{
+		ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: "shared-rules"},
+		Spec: wafv1alpha1.RuleSetSpec{
+			Sources: []wafv1alpha1.SourceReference{{Name: "shared-source"}},
+			Data:    []wafv1alpha1.DataReference{{Name: "shared-data"}},
+		},
+	}
+	otherRuleSet := &wafv1alpha1.RuleSet{
+		ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: "other-rules"},
+		Spec: wafv1alpha1.RuleSetSpec{
+			Sources: []wafv1alpha1.SourceReference{{Name: "other-source"}},
+			Data:    []wafv1alpha1.DataReference{{Name: "other-data"}},
+		},
+	}
+	newEngine := func(namespace, name, ruleSet, gateway string) *wafv1alpha1.Engine {
+		return &wafv1alpha1.Engine{
+			ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: name},
+			Spec: wafv1alpha1.EngineSpec{
+				RuleSet: wafv1alpha1.RuleSetReference{Name: ruleSet},
+				Target: wafv1alpha1.EngineTarget{
+					Type: wafv1alpha1.EngineTargetTypeGateway,
+					Name: gateway,
+				},
+			},
+		}
+	}
+	engineA := newEngine(namespace, "engine-a", sharedRuleSet.Name, "gateway")
+	engineB := newEngine(namespace, "engine-b", sharedRuleSet.Name, "gateway")
+	engineC := newEngine(namespace, "engine-c", otherRuleSet.Name, "gateway")
+	otherGatewayEngine := newEngine(namespace, "other-gateway-engine", sharedRuleSet.Name, "other-gateway")
+	foreignEngine := newEngine("other-namespace", "foreign-engine", sharedRuleSet.Name, "gateway")
+	objects := []client.Object{
+		sharedRuleSet,
+		otherRuleSet,
+		engineA,
+		engineB,
+		engineC,
+		otherGatewayEngine,
+		foreignEngine,
+	}
+	baseClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(objects...).
+		WithIndex(&wafv1alpha1.Engine{}, engineRuleSetIndex, engineRuleSetIndexValues).
+		WithIndex(&wafv1alpha1.Engine{}, engineTargetNameIndex, engineTargetNameIndexValues).
+		WithIndex(&wafv1alpha1.RuleSet{}, "spec.sources.name", func(obj client.Object) []string {
+			ruleSet := obj.(*wafv1alpha1.RuleSet)
+			names := make([]string, len(ruleSet.Spec.Sources))
+			for i, source := range ruleSet.Spec.Sources {
+				names[i] = source.Name
+			}
+			return names
+		}).
+		WithIndex(&wafv1alpha1.RuleSet{}, "spec.data.name", func(obj client.Object) []string {
+			ruleSet := obj.(*wafv1alpha1.RuleSet)
+			names := make([]string, len(ruleSet.Spec.Data))
+			for i, data := range ruleSet.Spec.Data {
+				names[i] = data.Name
+			}
+			return names
+		}).
+		Build()
+	mappingClient := &publicationMappingClient{Client: baseClient}
+	publication := &PublicationReconciler{Client: mappingClient}
+	engineReconciler := &EngineReconciler{Client: mappingClient}
+	requestNames := func(requests []reconcile.Request) []string {
+		names := make([]string, len(requests))
+		for i, request := range requests {
+			names[i] = request.Name
+		}
+		return names
+	}
+
+	sharedEngineNames := []string{"engine-a", "engine-b", "other-gateway-engine"}
+	sharedSource := &wafv1alpha1.RuleSource{ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: "shared-source"}}
+	sharedData := &wafv1alpha1.RuleData{ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: "shared-data"}}
+	otherSource := &wafv1alpha1.RuleSource{ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: "other-source"}}
+	otherData := &wafv1alpha1.RuleData{ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: "other-data"}}
+	// These input event objects are absent from the fake client, as on deletion.
+	require.ElementsMatch(t, sharedEngineNames, requestNames(publication.mapRuleSet(ctx, sharedRuleSet)))
+	require.ElementsMatch(t, sharedEngineNames, requestNames(publication.mapRuleInput(ctx, sharedSource)))
+	require.ElementsMatch(t, sharedEngineNames, requestNames(publication.mapRuleInput(ctx, sharedData)))
+	require.ElementsMatch(t, sharedEngineNames, requestNames(engineReconciler.findEnginesForRuleSet(ctx, sharedRuleSet)))
+
+	gateway := &gatewayv1.Gateway{ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: "gateway"}}
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+		Namespace: namespace,
+		Labels:    map[string]string{gatewayNameLabel: "gateway"},
+	}}
+	gatewayEngineNames := []string{"engine-a", "engine-b", "engine-c"}
+	require.ElementsMatch(t, gatewayEngineNames, requestNames(publication.mapGateway(ctx, gateway)))
+	require.ElementsMatch(t, gatewayEngineNames, requestNames(publication.mapPod(ctx, pod)))
+	require.ElementsMatch(t, gatewayEngineNames, requestNames(engineReconciler.findEnginesForPod(ctx, pod)))
+
+	engineB.Spec.RuleSet.Name = otherRuleSet.Name
+	require.NoError(t, baseClient.Update(ctx, engineB))
+	renamedSharedEngineNames := []string{"engine-a", "other-gateway-engine"}
+	renamedOtherEngineNames := []string{"engine-b", "engine-c"}
+	require.ElementsMatch(t, renamedSharedEngineNames, requestNames(publication.mapRuleSet(ctx, sharedRuleSet)))
+	require.ElementsMatch(t, renamedSharedEngineNames, requestNames(publication.mapRuleInput(ctx, sharedSource)))
+	require.ElementsMatch(t, renamedOtherEngineNames, requestNames(publication.mapRuleSet(ctx, otherRuleSet)))
+	require.ElementsMatch(t, renamedOtherEngineNames, requestNames(publication.mapRuleInput(ctx, otherSource)))
+	require.ElementsMatch(t, renamedOtherEngineNames, requestNames(publication.mapRuleInput(ctx, otherData)))
+	require.ElementsMatch(t, renamedOtherEngineNames, requestNames(engineReconciler.findEnginesForRuleSet(ctx, otherRuleSet)))
+
+	require.NoError(t, baseClient.Delete(ctx, sharedRuleSet))
+	require.ElementsMatch(t, renamedSharedEngineNames, requestNames(publication.mapRuleSet(ctx, sharedRuleSet)),
+		"a deleted RuleSet event must still map Engines that reference its name")
+
+	require.Contains(t, mappingClient.engineListFilters, client.MatchingFields{engineRuleSetIndex: sharedRuleSet.Name})
+	require.Contains(t, mappingClient.engineListFilters, client.MatchingFields{engineTargetNameIndex: gateway.Name})
+	require.Zero(t, mappingClient.unindexedEngineListCalls, "mapping must not list every Engine")
 }
 
 // TestPublicationRateLimiterKeepsOverallBucket proves the publication rate

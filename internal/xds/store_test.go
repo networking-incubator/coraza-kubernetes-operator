@@ -17,6 +17,7 @@ limitations under the License.
 package xds
 
 import (
+	"fmt"
 	"testing"
 
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
@@ -74,12 +75,18 @@ func TestSnapshotStoreBumpKeepsAcceptedVersion(t *testing.T) {
 		Resource:     original,
 	}))
 
-	require.NoError(t, store.BumpRejected("coraza.waf.ns.engine.uid", "sha256:v1", 1))
+	proxyKey := proxyCacheKey("ns/engine", Identity{}, "proxy-1")
+	require.NoError(t, store.BumpRejected("coraza.waf.ns.engine.uid", proxyKey, "sha256:v1", 1))
 
 	cached, err := store.cache.GetSnapshot("ns/engine")
 	require.NoError(t, err)
-	assert.Equal(t, "sha256:v1.retry1", cached.GetVersion(resource.ExtensionConfigType))
-	retried := cached.GetResources(resource.ExtensionConfigType)[original.Name].(*corev3.TypedExtensionConfig)
+	assert.Equal(t, "sha256:v1", cached.GetVersion(resource.ExtensionConfigType))
+	assert.True(t, proto.Equal(original, cached.GetResources(resource.ExtensionConfigType)[original.Name]))
+
+	retryCache, err := store.cache.GetSnapshot(proxyKey)
+	require.NoError(t, err)
+	assert.Equal(t, "sha256:v1.retry1", retryCache.GetVersion(resource.ExtensionConfigType))
+	retried := retryCache.GetResources(resource.ExtensionConfigType)[original.Name].(*corev3.TypedExtensionConfig)
 	assert.False(t, proto.Equal(original.TypedConfig, retried.TypedConfig), "Envoy skips identical typed configs even after a NACK")
 	var retryWasm wasmhttp.Wasm
 	require.NoError(t, retried.TypedConfig.UnmarshalTo(&retryWasm))
@@ -94,7 +101,151 @@ func TestSnapshotStoreBumpKeepsAcceptedVersion(t *testing.T) {
 	snapshot, ok := store.Get("ns/engine")
 	require.True(t, ok)
 	assert.Equal(t, "sha256:v1", snapshot.Version, "the accepted version must not change")
-	assert.Error(t, store.BumpRejected("missing", "sha256:v1", 1))
+	assert.Error(t, store.BumpRejected("missing", proxyKey, "sha256:v1", 1))
+}
+
+// TestSnapshotStoreBoundsInactiveRetrySnapshots pins the memory bound: a
+// subscriber that NACKs under ever-distinct proxy keys and never returns must
+// not grow the store without limit.
+func TestSnapshotStoreBoundsInactiveRetrySnapshots(t *testing.T) {
+	store := NewSnapshotStore()
+	typed, err := anypb.New(&wasmhttp.Wasm{Config: &wasmv3.PluginConfig{
+		Name: "coraza.waf.ns.engine.uid",
+		Vm: &wasmv3.PluginConfig_VmConfig{VmConfig: &wasmv3.VmConfig{
+			VmId:                "coraza-uid",
+			NackOnCodeCacheMiss: true,
+			Code: &corev3.AsyncDataSource{Specifier: &corev3.AsyncDataSource_Remote{
+				Remote: &corev3.RemoteDataSource{HttpUri: &corev3.HttpUri{Uri: "https://operator/wasm/plugin.wasm"}, Sha256: "digest"},
+			}},
+		}},
+	}})
+	require.NoError(t, err)
+	require.NoError(t, store.Replace(&Snapshot{
+		ResourceName: "coraza.waf.ns.engine.uid",
+		Namespace:    "ns",
+		EngineName:   "engine",
+		Version:      "sha256:v1",
+		Resource:     &corev3.TypedExtensionConfig{Name: "coraza.waf.ns.engine.uid", TypedConfig: typed},
+	}))
+
+	const churn = maxInactiveRetryProxies + 8
+	keys := make([]string, 0, churn)
+	for i := 0; i < churn; i++ {
+		proxyKey := proxyCacheKey("ns/engine", Identity{}, fmt.Sprintf("vanishing-%d", i))
+		keys = append(keys, proxyKey)
+		require.NoError(t, store.BumpRejected("coraza.waf.ns.engine.uid", proxyKey, "sha256:v1", 1))
+	}
+
+	store.mu.RLock()
+	retained := len(store.proxies)
+	store.mu.RUnlock()
+	assert.Equal(t, maxInactiveRetryProxies, retained, "inactive retry snapshots must be bounded")
+
+	// The oldest churned snapshots are the evicted ones; the newest survive.
+	for _, key := range keys[:churn-maxInactiveRetryProxies] {
+		_, err := store.cache.GetSnapshot(key)
+		assert.Error(t, err, "oldest inactive retry snapshot %q must be evicted", key)
+	}
+	for _, key := range keys[churn-maxInactiveRetryProxies:] {
+		_, err := store.cache.GetSnapshot(key)
+		assert.NoError(t, err, "newest inactive retry snapshot %q must be retained", key)
+	}
+
+	// A connected proxy is never evicted.
+	connected := proxyCacheKey("ns/engine", Identity{}, "connected")
+	require.NoError(t, store.BumpRejected("coraza.waf.ns.engine.uid", connected, "sha256:v1", 2))
+	bound, err := store.BindRejectedRetry("coraza.waf.ns.engine.uid", connected, "sha256:v1.retry2")
+	require.NoError(t, err)
+	require.True(t, bound)
+	for i := 0; i < maxInactiveRetryProxies+4; i++ {
+		proxyKey := proxyCacheKey("ns/engine", Identity{}, fmt.Sprintf("more-%d", i))
+		require.NoError(t, store.BumpRejected("coraza.waf.ns.engine.uid", proxyKey, "sha256:v1", 3))
+	}
+	store.mu.RLock()
+	_, stillConnected := store.proxies[connected]
+	store.mu.RUnlock()
+	assert.True(t, stillConnected, "a connected proxy must never be evicted")
+}
+
+// A burst of proxies that NACK, bind, and then leave must be reclaimed on
+// release, not only on the next NACK.
+func TestSnapshotStoreBoundsInactiveRetrySnapshotsOnRelease(t *testing.T) {
+	store := NewSnapshotStore()
+	typed, err := anypb.New(&wasmhttp.Wasm{Config: &wasmv3.PluginConfig{
+		Name: "coraza.waf.ns.engine.uid",
+		Vm: &wasmv3.PluginConfig_VmConfig{VmConfig: &wasmv3.VmConfig{
+			VmId:                "coraza-uid",
+			NackOnCodeCacheMiss: true,
+			Code: &corev3.AsyncDataSource{Specifier: &corev3.AsyncDataSource_Remote{
+				Remote: &corev3.RemoteDataSource{HttpUri: &corev3.HttpUri{Uri: "https://operator/wasm/plugin.wasm"}, Sha256: "digest"},
+			}},
+		}},
+	}})
+	require.NoError(t, err)
+	require.NoError(t, store.Replace(&Snapshot{
+		ResourceName: "coraza.waf.ns.engine.uid",
+		Namespace:    "ns",
+		EngineName:   "engine",
+		Version:      "sha256:v1",
+		Resource:     &corev3.TypedExtensionConfig{Name: "coraza.waf.ns.engine.uid", TypedConfig: typed},
+	}))
+
+	const bound = maxInactiveRetryProxies + 8
+	for i := 0; i < bound; i++ {
+		proxyKey := proxyCacheKey("ns/engine", Identity{}, fmt.Sprintf("leaving-%d", i))
+		require.NoError(t, store.BumpRejected("coraza.waf.ns.engine.uid", proxyKey, "sha256:v1", 1))
+		bound, err := store.BindRejectedRetry("coraza.waf.ns.engine.uid", proxyKey, "sha256:v1.retry1")
+		require.NoError(t, err)
+		require.True(t, bound)
+	}
+	for i := 0; i < bound; i++ {
+		proxyKey := proxyCacheKey("ns/engine", Identity{}, fmt.Sprintf("leaving-%d", i))
+		store.ReleaseRejectedRetry(proxyKey)
+	}
+
+	store.mu.RLock()
+	retained := len(store.proxies)
+	store.mu.RUnlock()
+	assert.Equal(t, maxInactiveRetryProxies, retained, "releasing bound proxies must enforce the inactive-retry bound")
+}
+
+// TestSnapshotStoreReindexesOnResourceNameChange covers a UID change: the old
+// resource name must stop resolving, and the new one must.
+func TestSnapshotStoreReindexesOnResourceNameChange(t *testing.T) {
+	store := NewSnapshotStore()
+	typed, err := anypb.New(&wasmhttp.Wasm{Config: &wasmv3.PluginConfig{
+		Name: "coraza.waf.ns.engine",
+		Vm: &wasmv3.PluginConfig_VmConfig{VmConfig: &wasmv3.VmConfig{
+			VmId:                "coraza-uid",
+			NackOnCodeCacheMiss: true,
+			Code: &corev3.AsyncDataSource{Specifier: &corev3.AsyncDataSource_Remote{
+				Remote: &corev3.RemoteDataSource{HttpUri: &corev3.HttpUri{Uri: "https://operator/wasm/plugin.wasm"}, Sha256: "digest"},
+			}},
+		}},
+	}})
+	require.NoError(t, err)
+	config := func(name string) *corev3.TypedExtensionConfig {
+		return &corev3.TypedExtensionConfig{Name: name, TypedConfig: typed}
+	}
+	require.NoError(t, store.Replace(&Snapshot{
+		ResourceName: "coraza.waf.ns.engine.uid-1",
+		Namespace:    "ns",
+		EngineName:   "engine",
+		Version:      "sha256:v1",
+		Resource:     config("coraza.waf.ns.engine.uid-1"),
+	}))
+	require.NoError(t, store.Replace(&Snapshot{
+		ResourceName: "coraza.waf.ns.engine.uid-2",
+		Namespace:    "ns",
+		EngineName:   "engine",
+		Version:      "sha256:v2",
+		Resource:     config("coraza.waf.ns.engine.uid-2"),
+	}))
+
+	proxyKey := proxyCacheKey("ns/engine", Identity{}, "proxy-1")
+	assert.Error(t, store.BumpRejected("coraza.waf.ns.engine.uid-1", proxyKey, "sha256:v1", 1),
+		"the old resource name must not resolve after a UID change")
+	assert.NoError(t, store.BumpRejected("coraza.waf.ns.engine.uid-2", proxyKey, "sha256:v2", 1))
 }
 
 func TestSnapshotStoreRejectsEmptySnapshot(t *testing.T) {
@@ -106,6 +257,7 @@ func TestSnapshotStoreRejectsEmptySnapshot(t *testing.T) {
 func TestSnapshotStoreBumpSkipsStaleRetry(t *testing.T) {
 	store := NewSnapshotStore()
 	resourceName := "coraza.waf.ns.engine.uid"
+	proxyKey := proxyCacheKey("ns/engine", Identity{}, "proxy-1")
 	original := &corev3.TypedExtensionConfig{Name: resourceName, TypedConfig: mustWasm(t, "coraza-uid")}
 	require.NoError(t, store.Replace(&Snapshot{
 		ResourceName: resourceName,
@@ -124,7 +276,7 @@ func TestSnapshotStoreBumpSkipsStaleRetry(t *testing.T) {
 		Version:      "sha256:v2",
 		Resource:     &corev3.TypedExtensionConfig{Name: resourceName, TypedConfig: mustWasm(t, "coraza-uid-v2")},
 	}))
-	assert.Error(t, store.BumpRejected(resourceName, "sha256:v1", 1))
+	assert.Error(t, store.BumpRejected(resourceName, proxyKey, "sha256:v1", 1))
 
 	cached, err := store.cache.GetSnapshot("ns/engine")
 	require.NoError(t, err)

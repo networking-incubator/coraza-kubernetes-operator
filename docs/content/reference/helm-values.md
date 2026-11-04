@@ -32,6 +32,8 @@ The Coraza Kubernetes Operator Helm chart is located at `charts/coraza-kubernete
 | `logging.stacktraceLevel` | string | `error` | Minimum level for stack traces (`info`, `error`, `panic`). Only used when `development` is false. |
 | `logging.timeEncoding` | string | `rfc3339nano` | Timestamp format (`epoch`, `millis`, `nano`, `iso8601`, `rfc3339`, `rfc3339nano`). Only used when `development` is false. |
 | `istio.revision` | string | `""` | Istio control plane revision label. When empty, no revision label is set on managed resources. |
+| `xds.authFailureRate` | number | `10` | Failed ECDS authentication attempts allowed per second per peer IP. Successful authentication does not consume the bucket. |
+| `xds.authFailureBurst` | int | `1024` | Burst of failed ECDS authentication attempts per peer IP before the rate applies. |
 | `tls.existingSecret` | string | `""` | Existing Secret with `ca.crt`, `tls.crt`, and `tls.key` for the ECDS/WASM endpoint. When set, the chart creates no serving Secret. Required for GitOps and static-manifest installs. |
 | `tls.generate` | bool | `true` | Generate a self-signed serving certificate (365-day CA and leaf) when `tls.existingSecret` is empty. Reuse across upgrades via `lookup` works only with `helm install`/`helm upgrade`; set to `false` for `helm template` and GitOps pipelines (Argo CD, Flux), which cannot reuse the Secret and would regenerate the CA on every sync. |
 | `tls.sans` | list | `[]` | Extra DNS SANs added when the serving certificate is generated. Changing this list does not update a reused Secret; rotate the certificate and restart the operator before using a newly added hostname. |

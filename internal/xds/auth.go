@@ -48,6 +48,9 @@ const (
 // Unauthenticated gRPC status and never leak the underlying detail.
 var ErrUnauthenticated = errors.New("token is not authenticated")
 
+// ErrAuthRateLimited marks an authentication attempt rejected before TokenReview.
+var ErrAuthRateLimited = errors.New("authentication rate limit exceeded")
+
 // Identity is the authenticated ServiceAccount behind a stream.
 type Identity struct {
 	Namespace string
@@ -75,6 +78,7 @@ type Authenticator struct {
 	timeout        time.Duration
 	retries        int
 	now            func() time.Time
+	failureLimiter *authFailureLimiter
 	cache          sync.Map // sha256(token)+"|"+audience -> cachedIdentity
 }
 
@@ -101,6 +105,7 @@ func NewAuthenticator(client authclient.TokenReviewInterface, audience string, c
 		timeout:        timeout,
 		retries:        retries,
 		now:            time.Now,
+		failureLimiter: newAuthFailureLimiter(DefaultAuthFailureRate, DefaultAuthFailureBurst),
 	}
 }
 
@@ -111,13 +116,31 @@ func (a *Authenticator) Authenticate(ctx context.Context, token string) (*Identi
 	if cached, ok := a.cache.Load(key); ok {
 		entry := cached.(cachedIdentity)
 		if a.now().Before(entry.expiresAt) {
+			if a.failureLimiter != nil {
+				a.failureLimiter.sweepIdle()
+			}
 			identity := entry.identity
 			return &identity, nil
 		}
 		a.cache.Delete(key)
 	}
 
+	var reservation *authFailureReservation
+	if a.failureLimiter != nil {
+		var allowed bool
+		reservation, allowed = a.failureLimiter.reserve(ctx)
+		if !allowed {
+			return nil, ErrAuthRateLimited
+		}
+	}
+
 	identity, err := a.review(ctx, token)
+	if reservation != nil {
+		// Only a rejected token is a peer failure: a cancelled context or an
+		// internal review error must not consume the peer's bucket, and a
+		// wrapped ErrUnauthenticated still is one.
+		reservation.finish(!errors.Is(err, ErrUnauthenticated))
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -215,7 +238,16 @@ func (a *Authenticator) review(ctx context.Context, token string) (*Identity, er
 }
 
 func (a *Authenticator) identityFromReview(review *authv1.TokenReview) (*Identity, error) {
-	if review == nil || !review.Status.Authenticated {
+	if review == nil {
+		return nil, ErrUnauthenticated
+	}
+	// A TokenReview backend error is a review failure, not a rejected token:
+	// it must not consume a peer's failure budget, so it is returned before
+	// the Authenticated check and without the ErrUnauthenticated sentinel.
+	if review.Status.Error != "" {
+		return nil, fmt.Errorf("token review backend error: %s", review.Status.Error)
+	}
+	if !review.Status.Authenticated {
 		return nil, ErrUnauthenticated
 	}
 

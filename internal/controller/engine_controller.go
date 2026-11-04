@@ -94,7 +94,11 @@ type EngineReconciler struct {
 	tokenStore sync.Map
 }
 
-const engineTargetIndex = "spec.target"
+const (
+	engineTargetIndex     = "spec.target"
+	engineRuleSetIndex    = "spec.ruleSet.name"
+	engineTargetNameIndex = "spec.target.name"
+)
 
 // engineNameLabel associates managed resources with their owning Engine.
 const engineNameLabel = "waf.k8s.coraza.io/engine-name"
@@ -102,6 +106,22 @@ const engineNameLabel = "waf.k8s.coraza.io/engine-name"
 // engineTargetKey returns the composite index key for an Engine's target.
 func engineTargetKey(targetType wafv1alpha1.EngineTargetType, name string) string {
 	return string(targetType) + "/" + name
+}
+
+func engineRuleSetIndexValues(obj client.Object) []string {
+	name := obj.(*wafv1alpha1.Engine).Spec.RuleSet.Name
+	if name == "" {
+		return nil
+	}
+	return []string{name}
+}
+
+func engineTargetNameIndexValues(obj client.Object) []string {
+	engine := obj.(*wafv1alpha1.Engine)
+	if engine.Spec.Target.Type != wafv1alpha1.EngineTargetTypeGateway || engine.Spec.Target.Name == "" {
+		return nil
+	}
+	return []string{engine.Spec.Target.Name}
 }
 
 // SetupWithManager sets up the controller with the Manager.
@@ -114,6 +134,12 @@ func (r *EngineReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		return []string{engineTargetKey(engine.Spec.Target.Type, engine.Spec.Target.Name)}
 	}); err != nil {
 		return fmt.Errorf("index %s: %w", engineTargetIndex, err)
+	}
+	if err := mgr.GetFieldIndexer().IndexField(context.Background(), &wafv1alpha1.Engine{}, engineRuleSetIndex, engineRuleSetIndexValues); err != nil {
+		return fmt.Errorf("index %s: %w", engineRuleSetIndex, err)
+	}
+	if err := mgr.GetFieldIndexer().IndexField(context.Background(), &wafv1alpha1.Engine{}, engineTargetNameIndex, engineTargetNameIndexValues); err != nil {
+		return fmt.Errorf("index %s: %w", engineTargetNameIndex, err)
 	}
 
 	envoyFilter := &unstructured.Unstructured{}

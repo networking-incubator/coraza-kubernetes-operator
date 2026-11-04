@@ -65,6 +65,8 @@ The operator serves Envoy Configuration Discovery Service (ECDS) streams and the
 | `--xds-stream-max-lifetime` | `10m` | Maximum ECDS stream lifetime before a forced reconnect (with jitter). |
 | `--xds-token-review-revalidate` | `2m` | Interval between open-stream TokenReview and authorization revalidation. |
 | `--xds-authorization-max-staleness` | `5m` | Maximum age of an authorization mapping before affected streams are closed. |
+| `--xds-auth-failure-rate` | `10` | Failed ECDS authentication attempts allowed per second per peer IP; successful authentication does not consume the bucket. |
+| `--xds-auth-failure-burst` | `1024` | Burst of failed ECDS authentication attempts per peer IP before the rate applies. |
 
 ### Istio Integration
 

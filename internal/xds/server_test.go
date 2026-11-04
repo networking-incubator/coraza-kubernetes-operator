@@ -18,8 +18,8 @@ package xds
 
 import (
 	"context"
+	"errors"
 	"net"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -43,6 +43,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
 
@@ -61,10 +62,12 @@ type streamFixture struct {
 	authz         *AuthzIndex
 	streams       *StreamRegistry
 	metrics       *Metrics
+	fakeClient    *k8sfake.Clientset
 	conn          *grpc.ClientConn
 	client        extensionv3.ExtensionConfigDiscoveryServiceClient
 	resourceName  string
 	identity      Identity
+	proxyID       string
 	setTokenValid func(bool)
 	setTokenDelay func(time.Duration)
 }
@@ -152,10 +155,12 @@ func newStreamFixtureWithLimits(t *testing.T, limits Limits) *streamFixture {
 		authz:        authz,
 		streams:      streams,
 		metrics:      metrics,
+		fakeClient:   fakeClient,
 		conn:         conn,
 		client:       extensionv3.NewExtensionConfigDiscoveryServiceClient(conn),
 		resourceName: resourceName,
 		identity:     identity,
+		proxyID:      "test-proxy",
 		setTokenValid: func(valid bool) {
 			tokenMu.Lock()
 			tokenValid = valid
@@ -180,10 +185,32 @@ func (f *streamFixture) open(t *testing.T, token string, names ...string) extens
 	if err != nil {
 		t.Fatalf("StreamExtensionConfigs() error = %v", err)
 	}
-	if err := stream.Send(&discoveryv3.DiscoveryRequest{ResourceNames: names}); err != nil {
+	if err := stream.Send(&discoveryv3.DiscoveryRequest{Node: &corev3.Node{Id: f.proxyID}, ResourceNames: names}); err != nil {
 		t.Fatalf("Send() error = %v", err)
 	}
 	return stream
+}
+
+func (f *streamFixture) openAs(t *testing.T, proxyID string, names ...string) extensionv3.ExtensionConfigDiscoveryService_StreamExtensionConfigsClient {
+	t.Helper()
+	previous := f.proxyID
+	f.proxyID = proxyID
+	defer func() { f.proxyID = previous }()
+	return f.open(t, validToken, names...)
+}
+
+func (f *streamFixture) proxyKey(proxyID string) string {
+	return proxyCacheKey(testNamespace+"/"+streamEngine, f.identity, proxyID)
+}
+
+func responseVMID(t *testing.T, response *discoveryv3.DiscoveryResponse) string {
+	t.Helper()
+	require.Len(t, response.GetResources(), 1)
+	var typed corev3.TypedExtensionConfig
+	require.NoError(t, response.Resources[0].UnmarshalTo(&typed))
+	var wasm wasmhttp.Wasm
+	require.NoError(t, typed.TypedConfig.UnmarshalTo(&wasm))
+	return wasm.GetConfig().GetVmConfig().GetVmId()
 }
 
 func (f *streamFixture) snapshot(t *testing.T, version string) *Snapshot {
@@ -333,7 +360,7 @@ func TestStreamNackAfterAckUsesRejectedVersion(t *testing.T) {
 		t.Fatal(err)
 	}
 	require.Eventually(t, func() bool {
-		cached, err := fixture.store.cache.GetSnapshot(testNamespace + "/" + streamEngine)
+		cached, err := fixture.store.cache.GetSnapshot(fixture.proxyKey("test-proxy"))
 		return err == nil && cached.GetVersion(resource.ExtensionConfigType) == "sha256:v2.retry1"
 	}, time.Second, 5*time.Millisecond)
 }
@@ -359,7 +386,7 @@ func TestStreamNackRepublishesUnderNewVersion(t *testing.T) {
 		return recv(t, stream).GetVersionInfo()
 	}
 	cachedVersion := func() string {
-		cached, err := fixture.store.cache.GetSnapshot(testNamespace + "/" + streamEngine)
+		cached, err := fixture.store.cache.GetSnapshot(fixture.proxyKey("test-proxy"))
 		if err != nil {
 			return ""
 		}
@@ -399,6 +426,75 @@ func TestStreamNackRepublishesUnderNewVersion(t *testing.T) {
 	}
 }
 
+func TestStreamNackRetryIsScopedToRejectingProxy(t *testing.T) {
+	fixture := newStreamFixture(t)
+	fixture.server.RetryDelay = 0
+	require.NoError(t, fixture.store.Replace(fixture.snapshot(t, "v1")))
+
+	rejecting := fixture.openAs(t, "proxy-rejecting", fixture.resourceName)
+	rejected := recv(t, rejecting)
+	acking := fixture.openAs(t, "proxy-acking", fixture.resourceName)
+	accepted := recv(t, acking)
+	require.Equal(t, "sha256:v1", accepted.GetVersionInfo())
+	require.Equal(t, "coraza-engine-uid", responseVMID(t, accepted))
+
+	require.NoError(t, acking.Send(&discoveryv3.DiscoveryRequest{
+		ResourceNames: []string{fixture.resourceName},
+		VersionInfo:   accepted.GetVersionInfo(),
+		ResponseNonce: accepted.GetNonce(),
+	}))
+	require.NoError(t, rejecting.Send(&discoveryv3.DiscoveryRequest{
+		ResourceNames: []string{fixture.resourceName},
+		VersionInfo:   rejected.GetVersionInfo(),
+		ResponseNonce: rejected.GetNonce(),
+		ErrorDetail:   status.New(codes.InvalidArgument, "rejected by Envoy").Proto(),
+	}))
+	if code := recvCode(t, rejecting); code != codes.Unavailable {
+		t.Fatalf("rejecting stream code = %v, want Unavailable", code)
+	}
+
+	proxyKey := fixture.proxyKey("proxy-rejecting")
+	require.Eventually(t, func() bool {
+		cached, err := fixture.store.cache.GetSnapshot(proxyKey)
+		return err == nil && cached.GetVersion(resource.ExtensionConfigType) == "sha256:v1.retry1"
+	}, time.Second, 5*time.Millisecond)
+
+	base, err := fixture.store.cache.GetSnapshot(testNamespace + "/" + streamEngine)
+	require.NoError(t, err)
+	require.Equal(t, "sha256:v1", base.GetVersion(resource.ExtensionConfigType))
+	baseResource := base.GetResources(resource.ExtensionConfigType)[fixture.resourceName].(*corev3.TypedExtensionConfig)
+	var baseWasm wasmhttp.Wasm
+	require.NoError(t, baseResource.TypedConfig.UnmarshalTo(&baseWasm))
+	require.Equal(t, "coraza-engine-uid", baseWasm.GetConfig().GetVmConfig().GetVmId())
+
+	// A shared-cache retry would push a new response to this already-ACKing watch.
+	ackingUpdates := startRecv(acking)
+	expectNoResult(t, ackingUpdates)
+
+	retry := fixture.openAs(t, "proxy-rejecting", fixture.resourceName)
+	retried := recv(t, retry)
+	require.Equal(t, "sha256:v1.retry1", retried.GetVersionInfo())
+	require.Equal(t, "coraza-engine-uid.retry1", responseVMID(t, retried))
+
+	require.Eventually(t, func() bool {
+		count := 0
+		fixture.server.nacks.Range(func(_, _ any) bool { count++; return true })
+		return count == 0
+	}, time.Second, 5*time.Millisecond)
+	require.NoError(t, retry.Send(&discoveryv3.DiscoveryRequest{
+		ResourceNames: []string{fixture.resourceName},
+		VersionInfo:   retried.GetVersionInfo(),
+		ResponseNonce: retried.GetNonce(),
+	}))
+	retryUpdates := startRecv(retry)
+	require.NoError(t, fixture.store.Replace(fixture.snapshot(t, "v2")))
+	for _, streamUpdates := range []<-chan recvResult{ackingUpdates, retryUpdates} {
+		updated := expectResult(t, streamUpdates)
+		require.Equal(t, "sha256:v2", updated.GetVersionInfo())
+		require.Equal(t, "coraza-engine-uid", responseVMID(t, updated))
+	}
+}
+
 func TestStreamNackRetryContinuesAfterManyRejections(t *testing.T) {
 	fixture := newStreamFixture(t)
 	fixture.server.RetryDelay = 0
@@ -424,7 +520,7 @@ func TestStreamNackRetryContinuesAfterManyRejections(t *testing.T) {
 		t.Fatalf("code = %v, want Unavailable", code)
 	}
 	require.Eventually(t, func() bool {
-		cached, err := fixture.store.cache.GetSnapshot(testNamespace + "/" + streamEngine)
+		cached, err := fixture.store.cache.GetSnapshot(fixture.proxyKey("test-proxy"))
 		return err == nil && cached.GetVersion(resource.ExtensionConfigType) == "sha256:v1.retry1"
 	}, time.Second, 5*time.Millisecond)
 }
@@ -507,6 +603,7 @@ func TestStreamNackBeforeSubscriptionStillResubscribes(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := stream.Send(&discoveryv3.DiscoveryRequest{
+		Node:          &corev3.Node{Id: "test-proxy"},
 		ResourceNames: []string{fixture.resourceName},
 		ErrorDetail:   status.New(codes.InvalidArgument, "rejected by Envoy").Proto(),
 	}); err != nil {
@@ -531,6 +628,7 @@ func TestStreamNackWithoutResourceNamesStillResubscribes(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := stream.Send(&discoveryv3.DiscoveryRequest{
+		Node:        &corev3.Node{Id: "test-proxy"},
 		ErrorDetail: status.New(codes.InvalidArgument, "rejected by Envoy").Proto(),
 	}); err != nil {
 		t.Fatal(err)
@@ -539,7 +637,7 @@ func TestStreamNackWithoutResourceNamesStillResubscribes(t *testing.T) {
 		t.Fatalf("code = %v, want Unavailable", code)
 	}
 	require.Eventually(t, func() bool {
-		cached, err := fixture.store.cache.GetSnapshot(testNamespace + "/" + streamEngine)
+		cached, err := fixture.store.cache.GetSnapshot(fixture.proxyKey("test-proxy"))
 		return err == nil && cached.GetVersion(resource.ExtensionConfigType) == "sha256:v1.retry1"
 	}, time.Second, 5*time.Millisecond)
 }
@@ -749,13 +847,13 @@ func TestNackBudgetIsPerStream(t *testing.T) {
 
 	// Stream A has already rejected the configuration many times; its
 	// accounting must not stop another stream's retry.
-	streamA := fixture.open(t, validToken, fixture.resourceName)
+	streamA := fixture.openAs(t, "proxy-a", fixture.resourceName)
 	_ = recv(t, streamA)
 	keyA := fixture.seedNackBudget(t, 100)
 
 	// Stream B subscribes to the same resource: A's attempt count must not
 	// block B's retry.
-	streamB := fixture.open(t, validToken, fixture.resourceName)
+	streamB := fixture.openAs(t, "proxy-b", fixture.resourceName)
 	second := recv(t, streamB)
 	if err := streamB.Send(&discoveryv3.DiscoveryRequest{
 		ResourceNames: []string{fixture.resourceName},
@@ -769,7 +867,7 @@ func TestNackBudgetIsPerStream(t *testing.T) {
 		t.Fatalf("code = %v, want Unavailable", code)
 	}
 	require.Eventually(t, func() bool {
-		cached, err := fixture.store.cache.GetSnapshot(testNamespace + "/" + streamEngine)
+		cached, err := fixture.store.cache.GetSnapshot(fixture.proxyKey("proxy-b"))
 		return err == nil && cached.GetVersion(resource.ExtensionConfigType) == "sha256:v1.retry1"
 	}, time.Second, 5*time.Millisecond)
 
@@ -944,6 +1042,132 @@ func TestAuthSuccessIsNotCountedAsFailure(t *testing.T) {
 	}
 }
 
+func TestAuthFailureStormIsRateLimited(t *testing.T) {
+	limits := DefaultLimits()
+	limits.AuthFailureRate = 1
+	limits.AuthFailureBurst = 2
+	fixture := newStreamFixtureWithLimits(t, limits)
+	require.NoError(t, fixture.store.Replace(fixture.snapshot(t, "v1")))
+
+	tokens := []string{"invalid-1", "invalid-2", "invalid-3", "invalid-4", "invalid-5"}
+	for i, token := range tokens {
+		stream := fixture.open(t, token, fixture.resourceName)
+		want := codes.Unauthenticated
+		if i >= limits.AuthFailureBurst {
+			want = codes.ResourceExhausted
+		}
+		if code := recvCode(t, stream); code != want {
+			t.Fatalf("attempt %d code = %v, want %v", i+1, code, want)
+		}
+	}
+
+	if got := len(fixture.fakeClient.Actions()); got != limits.AuthFailureBurst {
+		t.Fatalf("TokenReview calls = %d, want %d", got, limits.AuthFailureBurst)
+	}
+	if got := testutil.ToFloat64(fixture.metrics.authThrottled); got != float64(len(tokens)-limits.AuthFailureBurst) {
+		t.Fatalf("throttled authentications = %v, want %d", got, len(tokens)-limits.AuthFailureBurst)
+	}
+}
+
+func TestAuthFailureLimiterIsPerPeerAndRecovers(t *testing.T) {
+	limits := DefaultLimits()
+	limits.AuthFailureRate = 1
+	limits.AuthFailureBurst = 1
+	fixture := newStreamFixtureWithLimits(t, limits)
+	now := time.Unix(1_000_000, 0)
+	fixture.server.Auth.failureLimiter.now = func() time.Time { return now }
+
+	firstPeer := &net.TCPAddr{IP: net.ParseIP("192.0.2.1"), Port: 1001}
+	if _, err := fixture.server.Auth.Authenticate(authContextWithPeer(validToken, firstPeer), validToken); err != nil {
+		t.Fatalf("valid token error = %v", err)
+	}
+	_, err := fixture.server.Auth.Authenticate(authContextWithPeer("invalid-1", firstPeer), "invalid-1")
+	if !errors.Is(err, ErrUnauthenticated) {
+		t.Fatalf("first invalid token error = %v, want ErrUnauthenticated", err)
+	}
+
+	// A new source port is the same peer and cannot reset its failure budget.
+	samePeer := &net.TCPAddr{IP: net.ParseIP("192.0.2.1"), Port: 1002}
+	_, err = fixture.server.Auth.Authenticate(authContextWithPeer("invalid-2", samePeer), "invalid-2")
+	if !errors.Is(err, ErrAuthRateLimited) {
+		t.Fatalf("second invalid token error = %v, want ErrAuthRateLimited", err)
+	}
+
+	otherPeer := &net.TCPAddr{IP: net.ParseIP("192.0.2.2"), Port: 1001}
+	fixture.server.Auth.cache.Delete(authenticationCacheKey(validToken, ""))
+	if _, err := fixture.server.Auth.Authenticate(authContextWithPeer(validToken, otherPeer), validToken); err != nil {
+		t.Fatalf("valid token from another peer error = %v", err)
+	}
+
+	now = now.Add(time.Second)
+	_, err = fixture.server.Auth.Authenticate(authContextWithPeer("invalid-3", samePeer), "invalid-3")
+	if !errors.Is(err, ErrUnauthenticated) {
+		t.Fatalf("invalid token after refill error = %v, want ErrUnauthenticated", err)
+	}
+}
+
+// A review failure that is not an authentication rejection (here, an
+// API-server error) must not consume the peer's bucket: only
+// ErrUnauthenticated, wrapped or not, counts as a limiter failure.
+func TestAuthFailureLimiterIgnoresNonAuthErrors(t *testing.T) {
+	limits := DefaultLimits()
+	limits.AuthFailureRate = 1
+	limits.AuthFailureBurst = 1
+	fixture := newStreamFixtureWithLimits(t, limits)
+	peerAddr := &net.TCPAddr{IP: net.ParseIP("192.0.2.1"), Port: 1001}
+
+	failAPICall := true
+	fixture.fakeClient.PrependReactor("create", "tokenreviews", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		if failAPICall {
+			return true, nil, errors.New("apiserver unavailable")
+		}
+		return false, nil, nil
+	})
+	_, err := fixture.server.Auth.Authenticate(authContextWithPeer("doomed", peerAddr), "doomed")
+	if err == nil || errors.Is(err, ErrUnauthenticated) {
+		t.Fatalf("review error = %v, want a non-authentication failure", err)
+	}
+
+	// The failed review must not have consumed the peer's failure bucket.
+	failAPICall = false
+	if _, err := fixture.server.Auth.Authenticate(authContextWithPeer("invalid", peerAddr), "invalid"); !errors.Is(err, ErrUnauthenticated) {
+		t.Fatalf("next invalid token error = %v, want ErrUnauthenticated rather than a rate limit", err)
+	}
+}
+
+// A TokenReview Status.Error is a backend failure, not a token rejection:
+// it must not consume the peer's bucket, while Authenticated=false without an
+// error still does.
+func TestAuthenticateTreatsReviewStatusErrorAsBackendFailure(t *testing.T) {
+	limits := DefaultLimits()
+	limits.AuthFailureRate = 1
+	limits.AuthFailureBurst = 1
+	fixture := newStreamFixtureWithLimits(t, limits)
+	peerAddr := &net.TCPAddr{IP: net.ParseIP("192.0.2.1"), Port: 1001}
+
+	backendError := true
+	fixture.fakeClient.PrependReactor("create", "tokenreviews", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		if backendError {
+			return true, &authv1.TokenReview{Status: authv1.TokenReviewStatus{Error: "apiserver unavailable"}}, nil
+		}
+		return false, nil, nil
+	})
+	_, err := fixture.server.Auth.Authenticate(authContextWithPeer("doomed", peerAddr), "doomed")
+	if err == nil || errors.Is(err, ErrUnauthenticated) {
+		t.Fatalf("review error = %v, want a backend failure, not a token rejection", err)
+	}
+
+	backendError = false
+	if _, err := fixture.server.Auth.Authenticate(authContextWithPeer("invalid", peerAddr), "invalid"); !errors.Is(err, ErrUnauthenticated) {
+		t.Fatalf("next invalid token error = %v, want ErrUnauthenticated rather than a rate limit", err)
+	}
+}
+
+func authContextWithPeer(token string, addr net.Addr) context.Context {
+	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs(authorizationHeader, "Bearer "+token))
+	return peer.NewContext(ctx, &peer.Peer{Addr: addr})
+}
+
 type recvResult struct {
 	response *discoveryv3.DiscoveryResponse
 	err      error
@@ -1014,8 +1238,6 @@ func TestRejectedRetryDoesNotRunAfterClose(t *testing.T) {
 	fixture.server.streams.Store(int64(42), entry)
 	fixture.server.openStreams.Add(1)
 	fixture.server.resubscribeRejected(entry, fixture.resourceName, "")
-	before, err := fixture.store.CurrentVersion(fixture.resourceName)
-	require.NoError(t, err)
 
 	fixture.server.onStreamClosed(42, nil)
 	entry.mu.Lock()
@@ -1024,10 +1246,10 @@ func TestRejectedRetryDoesNotRunAfterClose(t *testing.T) {
 	entry.mu.Unlock()
 
 	// Simulate a callback that had already passed its scheduling check.
-	fixture.server.runRejectedRetry(entry, fixture.resourceName, "", 1)
-	after, err := fixture.store.CurrentVersion(fixture.resourceName)
-	require.NoError(t, err)
-	require.Equal(t, before, after, "a closed stream bumped the shared snapshot")
+	proxyKey := proxyCacheKey(testNamespace+"/"+streamEngine, Identity{}, "")
+	fixture.server.runRejectedRetry(entry, fixture.resourceName, proxyKey, "", 1)
+	_, err := fixture.store.cache.GetSnapshot(proxyKey)
+	require.Error(t, err, "a closed stream must not publish a retry snapshot for the proxy either")
 }
 
 // TestRejectedRetryBumpsWhenActive proves the active path still republishes.
@@ -1041,11 +1263,15 @@ func TestRejectedRetryBumpsWhenActive(t *testing.T) {
 	entry.retryPending = true
 	entry.mu.Unlock()
 
-	fixture.server.runRejectedRetry(entry, fixture.resourceName, "", 1)
+	proxyKey := proxyCacheKey(testNamespace+"/"+streamEngine, Identity{}, "")
+	fixture.server.runRejectedRetry(entry, fixture.resourceName, proxyKey, "sha256:v1", 1)
 
 	version, err := fixture.store.CurrentVersion(fixture.resourceName)
 	require.NoError(t, err)
-	require.True(t, strings.HasSuffix(version, ".retry1"), version)
+	require.Equal(t, "sha256:v1", version)
+	retryVersion, err := fixture.store.CurrentVersionFor(fixture.resourceName, proxyKey)
+	require.NoError(t, err)
+	require.Equal(t, "sha256:v1.retry1", retryVersion)
 	entry.mu.Lock()
 	require.False(t, entry.retryPending)
 	entry.mu.Unlock()

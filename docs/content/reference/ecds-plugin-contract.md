@@ -202,10 +202,10 @@ scoped to one resource per stream. Delta and ADS are out of scope.
 
 - Resource identity includes the Engine UID, so a recreated Engine never reuses a
   deleted Engine's cached configuration.
-- The ECDS `version_info` is the engine-version hash, not the hash of the rendered
-  resource: `sha256:<64 lowercase hexadecimal characters>`. A NACK retry republishes
-  the rejected snapshot as `sha256:<hash>.retry<N>` and appends the same suffix to the
-  WASM `vm_id`; treat the suffix as part of the version string.
+- The accepted ECDS `version_info` is the engine-version hash, not the hash of the
+  rendered resource: `sha256:<64 lowercase hexadecimal characters>`. A NACK retry is
+  scoped to the rejecting proxy: its version becomes `sha256:<hash>.retry<N>`, and the
+  same suffix is appended to its WASM `vm_id` without changing the Engine's accepted hash.
 - `ruleSetHash = sha256(canonical(rule text + sorted filename list + raw bytes))`.
 - The Engine version hashes schema and rendering versions, Engine identity, the RuleSet
   UID and content hash, failure and empty-rules policies, observability, binary URL and

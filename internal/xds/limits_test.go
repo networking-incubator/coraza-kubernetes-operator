@@ -17,6 +17,7 @@ limitations under the License.
 package xds
 
 import (
+	"math"
 	"testing"
 	"time"
 
@@ -32,6 +33,8 @@ func TestLimitsWithDefaultsKeepsPartiallySetLimits(t *testing.T) {
 	assert.Equal(t, DefaultMaxDataFiles, filled.MaxDataFiles, "an unset limit must default")
 	assert.Equal(t, DefaultMaxDecodedDataBytes, filled.MaxDecodedDataBytes)
 	assert.Equal(t, DefaultStreamMaxLifetime, filled.StreamMaxLifetime)
+	assert.Equal(t, DefaultAuthFailureRate, filled.AuthFailureRate)
+	assert.Equal(t, DefaultAuthFailureBurst, filled.AuthFailureBurst)
 
 	assert.Equal(t, DefaultLimits().MaxDataFiles, Limits{}.WithDefaults().MaxDataFiles, "zero limits must default")
 }
@@ -44,10 +47,14 @@ func TestLimitsWithDefaultsRejectsNegativeLimits(t *testing.T) {
 		MaxStreams:         -DefaultMaxStreams,
 		StreamMaxLifetime:  -time.Second,
 		TokenReviewRetries: -3,
+		AuthFailureRate:    -1,
+		AuthFailureBurst:   -1,
 	}.WithDefaults()
 	assert.Equal(t, DefaultMaxStreams, filled.MaxStreams, "a negative limit must fall back to the default")
 	assert.Equal(t, DefaultStreamMaxLifetime, filled.StreamMaxLifetime)
 	assert.Equal(t, 0, filled.TokenReviewRetries, "negative retries must clamp to zero, not the default")
+	assert.Equal(t, DefaultAuthFailureRate, filled.AuthFailureRate)
+	assert.Equal(t, DefaultAuthFailureBurst, filled.AuthFailureBurst)
 	assert.Equal(t, 0, Limits{}.WithDefaults().TokenReviewRetries, "zero retries must stay zero; only a set value or DefaultLimits applies")
 }
 
@@ -69,6 +76,12 @@ func TestLimitsValidateRejectsPluginCapViolations(t *testing.T) {
 	err = Limits{MaxDataFiles: pluginMaxDataFiles + 1}.Validate()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "xds-max-data-files")
+
+	for _, invalidRate := range []float64{math.NaN(), math.Inf(1), math.Inf(-1)} {
+		err := Limits{AuthFailureRate: invalidRate}.Validate()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "xds-auth-failure-rate")
+	}
 }
 
 func TestLimitsValidateRequiresRevalidationBeforeStaleness(t *testing.T) {
