@@ -18,6 +18,7 @@ package xds
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"sync"
 	"testing"
@@ -25,6 +26,81 @@ import (
 
 	"google.golang.org/grpc/peer"
 )
+
+// handlerAddr mimics the string-backed "host:port" address grpc-go's
+// ServeHTTP transport puts in the peer context, which the operator's muxed
+// listener uses in production.
+type handlerAddr string
+
+func (h handlerAddr) Network() string { return "http" }
+func (h handlerAddr) String() string  { return string(h) }
+
+// Without the string-address fallback every production peer maps to
+// "unknown", so one attacker's failed tokens throttle the whole fleet.
+func TestAuthFailurePeerAddressParsesServeHTTPPeer(t *testing.T) {
+	ctx := peer.NewContext(context.Background(), &peer.Peer{Addr: handlerAddr("10.1.2.3:51234")})
+	if got := authFailurePeerAddress(ctx); got != "10.1.2.3" {
+		t.Fatalf("authFailurePeerAddress() = %q, want 10.1.2.3", got)
+	}
+
+	// Distinct peers must land in distinct buckets, not the shared fallback.
+	limiter := newAuthFailureLimiter(1000, 1)
+	first := peer.NewContext(context.Background(), &peer.Peer{Addr: handlerAddr("10.1.2.3:1")})
+	second := peer.NewContext(context.Background(), &peer.Peer{Addr: handlerAddr("10.1.2.4:1")})
+	if _, allowed := limiter.reserve(first); !allowed {
+		t.Fatal("first peer must be allowed")
+	}
+	if _, allowed := limiter.reserve(second); !allowed {
+		t.Fatal("a second peer must not share the first peer's bucket")
+	}
+	if _, allowed := limiter.reserve(first); allowed {
+		t.Fatal("the first peer's bucket must be exhausted")
+	}
+}
+
+// A peer spray from many source IPs must not grow the bucket map without
+// limit: beyond the cap every new peer shares the overflow bucket.
+func TestAuthFailureLimiterBoundsBucketCardinality(t *testing.T) {
+	limiter := newAuthFailureLimiter(1000, 1)
+	for i := 0; i < maxAuthFailureBuckets; i++ {
+		ctx := peer.NewContext(context.Background(), &peer.Peer{Addr: handlerAddr(fmt.Sprintf("10.0.%d.%d:1", i/256, i%256))})
+		if _, allowed := limiter.reserve(ctx); !allowed {
+			t.Fatalf("peer %d must be allowed", i)
+		}
+	}
+	limiter.mu.Lock()
+	size := len(limiter.buckets)
+	limiter.mu.Unlock()
+	if size != maxAuthFailureBuckets {
+		t.Fatalf("bucket count = %d, want %d", size, maxAuthFailureBuckets)
+	}
+
+	overflow := peer.NewContext(context.Background(), &peer.Peer{Addr: handlerAddr("192.0.2.99:1")})
+	reservation, allowed := limiter.reserve(overflow)
+	if !allowed {
+		t.Fatal("the overflow peer must draw from the shared bucket, not be rejected outright")
+	}
+	if reservation.bucket != limiter.buckets[unknownAuthPeer] {
+		t.Fatal("a peer beyond the cap must share the unknown overflow bucket")
+	}
+	reservation.finish(true)
+	// The overflow bucket may itself be created past the cap (a single extra
+	// entry), but further new peers must reuse it rather than grow the map.
+	second := peer.NewContext(context.Background(), &peer.Peer{Addr: handlerAddr("192.0.2.100:1")})
+	secondReservation, allowed := limiter.reserve(second)
+	if !allowed {
+		t.Fatal("a second overflow peer must be allowed")
+	}
+	if secondReservation.bucket != reservation.bucket {
+		t.Fatal("overflow peers must share one bucket")
+	}
+	limiter.mu.Lock()
+	size = len(limiter.buckets)
+	limiter.mu.Unlock()
+	if size > maxAuthFailureBuckets+1 {
+		t.Fatalf("bucket count after overflow = %d, want at most %d", size, maxAuthFailureBuckets+1)
+	}
+}
 
 func TestAuthFailureLimiterEvictsIdleBuckets(t *testing.T) {
 	limiter := newAuthFailureLimiter(1, 1)

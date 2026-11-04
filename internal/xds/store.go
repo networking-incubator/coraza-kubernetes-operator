@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"sync"
 
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
@@ -42,20 +43,67 @@ type SnapshotStore struct {
 	mu      sync.RWMutex
 	meta    map[string]Snapshot
 	proxies map[string]*proxySnapshot
+	// byEngine indexes proxies per Engine key so eviction and Replace touch
+	// only that Engine's proxies instead of scanning the whole store.
+	byEngine map[string]map[string]*proxySnapshot
+	// resources indexes ECDS resource name to Engine key so the request path
+	// resolves a subscription without scanning every Engine.
+	resources map[string]string
+	nextSeq   uint64
 }
 
 type proxySnapshot struct {
 	engineKey    string
 	active       int
 	retryUnacked bool
+	// seq orders inactive retry snapshots for eviction.
+	seq uint64
 }
+
+// maxInactiveRetryProxies bounds how many disconnected, unacknowledged retry
+// snapshots one Engine retains. A subscriber that NACKs under distinct proxy
+// keys and never returns must not grow the store without bound. An evicted
+// proxy is not stranded: on its next NACK the server falls back to the
+// Engine's shared version (CurrentVersionFor) and the retry ladder restarts,
+// exactly like a proxy whose retry was purged by a content change.
+const maxInactiveRetryProxies = 32
 
 // NewSnapshotStore returns an empty snapshot store.
 func NewSnapshotStore() *SnapshotStore {
 	return &SnapshotStore{
-		cache:   cachev3.NewSnapshotCache(false, cachev3.IDHash{}, nil),
-		meta:    make(map[string]Snapshot),
-		proxies: make(map[string]*proxySnapshot),
+		cache:     cachev3.NewSnapshotCache(false, cachev3.IDHash{}, nil),
+		meta:      make(map[string]Snapshot),
+		proxies:   make(map[string]*proxySnapshot),
+		byEngine:  make(map[string]map[string]*proxySnapshot),
+		resources: make(map[string]string),
+	}
+}
+
+// trackProxyLocked registers a proxy in the global and per-Engine indexes.
+func (s *SnapshotStore) trackProxyLocked(proxyKey string, proxy *proxySnapshot) {
+	s.proxies[proxyKey] = proxy
+	engine := s.byEngine[proxy.engineKey]
+	if engine == nil {
+		engine = make(map[string]*proxySnapshot)
+		s.byEngine[proxy.engineKey] = engine
+	}
+	engine[proxyKey] = proxy
+}
+
+// untrackProxyLocked removes a proxy from both indexes.
+func (s *SnapshotStore) untrackProxyLocked(proxyKey string) {
+	proxy, ok := s.proxies[proxyKey]
+	if !ok {
+		return
+	}
+	delete(s.proxies, proxyKey)
+	engine := s.byEngine[proxy.engineKey]
+	if engine == nil {
+		return
+	}
+	delete(engine, proxyKey)
+	if len(engine) == 0 {
+		delete(s.byEngine, proxy.engineKey)
 	}
 }
 
@@ -78,15 +126,18 @@ func (s *SnapshotStore) Replace(snapshot *Snapshot) error {
 	if err := s.cache.SetSnapshot(context.Background(), key, compiled); err != nil {
 		return err
 	}
+	// A UID change republishes under a new resource name; drop the old index
+	// entry so it cannot shadow another Engine's name.
+	if old, ok := s.meta[key]; ok && old.ResourceName != snapshot.ResourceName {
+		delete(s.resources, old.ResourceName)
+	}
 	s.meta[key] = *snapshot
-	for proxyKey, proxy := range s.proxies {
-		if proxy.engineKey != key {
-			continue
-		}
+	s.resources[snapshot.ResourceName] = key
+	for proxyKey, proxy := range s.byEngine[key] {
 		proxy.retryUnacked = false
 		if proxy.active == 0 {
 			s.cache.ClearSnapshot(proxyKey)
-			delete(s.proxies, proxyKey)
+			s.untrackProxyLocked(proxyKey)
 			continue
 		}
 		if err := s.cache.SetSnapshot(context.Background(), proxyKey, compiled); err != nil {
@@ -130,11 +181,51 @@ func (s *SnapshotStore) BumpRejected(resourceName, proxyKey, acceptedVersion str
 		return err
 	}
 	if proxy == nil {
-		proxy = &proxySnapshot{engineKey: key}
-		s.proxies[proxyKey] = proxy
+		proxy = &proxySnapshot{engineKey: key, seq: s.nextSeq}
+		s.nextSeq++
+		s.trackProxyLocked(proxyKey, proxy)
+	} else {
+		// A repeated NACK refreshes the proxy's eviction order, so a proxy
+		// that keeps rejecting is never evicted as old while it is the
+		// active troublemaker.
+		proxy.seq = s.nextSeq
+		s.nextSeq++
 	}
 	proxy.retryUnacked = true
+	s.evictInactiveRetriesLocked(key)
 	return nil
+}
+
+// evictInactiveRetriesLocked drops the oldest disconnected, unacknowledged
+// retry snapshots of one Engine beyond maxInactiveRetryProxies. Connected
+// proxies and recent disconnects keep their snapshots; an evicted proxy
+// restarts the retry ladder on its next NACK, which is why the eviction is
+// safe. Only that Engine's proxies are examined, so a NACK does not scan the
+// whole store.
+func (s *SnapshotStore) evictInactiveRetriesLocked(engineKey string) {
+	engine := s.byEngine[engineKey]
+	if engine == nil {
+		return
+	}
+	retained := 0
+	candidates := make([]string, 0, len(engine))
+	for proxyKey, proxy := range engine {
+		if proxy.active > 0 || !proxy.retryUnacked {
+			continue
+		}
+		retained++
+		candidates = append(candidates, proxyKey)
+	}
+	if retained <= maxInactiveRetryProxies {
+		return
+	}
+	sort.Slice(candidates, func(i, j int) bool {
+		return engine[candidates[i]].seq < engine[candidates[j]].seq
+	})
+	for _, proxyKey := range candidates[:retained-maxInactiveRetryProxies] {
+		s.cache.ClearSnapshot(proxyKey)
+		s.untrackProxyLocked(proxyKey)
+	}
 }
 
 func rejectedSnapshot(meta Snapshot, attempt int) (cachev3.ResourceSnapshot, error) {
@@ -203,8 +294,9 @@ func (s *SnapshotStore) BindRejectedRetry(resourceName, proxyKey, version string
 		return false, err
 	}
 	if proxy == nil {
-		proxy = &proxySnapshot{engineKey: key}
-		s.proxies[proxyKey] = proxy
+		proxy = &proxySnapshot{engineKey: key, seq: s.nextSeq}
+		s.nextSeq++
+		s.trackProxyLocked(proxyKey, proxy)
 	}
 	proxy.active++
 	return true, nil
@@ -259,22 +351,38 @@ func (s *SnapshotStore) ReleaseRejectedRetry(proxyKey string) {
 	if proxy == nil {
 		return
 	}
+	engineKey := proxy.engineKey
 	if proxy.active > 0 {
 		proxy.active--
 	}
+	if proxy.active == 0 {
+		// A proxy that just disconnected is the most recent disconnect: its
+		// snapshot should outlive older inactive retries.
+		proxy.seq = s.nextSeq
+		s.nextSeq++
+	}
 	if proxy.active == 0 && !proxy.retryUnacked {
 		s.cache.ClearSnapshot(proxyKey)
-		delete(s.proxies, proxyKey)
+		s.untrackProxyLocked(proxyKey)
 	}
+	// Disconnects can push an Engine over the inactive-retry bound too; a
+	// burst of proxies that NACK and leave must not wait for the next NACK
+	// to be reclaimed.
+	s.evictInactiveRetriesLocked(engineKey)
 }
 
 func (s *SnapshotStore) snapshotForResourceLocked(resourceName string) (string, Snapshot, bool) {
-	for key, snapshot := range s.meta {
-		if snapshot.ResourceName == resourceName {
-			return key, snapshot, true
-		}
+	// Indexed lookup: the request path (subscriptions and ACKs) must not scan
+	// every Engine under the lock.
+	key, ok := s.resources[resourceName]
+	if !ok {
+		return "", Snapshot{}, false
 	}
-	return "", Snapshot{}, false
+	snapshot, ok := s.meta[key]
+	if !ok {
+		return "", Snapshot{}, false
+	}
+	return key, snapshot, true
 }
 
 // DeleteEngine removes an Engine's snapshot and any open watches.
@@ -283,13 +391,13 @@ func (s *SnapshotStore) DeleteEngine(namespace, engineName string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.cache.ClearSnapshot(key)
+	delete(s.resources, s.meta[key].ResourceName)
 	delete(s.meta, key)
-	for proxyKey, proxy := range s.proxies {
-		if proxy.engineKey == key {
-			s.cache.ClearSnapshot(proxyKey)
-			delete(s.proxies, proxyKey)
-		}
+	for proxyKey := range s.byEngine[key] {
+		s.cache.ClearSnapshot(proxyKey)
+		s.untrackProxyLocked(proxyKey)
 	}
+	delete(s.byEngine, key)
 }
 
 // CurrentVersion returns the Engine's shared ECDS version for a resource.

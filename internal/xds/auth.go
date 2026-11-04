@@ -136,7 +136,10 @@ func (a *Authenticator) Authenticate(ctx context.Context, token string) (*Identi
 
 	identity, err := a.review(ctx, token)
 	if reservation != nil {
-		reservation.finish(err == nil)
+		// Only a rejected token is a peer failure: a cancelled context or an
+		// internal review error must not consume the peer's bucket, and a
+		// wrapped ErrUnauthenticated still is one.
+		reservation.finish(!errors.Is(err, ErrUnauthenticated))
 	}
 	if err != nil {
 		return nil, err
@@ -235,7 +238,16 @@ func (a *Authenticator) review(ctx context.Context, token string) (*Identity, er
 }
 
 func (a *Authenticator) identityFromReview(review *authv1.TokenReview) (*Identity, error) {
-	if review == nil || !review.Status.Authenticated {
+	if review == nil {
+		return nil, ErrUnauthenticated
+	}
+	// A TokenReview backend error is a review failure, not a rejected token:
+	// it must not consume a peer's failure budget, so it is returned before
+	// the Authenticated check and without the ErrUnauthenticated sentinel.
+	if review.Status.Error != "" {
+		return nil, fmt.Errorf("token review backend error: %s", review.Status.Error)
+	}
+	if !review.Status.Authenticated {
 		return nil, ErrUnauthenticated
 	}
 

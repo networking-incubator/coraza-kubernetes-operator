@@ -191,12 +191,12 @@ func (f *streamFixture) open(t *testing.T, token string, names ...string) extens
 	return stream
 }
 
-func (f *streamFixture) openAs(t *testing.T, token, proxyID string, names ...string) extensionv3.ExtensionConfigDiscoveryService_StreamExtensionConfigsClient {
+func (f *streamFixture) openAs(t *testing.T, proxyID string, names ...string) extensionv3.ExtensionConfigDiscoveryService_StreamExtensionConfigsClient {
 	t.Helper()
 	previous := f.proxyID
 	f.proxyID = proxyID
 	defer func() { f.proxyID = previous }()
-	return f.open(t, token, names...)
+	return f.open(t, validToken, names...)
 }
 
 func (f *streamFixture) proxyKey(proxyID string) string {
@@ -431,9 +431,9 @@ func TestStreamNackRetryIsScopedToRejectingProxy(t *testing.T) {
 	fixture.server.RetryDelay = 0
 	require.NoError(t, fixture.store.Replace(fixture.snapshot(t, "v1")))
 
-	rejecting := fixture.openAs(t, validToken, "proxy-rejecting", fixture.resourceName)
+	rejecting := fixture.openAs(t, "proxy-rejecting", fixture.resourceName)
 	rejected := recv(t, rejecting)
-	acking := fixture.openAs(t, validToken, "proxy-acking", fixture.resourceName)
+	acking := fixture.openAs(t, "proxy-acking", fixture.resourceName)
 	accepted := recv(t, acking)
 	require.Equal(t, "sha256:v1", accepted.GetVersionInfo())
 	require.Equal(t, "coraza-engine-uid", responseVMID(t, accepted))
@@ -471,7 +471,7 @@ func TestStreamNackRetryIsScopedToRejectingProxy(t *testing.T) {
 	ackingUpdates := startRecv(acking)
 	expectNoResult(t, ackingUpdates)
 
-	retry := fixture.openAs(t, validToken, "proxy-rejecting", fixture.resourceName)
+	retry := fixture.openAs(t, "proxy-rejecting", fixture.resourceName)
 	retried := recv(t, retry)
 	require.Equal(t, "sha256:v1.retry1", retried.GetVersionInfo())
 	require.Equal(t, "coraza-engine-uid.retry1", responseVMID(t, retried))
@@ -847,13 +847,13 @@ func TestNackBudgetIsPerStream(t *testing.T) {
 
 	// Stream A has already rejected the configuration many times; its
 	// accounting must not stop another stream's retry.
-	streamA := fixture.openAs(t, validToken, "proxy-a", fixture.resourceName)
+	streamA := fixture.openAs(t, "proxy-a", fixture.resourceName)
 	_ = recv(t, streamA)
 	keyA := fixture.seedNackBudget(t, 100)
 
 	// Stream B subscribes to the same resource: A's attempt count must not
 	// block B's retry.
-	streamB := fixture.openAs(t, validToken, "proxy-b", fixture.resourceName)
+	streamB := fixture.openAs(t, "proxy-b", fixture.resourceName)
 	second := recv(t, streamB)
 	if err := streamB.Send(&discoveryv3.DiscoveryRequest{
 		ResourceNames: []string{fixture.resourceName},
@@ -1106,6 +1106,63 @@ func TestAuthFailureLimiterIsPerPeerAndRecovers(t *testing.T) {
 	}
 }
 
+// A review failure that is not an authentication rejection (here, an
+// API-server error) must not consume the peer's bucket: only
+// ErrUnauthenticated, wrapped or not, counts as a limiter failure.
+func TestAuthFailureLimiterIgnoresNonAuthErrors(t *testing.T) {
+	limits := DefaultLimits()
+	limits.AuthFailureRate = 1
+	limits.AuthFailureBurst = 1
+	fixture := newStreamFixtureWithLimits(t, limits)
+	peerAddr := &net.TCPAddr{IP: net.ParseIP("192.0.2.1"), Port: 1001}
+
+	failAPICall := true
+	fixture.fakeClient.PrependReactor("create", "tokenreviews", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		if failAPICall {
+			return true, nil, errors.New("apiserver unavailable")
+		}
+		return false, nil, nil
+	})
+	_, err := fixture.server.Auth.Authenticate(authContextWithPeer("doomed", peerAddr), "doomed")
+	if err == nil || errors.Is(err, ErrUnauthenticated) {
+		t.Fatalf("review error = %v, want a non-authentication failure", err)
+	}
+
+	// The failed review must not have consumed the peer's failure bucket.
+	failAPICall = false
+	if _, err := fixture.server.Auth.Authenticate(authContextWithPeer("invalid", peerAddr), "invalid"); !errors.Is(err, ErrUnauthenticated) {
+		t.Fatalf("next invalid token error = %v, want ErrUnauthenticated rather than a rate limit", err)
+	}
+}
+
+// A TokenReview Status.Error is a backend failure, not a token rejection:
+// it must not consume the peer's bucket, while Authenticated=false without an
+// error still does.
+func TestAuthenticateTreatsReviewStatusErrorAsBackendFailure(t *testing.T) {
+	limits := DefaultLimits()
+	limits.AuthFailureRate = 1
+	limits.AuthFailureBurst = 1
+	fixture := newStreamFixtureWithLimits(t, limits)
+	peerAddr := &net.TCPAddr{IP: net.ParseIP("192.0.2.1"), Port: 1001}
+
+	backendError := true
+	fixture.fakeClient.PrependReactor("create", "tokenreviews", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		if backendError {
+			return true, &authv1.TokenReview{Status: authv1.TokenReviewStatus{Error: "apiserver unavailable"}}, nil
+		}
+		return false, nil, nil
+	})
+	_, err := fixture.server.Auth.Authenticate(authContextWithPeer("doomed", peerAddr), "doomed")
+	if err == nil || errors.Is(err, ErrUnauthenticated) {
+		t.Fatalf("review error = %v, want a backend failure, not a token rejection", err)
+	}
+
+	backendError = false
+	if _, err := fixture.server.Auth.Authenticate(authContextWithPeer("invalid", peerAddr), "invalid"); !errors.Is(err, ErrUnauthenticated) {
+		t.Fatalf("next invalid token error = %v, want ErrUnauthenticated rather than a rate limit", err)
+	}
+}
+
 func authContextWithPeer(token string, addr net.Addr) context.Context {
 	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs(authorizationHeader, "Bearer "+token))
 	return peer.NewContext(ctx, &peer.Peer{Addr: addr})
@@ -1181,8 +1238,6 @@ func TestRejectedRetryDoesNotRunAfterClose(t *testing.T) {
 	fixture.server.streams.Store(int64(42), entry)
 	fixture.server.openStreams.Add(1)
 	fixture.server.resubscribeRejected(entry, fixture.resourceName, "")
-	before, err := fixture.store.CurrentVersion(fixture.resourceName)
-	require.NoError(t, err)
 
 	fixture.server.onStreamClosed(42, nil)
 	entry.mu.Lock()
@@ -1193,9 +1248,8 @@ func TestRejectedRetryDoesNotRunAfterClose(t *testing.T) {
 	// Simulate a callback that had already passed its scheduling check.
 	proxyKey := proxyCacheKey(testNamespace+"/"+streamEngine, Identity{}, "")
 	fixture.server.runRejectedRetry(entry, fixture.resourceName, proxyKey, "", 1)
-	after, err := fixture.store.CurrentVersion(fixture.resourceName)
-	require.NoError(t, err)
-	require.Equal(t, before, after, "a closed stream bumped the shared snapshot")
+	_, err := fixture.store.cache.GetSnapshot(proxyKey)
+	require.Error(t, err, "a closed stream must not publish a retry snapshot for the proxy either")
 }
 
 // TestRejectedRetryBumpsWhenActive proves the active path still republishes.

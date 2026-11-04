@@ -58,6 +58,14 @@ var (
 // TestMain
 // -----------------------------------------------------------------------------
 
+// stopTestEnv stops the envtest control plane, reporting a shutdown failure
+// instead of discarding it on the exit paths.
+func stopTestEnv(env *envtest.Environment) {
+	if err := env.Stop(); err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to stop test environment: %v\n", err)
+	}
+}
+
 func TestMain(m *testing.M) {
 	istioCRDDir, err := downloadIstioCRDs()
 	if err != nil {
@@ -142,7 +150,7 @@ func TestMain(m *testing.M) {
 	directClient, err := client.New(cfg, client.Options{Scheme: scheme})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to create client: %v\n", err)
-		_ = testEnv.Stop()
+		stopTestEnv(testEnv)
 		os.Exit(1)
 	}
 
@@ -151,7 +159,7 @@ func TestMain(m *testing.M) {
 	testCache, err := ctrlcache.New(cfg, ctrlcache.Options{Scheme: scheme})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to create cache: %v\n", err)
-		_ = testEnv.Stop()
+		stopTestEnv(testEnv)
 		os.Exit(1)
 	}
 	if err := testCache.(client.FieldIndexer).IndexField(context.Background(), &wafv1alpha1.Engine{}, engineTargetIndex, func(obj client.Object) []string {
@@ -162,17 +170,17 @@ func TestMain(m *testing.M) {
 		return []string{engineTargetKey(engine.Spec.Target.Type, engine.Spec.Target.Name)}
 	}); err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to register field index: %v\n", err)
-		_ = testEnv.Stop()
+		stopTestEnv(testEnv)
 		os.Exit(1)
 	}
 	if err := testCache.(client.FieldIndexer).IndexField(context.Background(), &wafv1alpha1.Engine{}, engineRuleSetIndex, engineRuleSetIndexValues); err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to register Engine spec.ruleSet.name index: %v\n", err)
-		_ = testEnv.Stop()
+		stopTestEnv(testEnv)
 		os.Exit(1)
 	}
 	if err := testCache.(client.FieldIndexer).IndexField(context.Background(), &wafv1alpha1.Engine{}, engineTargetNameIndex, engineTargetNameIndexValues); err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to register Engine spec.target.name index: %v\n", err)
-		_ = testEnv.Stop()
+		stopTestEnv(testEnv)
 		os.Exit(1)
 	}
 	if err := testCache.(client.FieldIndexer).IndexField(context.Background(), &wafv1alpha1.RuleSet{}, "spec.sources.name", func(obj client.Object) []string {
@@ -184,7 +192,7 @@ func TestMain(m *testing.M) {
 		return names
 	}); err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to register RuleSet spec.sources.name index: %v\n", err)
-		_ = testEnv.Stop()
+		stopTestEnv(testEnv)
 		os.Exit(1)
 	}
 	if err := testCache.(client.FieldIndexer).IndexField(context.Background(), &wafv1alpha1.RuleSet{}, "spec.data.name", func(obj client.Object) []string {
@@ -196,7 +204,7 @@ func TestMain(m *testing.M) {
 		return names
 	}); err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to register RuleSet spec.data.name index: %v\n", err)
-		_ = testEnv.Stop()
+		stopTestEnv(testEnv)
 		os.Exit(1)
 	}
 	cacheCtx, cacheCancel := context.WithCancel(context.Background())
@@ -215,7 +223,7 @@ func TestMain(m *testing.M) {
 			fmt.Fprintf(os.Stderr, "Cache failed to sync within 30s\n")
 		}
 		cacheCancel()
-		_ = testEnv.Stop()
+		stopTestEnv(testEnv)
 		os.Exit(1)
 	}
 
@@ -226,7 +234,7 @@ func TestMain(m *testing.M) {
 	testKubeClient, err = kubernetes.NewForConfig(cfg)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to create kubernetes clientset: %v\n", err)
-		_ = testEnv.Stop()
+		stopTestEnv(testEnv)
 		os.Exit(1)
 	}
 

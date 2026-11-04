@@ -30,6 +30,11 @@ const (
 	unknownAuthPeer              = "unknown"
 	authFailureBucketIdleTTL     = 10 * time.Minute
 	authFailureBucketSweepPeriod = time.Minute
+	// maxAuthFailureBuckets bounds the peer-bucket map. An attacker spraying
+	// failed tokens from many source IPs cannot grow it without limit; beyond
+	// the cap every new peer shares the "unknown" overflow bucket, which is
+	// itself rate-limited.
+	maxAuthFailureBuckets = 4096
 )
 
 type authFailureBucket struct {
@@ -92,6 +97,17 @@ func authFailurePeerAddress(ctx context.Context) string {
 	if addr, ok := p.Addr.(*net.TCPAddr); ok && addr.IP != nil {
 		return addr.IP.String()
 	}
+	// grpc.Server.ServeHTTP — the production path, since the operator muxes
+	// gRPC through one http.Server — supplies a string-backed "host:port"
+	// address, so the TCPAddr assertion above never matches there. Without
+	// this fallback every peer lands in one shared bucket and a single
+	// attacker throttles the whole fleet.
+	if host, _, err := net.SplitHostPort(p.Addr.String()); err == nil {
+		if ip := net.ParseIP(host); ip != nil {
+			return ip.String()
+		}
+		return host
+	}
 	return unknownAuthPeer
 }
 
@@ -104,6 +120,12 @@ func (l *authFailureLimiter) reserve(ctx context.Context) (*authFailureReservati
 	l.sweepIdleLocked(now)
 
 	bucket := l.buckets[key]
+	if bucket == nil && len(l.buckets) >= maxAuthFailureBuckets {
+		// Cardinality bound: a new peer beyond the cap shares the overflow
+		// bucket instead of allocating another one.
+		key = unknownAuthPeer
+		bucket = l.buckets[key]
+	}
 	if bucket == nil {
 		bucket = &authFailureBucket{limiter: rate.NewLimiter(l.rate, l.burst)}
 	}
