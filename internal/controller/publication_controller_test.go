@@ -61,13 +61,17 @@ func newPublicationReconcilerWithMetrics(t *testing.T, revoke xds.RevokeFunc) (*
 	registry := prometheus.NewRegistry()
 	metrics, err := xds.NewMetrics(registry)
 	require.NoError(t, err)
+	// Reconcile awaits startup initialization; a unit-test reconciler starts
+	// with the startup list already applied (empty).
+	readiness := xds.NewPublicationReadiness()
+	readiness.Initialize(nil)
 	return &PublicationReconciler{
 		Client:    k8sClient,
 		APIReader: k8sClient,
 		Scheme:    scheme,
 		Store:     xds.NewSnapshotStore(),
 		Authz:     xds.NewAuthzIndex(k8sClient, k8sClient, 5*time.Minute, revoke),
-		Readiness: xds.NewPublicationReadiness(),
+		Readiness: readiness,
 		Metrics:   metrics,
 		Limits:    xds.DefaultLimits(),
 	}, registry
@@ -266,6 +270,65 @@ func TestPublicationReconcilerStatusBeforeInput(t *testing.T) {
 	require.True(t, ok, "the accepted configuration must be published once inputs exist")
 	require.Equal(t, engine.Status.AcceptedConfiguration.Version, snapshot.Version)
 	require.Equal(t, engine.Status.AcceptedConfiguration.RuleSetContentHash, snapshot.RuleSetHash)
+}
+
+// TestPublicationReconcilerWaitsForStartupInitialization pins the Reconcile
+// startup gate: with an uninitialized readiness tracker the item cannot be
+// processed (a bounded context returns an error and nothing is published), and
+// the very same item publishes once Initialize has applied the startup list.
+func TestPublicationReconcilerWaitsForStartupInitialization(t *testing.T) {
+	ctx := context.Background()
+	namespace := setupTestNamespace(t, ctx)
+
+	createTestGateway(t, ctx, k8sClient, "pub-gw", namespace)
+	ruleSet := createPublicationRuleSet(t, ctx, namespace, "rules")
+	createPublicationRuleSource(t, ctx, namespace, ruleSet.Name+"-source", publicationRules)
+	engine := createPublicationEngine(t, ctx, namespace, "engine", ruleSet.Name, "pub-gw")
+	inputs, err := loadRuleSetInputs(ctx, k8sClient, ruleSet)
+	require.NoError(t, err)
+	content, err := assemble.Assemble(inputs)
+	require.NoError(t, err)
+	writeAcceptedConfiguration(t, ctx, engine, acceptedConfigurationFor(t, engine, ruleSet, content, nil))
+
+	reconciler, _ := newPublicationReconcilerWithMetrics(t, nil)
+	reconciler.Readiness = xds.NewPublicationReadiness()
+	engineKey := namespace + "/" + engine.Name
+	request := ctrl.Request{NamespacedName: types.NamespacedName{Namespace: namespace, Name: engine.Name}}
+
+	// One reconcile call on an active bounded context: it must stay blocked
+	// while readiness is uninitialized (so a removed gate cannot hide behind
+	// a context error) and complete once the startup list is applied.
+	type reconcileOutcome struct {
+		result ctrl.Result
+		err    error
+	}
+	done := make(chan reconcileOutcome, 1)
+	bounded, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	go func() {
+		result, err := reconciler.Reconcile(bounded, request)
+		done <- reconcileOutcome{result, err}
+	}()
+
+	select {
+	case <-done:
+		t.Fatal("Reconcile completed before startup initialization; the readiness gate is missing")
+	case <-time.After(250 * time.Millisecond):
+	}
+	_, ok := reconciler.Store.Get(engineKey)
+	require.False(t, ok, "no snapshot may be published before the startup list is applied")
+
+	reconciler.Readiness.Initialize(nil)
+	select {
+	case outcome := <-done:
+		require.NoError(t, outcome.err)
+		require.Equal(t, ctrl.Result{}, outcome.result)
+	case <-bounded.Done():
+		t.Fatal("the waiting reconcile did not complete once the startup list was applied")
+	}
+	snapshot, ok := reconciler.Store.Get(engineKey)
+	require.True(t, ok, "the waiting item must be processed once the startup list is applied")
+	require.Equal(t, engine.Status.AcceptedConfiguration.Version, snapshot.Version)
 }
 
 func TestPublicationReconcilerInputBeforeStatus(t *testing.T) {

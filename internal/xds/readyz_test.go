@@ -17,6 +17,7 @@ limitations under the License.
 package xds
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -69,37 +70,43 @@ func TestPublicationReadinessColdReplicaStaysUnready(t *testing.T) {
 	}
 }
 
-func TestPublicationReadinessKeepsReconcilesThatRunBeforeInitialize(t *testing.T) {
-	accepted := &wafv1alpha1.Engine{
-		ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "checkout"},
-		Status: &wafv1alpha1.EngineStatus{
-			AcceptedConfiguration: &wafv1alpha1.EngineAcceptedConfiguration{
-				RenderingSchemaVersion: render.RenderingSchemaVersion,
-				Version:                "sha256:v1",
-			},
-		},
-	}
-	failing := &wafv1alpha1.Engine{
-		ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "broken"},
-		Status: &wafv1alpha1.EngineStatus{
-			AcceptedConfiguration: &wafv1alpha1.EngineAcceptedConfiguration{
-				RenderingSchemaVersion: render.RenderingSchemaVersion,
-				Version:                "sha256:v1",
-			},
-		},
-	}
-
+// TestPublicationReadinessAwaitGatesReconciles proves the ordering contract
+// that replaced the outcome replay: a reconcile blocks in Await until the
+// startup Engine list is applied, so its outcome can never precede Initialize,
+// and the item is released (not lost) once initialization runs.
+func TestPublicationReadinessAwaitGatesReconciles(t *testing.T) {
 	readiness := NewPublicationReadiness()
-	readiness.RecordSuccess("shop", "checkout")
-	readiness.RecordFailure("shop", "broken", errors.New("cold failure"))
-	readiness.Initialize([]*wafv1alpha1.Engine{accepted, failing})
 
-	err := readiness.Check()
-	if err == nil || !strings.Contains(err.Error(), "shop/broken") {
-		t.Fatalf("Check() = %v, want a failure naming shop/broken", err)
+	awaited := make(chan error, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		awaited <- readiness.Await(ctx)
+	}()
+
+	select {
+	case err := <-awaited:
+		t.Fatalf("Await() = %v before Initialize; it must block", err)
+	case <-time.After(50 * time.Millisecond):
 	}
-	if strings.Contains(err.Error(), "shop/checkout") {
-		t.Fatalf("Check() = %v, a pre-initialize success must not be pending", err)
+
+	readiness.Initialize([]*wafv1alpha1.Engine{acceptedEngine("gateways", "checkout")})
+	select {
+	case err := <-awaited:
+		if err != nil {
+			t.Fatalf("Await() = %v after Initialize", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Await() did not return after Initialize")
+	}
+
+	// A cancelled context releases a still-waiting reconcile so the item
+	// requeues instead of deadlocking the worker.
+	fresh := NewPublicationReadiness()
+	cancelled, cancelWait := context.WithCancel(context.Background())
+	cancelWait()
+	if err := fresh.Await(cancelled); err == nil {
+		t.Fatal("Await() = nil on a cancelled context")
 	}
 }
 
