@@ -118,6 +118,13 @@ func publicationRateLimiter() workqueue.TypedRateLimiter[reconcile.Request] {
 
 // Reconcile reconstructs and publishes one accepted Engine configuration.
 func (r *PublicationReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	// No reconcile may process against an uninitialized startup list; the
+	// item waits here (and requeues on shutdown) instead of needing its
+	// outcome replayed after Initialize.
+	if err := r.Readiness.Await(ctx); err != nil {
+		return ctrl.Result{}, err
+	}
+
 	log := logf.FromContext(ctx)
 
 	var engine wafv1alpha1.Engine

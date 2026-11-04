@@ -70,9 +70,11 @@ type PublicationReadiness struct {
 	deadline      time.Duration
 	now           func() time.Time
 	pending       map[string]string
-	// outcomes holds reconciles that completed before the startup Engine list
-	// was reconciled, so a fast reconcile is not lost when Initialize runs.
-	outcomes map[string]string
+	// initDone closes once Initialize has applied the startup Engine list.
+	// Reconcilers await it so no reconcile is processed against an
+	// uninitialized startup list, which removes the need to replay early
+	// reconcile outcomes.
+	initDone chan struct{}
 	// expired is set once the deadline passed and the stuck records were
 	// reported. They stop gating readiness from then on.
 	expired bool
@@ -85,14 +87,14 @@ func NewPublicationReadiness() *PublicationReadiness {
 		deadline: defaultPublicationDeadline,
 		now:      time.Now,
 		pending:  make(map[string]string),
-		outcomes: make(map[string]string),
+		initDone: make(chan struct{}),
 	}
 }
 
 // Initialize records the Engines present at startup that carry an accepted
-// configuration this build can publish. Reconcilers may run before this list is
-// available, so their outcomes are applied here rather than discarded. Later
-// calls are ignored.
+// configuration this build can publish. Reconcilers block in Await until it
+// runs, so their outcomes cannot arrive before the startup list is applied.
+// Later calls are ignored.
 func (p *PublicationReadiness) Initialize(engines []*wafv1alpha1.Engine) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -114,36 +116,30 @@ func (p *PublicationReadiness) Initialize(engines []*wafv1alpha1.Engine) {
 			continue
 		}
 		key := namespacedNameKey(engine.Namespace, engine.Name)
-		if outcome, ok := p.outcomes[key]; ok {
-			if outcome != "" {
-				p.pending[key] = outcome
-			}
-			continue
-		}
 		p.pending[key] = "not reconstructed yet"
 	}
-	p.outcomes = nil
 	if stale > 0 {
 		p.Logger.Info("ignoring accepted configurations from a previous rendering schema", "count", stale)
 	}
+	close(p.initDone)
 }
 
-// Initialized reports whether the startup Engine list was processed.
-func (p *PublicationReadiness) Initialized() bool {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return p.initialized
+// Await blocks until the startup Engine list has been applied, or the context
+// ends. A reconcile that returns early here is requeued, not lost.
+func (p *PublicationReadiness) Await(ctx context.Context) error {
+	select {
+	case <-p.initDone:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // RecordSuccess marks an Engine as reconstructed.
 func (p *PublicationReadiness) RecordSuccess(namespace, name string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	key := namespacedNameKey(namespace, name)
-	delete(p.pending, key)
-	if !p.initialized {
-		p.outcomes[key] = ""
-	}
+	delete(p.pending, namespacedNameKey(namespace, name))
 }
 
 // RecordFailure records a reconstruction failure and reports whether it counts
@@ -158,10 +154,6 @@ func (p *PublicationReadiness) RecordFailure(namespace, name string, err error) 
 		reason = err.Error()
 	}
 
-	if !p.initialized {
-		p.outcomes[key] = reason
-		return true
-	}
 	if _, pending := p.pending[key]; !pending {
 		return false
 	}
