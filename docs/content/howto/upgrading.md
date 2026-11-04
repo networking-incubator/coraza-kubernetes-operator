@@ -78,7 +78,12 @@ Use the inventory from the step above: the new API accepts only a paired
 module. For a custom module, publish ECDS-compatible raw bytes at an HTTPS URL,
 apply the upgraded CRDs (they prune the removed fields), then set both `url` and
 `sha256` on each Engine. The URL host must present a certificate that chains to
-the operator xDS CA over TLS 1.3; public-CA hosts are not trusted yet. An Engine
+the operator xDS CA over TLS 1.3, and the certificate must carry the URL host
+as a Subject Alternative Name (a DNS SAN for hostnames, an IP SAN for
+IP-literal hosts). The SAN is matched literally: a wildcard SAN such as
+`*.svc.cluster.local` does not satisfy a specific host, and a CA-signed
+certificate for a different name is rejected.
+Public-CA hosts are not trusted yet. An Engine
 that is left with no `url`/`sha256` will not fail visibly: it silently selects
 the bundled module instead of the old image.
 

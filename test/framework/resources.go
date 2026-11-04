@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"os"
 	"sync"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	appsv1 "k8s.io/api/apps/v1"
@@ -700,14 +701,30 @@ func (s *Scenario) UpdateRuleSource(namespace, name, rules string) {
 	s.T.Helper()
 	ctx := s.T.Context()
 
-	obj, err := s.F.DynamicClient.Resource(RuleSourceGVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
-	require.NoError(s.T, err, "get RuleSource %s/%s", namespace, name)
+	// The operator writes RuleSource status concurrently; a status write
+	// between the get and the update is an optimistic-concurrency conflict,
+	// not a failure, so retry on it.
+	var updateErr error
+	for attempt := 0; attempt < 5; attempt++ {
+		obj, err := s.F.DynamicClient.Resource(RuleSourceGVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
+		if err != nil {
+			require.NoError(s.T, err, "get RuleSource %s/%s", namespace, name)
+			return
+		}
 
-	err = unstructured.SetNestedField(obj.Object, rules, "spec", "rules")
-	require.NoError(s.T, err, "set spec.rules on RuleSource %s/%s", namespace, name)
+		err = unstructured.SetNestedField(obj.Object, rules, "spec", "rules")
+		if err != nil {
+			require.NoError(s.T, err, "set spec.rules on RuleSource %s/%s", namespace, name)
+			return
+		}
 
-	_, err = s.F.DynamicClient.Resource(RuleSourceGVR).Namespace(namespace).Update(ctx, obj, metav1.UpdateOptions{})
-	require.NoError(s.T, err, "update RuleSource %s/%s", namespace, name)
+		_, updateErr = s.F.DynamicClient.Resource(RuleSourceGVR).Namespace(namespace).Update(ctx, obj, metav1.UpdateOptions{})
+		if updateErr == nil || !apierrors.IsConflict(updateErr) {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	require.NoError(s.T, updateErr, "update RuleSource %s/%s", namespace, name)
 
 	s.T.Logf("Updated RuleSource %s/%s", namespace, name)
 }

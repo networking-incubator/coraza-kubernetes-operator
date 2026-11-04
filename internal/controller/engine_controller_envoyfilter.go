@@ -22,8 +22,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/url"
+	"regexp"
 	"strconv"
+	"strings"
 	"time"
 
 	clusterv3 "github.com/envoyproxy/go-control-plane/envoy/config/cluster/v3"
@@ -34,6 +37,7 @@ import (
 	rbachttpv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/rbac/v3"
 	hcmv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/http_connection_manager/v3"
 	tlsv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/transport_sockets/tls/v3"
+	matcherv3 "github.com/envoyproxy/go-control-plane/envoy/type/matcher/v3"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
@@ -252,6 +256,45 @@ func buildEnvoyFilter(
 	return envoyFilter, nil
 }
 
+// assetHostSANMatcher requires the serving certificate to carry the asset URL
+// host as a SAN. DNS covers hostnames; an IP-literal host uses the IP SAN
+// type, which matches the address text rather than a DNS entry.
+//
+// The DNS matcher is an anchored safe-regex of the escaped, lowercased host,
+// not an exact StringMatcher: Envoy resolves a DNS SAN exact match through
+// RFC 6125 dnsNameMatch, where a wildcard SAN in the certificate (for example
+// *.svc.cluster.local) matches any host it covers. A shared organizational CA
+// must not let a wildcard certificate satisfy the asset channel. The IP
+// matcher stays exact: Envoy compares IP SANs literally, with no wildcard
+// semantics.
+func assetHostSANMatcher(host string) *tlsv3.SubjectAltNameMatcher {
+	matcher := &matcherv3.StringMatcher{
+		MatchPattern: &matcherv3.StringMatcher_SafeRegex{
+			SafeRegex: &matcherv3.RegexMatcher{
+				// (?i) keeps the case-insensitivity of Envoy's DNS matching; the
+				// non-capturing group scopes the flag to the host so it cannot change
+				// how the anchors behave.
+				Regex: "^(?i:" + regexp.QuoteMeta(strings.ToLower(host)) + ")$",
+			},
+		},
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return &tlsv3.SubjectAltNameMatcher{
+			SanType: tlsv3.SubjectAltNameMatcher_IP_ADDRESS,
+			// A certificate's IP SAN carries the canonical address text, so
+			// an exact match needs the normalized form; SNI and dialing keep
+			// the host exactly as the URL spelled it.
+			Matcher: &matcherv3.StringMatcher{
+				MatchPattern: &matcherv3.StringMatcher_Exact{Exact: ip.String()},
+			},
+		}
+	}
+	return &tlsv3.SubjectAltNameMatcher{
+		SanType: tlsv3.SubjectAltNameMatcher_DNS,
+		Matcher: matcher,
+	}
+}
+
 // assetClusterValue returns the patch value of the STRICT_DNS cluster that
 // serves the raw WASM binary, dialed over TLS with the operator CA.
 func assetClusterValue(assetHost string, portValue uint64, caPEM string) (map[string]any, error) {
@@ -269,6 +312,9 @@ func assetClusterValue(assetHost string, portValue uint64, caPEM string) (map[st
 					TrustedCa: &corev3.DataSource{
 						Specifier: &corev3.DataSource_InlineString{InlineString: caPEM},
 					},
+					// Chain validation alone accepts any certificate the CA
+					// signed; require the asset URL host as a SAN too.
+					MatchTypedSubjectAltNames: []*tlsv3.SubjectAltNameMatcher{assetHostSANMatcher(assetHost)},
 				},
 			},
 		},

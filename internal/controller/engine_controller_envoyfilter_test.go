@@ -18,6 +18,8 @@ package controller
 
 import (
 	"path/filepath"
+	"regexp"
+	"strings"
 	"testing"
 
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
@@ -172,6 +174,33 @@ func TestBuildEnvoyFilterShape(t *testing.T) {
 			assert.Equal(t, envoyFilterTestCA,
 				nestedString(t, cluster, "transport_socket", "typed_config",
 					"common_tls_context", "validation_context", "trusted_ca", "inline_string"))
+			// The asset channel must not accept any CA-signed certificate:
+			// the serving certificate has to carry the asset host as a SAN.
+			// DNS uses an anchored regex, not an exact StringMatcher: Envoy
+			// resolves DNS exact matches with RFC 6125 semantics, where a
+			// wildcard SAN covers the configured host.
+			sanMatchers := nestedSlice(t, cluster, "transport_socket", "typed_config",
+				"common_tls_context", "validation_context", "match_typed_subject_alt_names")
+			require.Len(t, sanMatchers, 1)
+			sanMatcher := asMap(t, sanMatchers[0])
+			assert.Equal(t, "DNS", nestedString(t, sanMatcher, "san_type"))
+			regex := nestedString(t, sanMatcher, "matcher", "safe_regex", "regex")
+			assert.Equal(t, "^(?i:"+regexp.QuoteMeta(envoyFilterTestAssetHost)+")$", regex)
+			// The anchored literal must not match a wildcard SAN that would
+			// cover the host under RFC 6125.
+			mustNotMatch := []string{
+				"*." + strings.Join(strings.Split(envoyFilterTestAssetHost, ".")[1:], "."),
+				"*." + envoyFilterTestAssetHost,
+				envoyFilterTestAssetHost + ".evil.example",
+			}
+			compiled, err := regexp.Compile(regex)
+			require.NoError(t, err)
+			for _, san := range mustNotMatch {
+				assert.False(t, compiled.MatchString(san), "wildcard or suffix SAN %q must not satisfy the asset host matcher", san)
+			}
+			// DNS names are case-insensitive: a mixed-case SAN must match.
+			assert.True(t, compiled.MatchString(strings.ToUpper(envoyFilterTestAssetHost)),
+				"a mixed-case SAN must satisfy the asset host matcher")
 
 			// Patch 2: the ECDS HTTP filter, inserted before the router.
 			httpFilterPatch := asMap(t, patches[1])
@@ -267,6 +296,42 @@ func TestBuildEnvoyFilterDefaultAssetPort(t *testing.T) {
 	assert.Equal(t, "assets.example.com", socket["address"])
 	assert.EqualValues(t, 443, socket["port_value"])
 	assert.Equal(t, "assets.example.com", nestedString(t, cluster, "transport_socket", "typed_config", "sni"))
+}
+
+// An IP-literal asset host must use the IP SAN type, which matches the
+// address text instead of a DNS entry.
+func TestBuildEnvoyFilterAssetHostIPUsesIPSAN(t *testing.T) {
+	artifact, _ := newEnvoyFilterTestArtifact(t)
+	ef, err := buildEnvoyFilter(newEnvoyFilterTestEngine(), artifact,
+		render.BinaryRef{URL: "https://192.0.2.10/plugin.wasm"},
+		EnvoyFilterConfig{AdvertiseAddress: envoyFilterTestAdvertise, CAPEM: []byte(envoyFilterTestCA)}, "fail")
+	require.NoError(t, err)
+
+	cluster := nestedMap(t, asMap(t, nestedSlice(t, ef.Object, "spec", "configPatches")[0]), "patch", "value")
+	sanMatchers := nestedSlice(t, cluster, "transport_socket", "typed_config",
+		"common_tls_context", "validation_context", "match_typed_subject_alt_names")
+	require.Len(t, sanMatchers, 1)
+	sanMatcher := asMap(t, sanMatchers[0])
+	assert.Equal(t, "IP_ADDRESS", nestedString(t, sanMatcher, "san_type"))
+	assert.Equal(t, "192.0.2.10", nestedString(t, sanMatcher, "matcher", "exact"))
+}
+
+// A non-canonical IP literal in the URL must match the canonical form the
+// certificate's IP SAN carries.
+func TestBuildEnvoyFilterAssetHostIPv6NormalizesSAN(t *testing.T) {
+	artifact, _ := newEnvoyFilterTestArtifact(t)
+	ef, err := buildEnvoyFilter(newEnvoyFilterTestEngine(), artifact,
+		render.BinaryRef{URL: "https://[0:0:0:0:0:0:0:1]/plugin.wasm"},
+		EnvoyFilterConfig{AdvertiseAddress: envoyFilterTestAdvertise, CAPEM: []byte(envoyFilterTestCA)}, "fail")
+	require.NoError(t, err)
+
+	cluster := nestedMap(t, asMap(t, nestedSlice(t, ef.Object, "spec", "configPatches")[0]), "patch", "value")
+	sanMatchers := nestedSlice(t, cluster, "transport_socket", "typed_config",
+		"common_tls_context", "validation_context", "match_typed_subject_alt_names")
+	require.Len(t, sanMatchers, 1)
+	sanMatcher := asMap(t, sanMatchers[0])
+	assert.Equal(t, "IP_ADDRESS", nestedString(t, sanMatcher, "san_type"))
+	assert.Equal(t, "::1", nestedString(t, sanMatcher, "matcher", "exact"))
 }
 
 func TestBuildEnvoyFilterErrors(t *testing.T) {
