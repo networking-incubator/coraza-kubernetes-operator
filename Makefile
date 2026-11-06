@@ -11,7 +11,19 @@ else
 GOBIN=$(shell go env GOBIN)
 endif
 
-CONTAINER_TOOL ?= docker
+# Auto-detect container runtime (docker or podman) unless explicitly set.
+ifndef CONTAINER_TOOL
+  CONTAINER_TOOL := $(shell python3 -c 'import sys; sys.path.insert(0, "hack"); from lib import detect_container_runtime; print(detect_container_runtime())' 2>/dev/null || echo docker)
+endif
+
+# Derive the kind provider from the container runtime so callers only need to
+# set CONTAINER_TOOL. The kind binary (used directly by the Go test targets via
+# `kind get kubeconfig`, and by hack/kind_cluster.py) reads this from the
+# environment. Exported so it reaches every recipe; an explicit value wins.
+ifeq ($(CONTAINER_TOOL),podman)
+KIND_EXPERIMENTAL_PROVIDER ?= podman
+endif
+export KIND_EXPERIMENTAL_PROVIDER
 
 # KIND_CLUSTER_NAME is used to detect if tests are running locally via kind.
 # Use a non-empty default for kind-based integration tests; override or clear
@@ -392,7 +404,11 @@ cluster.kind: ## Create the KIND test cluster
 .PHONY: cluster.load-images
 cluster.load-images: ## Load the operator image into the KIND test cluster
 	@$(CONTAINER_TOOL) exec ${KIND_CLUSTER_NAME}-control-plane crictl rmi ${CONTROLLER_MANAGER_CONTAINER_IMAGE} 2>/dev/null || true
+ifeq ($(CONTAINER_TOOL),podman)
+	@$(CONTAINER_TOOL) save ${CONTROLLER_MANAGER_CONTAINER_IMAGE} | $(KIND) load image-archive /dev/stdin --name ${KIND_CLUSTER_NAME}
+else
 	$(KIND) load docker-image ${CONTROLLER_MANAGER_CONTAINER_IMAGE} --name ${KIND_CLUSTER_NAME}
+endif
 
 .PHONY: clean.cluster.kind
 clean.cluster.kind: ## Delete the KIND test cluster
