@@ -123,34 +123,56 @@ def deploy_gateway_api_crds(context: str) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _kind_network_ipv4_cidr(network: dict) -> str:
+    """Extract the IPv4 CIDR of the kind network from docker or podman JSON.
+
+    docker reports {"IPAM": {"Config": [{"Subnet": ..., "IPRange": ...}]}};
+    podman reports {"subnets": [{"subnet": ..., "gateway": ...}]}. Podman also
+    accepts docker-compatible output in some versions, so both are handled.
+    """
+    ipam_config = network.get("IPAM", {}).get("Config") or []
+    for entry in ipam_config:
+        subnet = entry.get("Subnet", "")
+        if subnet and ":" not in subnet:
+            return entry.get("IPRange") or subnet
+
+    for entry in network.get("subnets") or []:
+        subnet = entry.get("subnet", "")
+        if subnet and ":" not in subnet:
+            return subnet
+
+    raise ValueError("No IPv4 subnet found for the kind network")
+
+
 def get_kind_network_range() -> str:
-    """Derive a MetalLB IP pool from the KIND docker network subnet."""
-    result = run("docker network inspect kind", check=False, capture_output=True)
+    """Derive a MetalLB IP pool from the KIND container network subnet.
+
+    Returns an empty string when the network cannot be inspected, so the caller
+    can fall back to a ClusterIP Gateway instead of failing the whole setup.
+    """
+    runtime = detect_container_runtime()
+    result = run(f"{runtime} network inspect kind", check=False, capture_output=True)
     if result.returncode != 0:
-        die("Could not inspect the kind docker network")
+        print(
+            f"WARNING: could not inspect the kind {runtime} network",
+            file=sys.stderr,
+        )
+        return ""
 
     try:
         pool_size = int(os.environ.get("METALLB_POOL_SIZE", "128"))
         if pool_size > 255 or pool_size < 1:
             print(f"WARNING: Unusual METALLB_POOL_SIZE: {pool_size}", file=sys.stderr)
 
-        kind_network = json.loads(result.stdout)
-        ipam_config = kind_network[0].get("IPAM", {}).get("Config", [])
-        if not ipam_config:
-            raise ValueError("No IPAM configuration found for kind network")
-
-        ipv4_config = next((c for c in ipam_config if ":" not in c.get("Subnet", "")), None)
-        if not ipv4_config:
-            raise ValueError("No IPv4 configuration found")
-
-        cidr = ipv4_config.get("IPRange") or ipv4_config.get("Subnet")
+        networks = json.loads(result.stdout)
+        cidr = _kind_network_ipv4_cidr(networks[0])
         net = ipaddress.ip_network(cidr)
         last = net.broadcast_address - 1
         first = net.broadcast_address - pool_size
         return f"{first}-{last}"
-    except (ValueError, KeyError, IndexError, StopIteration) as e:
-        die(f"Invalid IP address range: {e}")
-        return ""  # unreachable
+    except (ValueError, KeyError, IndexError, TypeError, json.JSONDecodeError) as e:
+        print(f"WARNING: could not derive a MetalLB range: {e}", file=sys.stderr)
+        return ""
 
 
 def deploy_metallb(context: str) -> bool:
@@ -459,7 +481,6 @@ def deploy_coraza_operator(context: str) -> None:
 
 def setup_cluster(name: str) -> None:
     """End-to-end cluster setup: create, load images, install components."""
-    docker_available = detect_container_runtime() == "docker"
     if os.environ.get("SKIP_IMAGE_BUILD", "").lower() != "true":
         build_images()
     create_cluster(name)
@@ -469,11 +490,16 @@ def setup_cluster(name: str) -> None:
 
     deploy_gateway_api_crds(context)
 
+    # MetalLB works on any runtime whose kind network exposes an IPv4 subnet
+    # (docker and podman both do); without one the Gateway falls back to
+    # ClusterIP.
     metallb_enabled = False
-    if docker_available:
-        if deploy_metallb(context):
-            create_metallb_manifests(context, get_kind_network_range())
-            metallb_enabled = True
+    iprange = get_kind_network_range()
+    if not iprange:
+        print("Skipping MetalLB: no IPv4 range for the kind network", file=sys.stderr)
+    elif deploy_metallb(context):
+        create_metallb_manifests(context, iprange)
+        metallb_enabled = True
 
     deploy_istio_sail(context)
     create_istio_control_plane(context)
