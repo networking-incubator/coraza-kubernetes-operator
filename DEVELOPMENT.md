@@ -25,26 +25,16 @@ Create the cluster:
 make cluster.kind
 ```
 
-> **Note**: On Linux systems using cgroup v2 (e.g. Fedora), `make cluster.kind`
-> may fail with Docker and the following error:
+> **Note**: The Makefile auto-detects whether to use `docker` or `podman`.
+> Override with `CONTAINER_TOOL` if needed:
 >
-> ```text
-> could not find a log line that matches "Reached target .*Multi-User System.*|detected cgroup v1"
-> ```
->
-> Use Podman instead by setting `CONTAINER_TOOL`:
->
-> ```bash
-> export CONTAINER_TOOL=podman
-> ```
-> or
 > ```bash
 > CONTAINER_TOOL=podman make cluster.kind
 > ```
 >
-> `KIND_EXPERIMENTAL_PROVIDER=podman` is derived automatically from the
-> container runtime, so you no longer need to set it yourself. Set it
-> explicitly only to override the detected provider.
+> `KIND_EXPERIMENTAL_PROVIDER` is derived automatically from the container runtime.
+>
+> **macOS with Podman**: Ensure the Podman machine is running (`podman machine start`).
 
 This will have built the operator with your current changes and loaded the
 operator image into the cluster, and started the operator in the
