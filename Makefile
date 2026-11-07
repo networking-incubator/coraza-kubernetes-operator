@@ -739,9 +739,22 @@ demo.workload: ## Apply the demo CRs (config/samples) and wait for acceptance
 	if [ "$$ready" != "True" ]; then echo "ERROR: Engine coraza not Ready within timeout" >&2; exit 1; fi; \
 	echo "=== Waiting for RuleSet Ready ==="; \
 	if ! kubectl --context "$$ctx" -n "$(DEMO_NAMESPACE)" wait --for=condition=Ready \
-		ruleset/default-ruleset --timeout=300s 2>/dev/null; then \
-		echo "ERROR: RuleSet default-ruleset not Ready within timeout" >&2; exit 1; \
+		ruleset/demo-ruleset --timeout=300s 2>/dev/null; then \
+		echo "ERROR: RuleSet demo-ruleset not Ready within timeout" >&2; exit 1; \
 	fi
+
+.PHONY: demo.workload.crs
+demo.workload.crs:
+# TODO CHECK existence of demo.workload
+	NAMESPACE="$(DEMO_NAMESPACE)" $(MAKE) coraza.coreruleset
+	kubectl --context "$$ctx" annotate -n "$(DEMO_NAMESPACE)" ruleset coraza-crs "waf.k8s.coraza.io/skip-unsupported-rules-check=true"
+	echo "=== Waiting for CRS RuleSet Ready ==="; \
+	if ! kubectl --context "$$ctx" -n "$(DEMO_NAMESPACE)" wait --for=condition=Ready \
+		ruleset/default-ruleset --timeout=300s 2>/dev/null; then \
+		echo "ERROR: RuleSet demo-ruleset not Ready within timeout" >&2; exit 1; \
+	fi
+
+
 
 .PHONY: observability.demo.workload
 observability.demo.workload: demo.workload ## Apply demo CRs and seed traffic for dashboard metrics
@@ -764,6 +777,7 @@ endif
 	kubectl --context kind-$(KIND_CLUSTER_NAME) -n $(HELM_RELEASE_NAMESPACE) rollout restart deployment/$(HELM_RELEASE_NAME)
 	$(MAKE) demo.workload
 	$(MAKE) demo.verify
+	$(MAKE) demo.workload.crs
 	@echo "note: $(ASSETS_DIR)/plugin.wasm now holds the built module; restore the committed fixture with: git checkout $(ASSETS_DIR)"
 
 .PHONY: demo.verify
