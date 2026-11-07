@@ -13,7 +13,10 @@ endif
 
 # Auto-detect container runtime (docker or podman) unless explicitly set.
 ifndef CONTAINER_TOOL
-  CONTAINER_TOOL := $(shell python3 -c 'import sys; sys.path.insert(0, "hack"); from lib import detect_container_runtime; print(detect_container_runtime())' 2>/dev/null || echo docker)
+  CONTAINER_TOOL := $(shell python3 -c 'import sys; sys.path.insert(0, "hack"); from lib.container_runtime import detect_container_runtime; print(detect_container_runtime())')
+endif
+ifeq ($(filter docker podman,$(strip $(CONTAINER_TOOL))),)
+$(error CONTAINER_TOOL must be 'docker' or 'podman', got '$(CONTAINER_TOOL)')
 endif
 
 # Derive the kind provider from the container runtime so callers only need to
