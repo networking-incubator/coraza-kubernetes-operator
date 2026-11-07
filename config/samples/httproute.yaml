@@ -5,6 +5,8 @@ metadata:
 spec:
   parentRefs:
     - name: coraza-gateway
+    - name: coraza-crs-gateway
+    - name: unprotected-gateway
   rules:
     - backendRefs:
         - name: echo

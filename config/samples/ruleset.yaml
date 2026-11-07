@@ -108,7 +108,7 @@ spec:
 apiVersion: waf.k8s.coraza.io/v1alpha1
 kind: RuleSet
 metadata:
-  name: default-ruleset
+  name: demo-ruleset
 spec:
   sources:
     - name: base-rules
