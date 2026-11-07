@@ -1,7 +1,52 @@
 apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
 metadata:
+  # TODO: rename to coraza-demo-gateway
   name: coraza-gateway
+  labels:
+    # kind + integration tests: align with operator Helm istio.revision (often "coraza").
+    # OpenShift: use the revision your control plane expects (e.g. openshift-gateway) or omit for default istiod.
+    # Integration tests read ISTIO_GATEWAY_REVISION instead of this file when using test/framework.
+    istio.io/rev: "coraza"
+  ## Uncomment below if you do not want to use LoadBalancer service type
+  #annotations:
+  #  networking.istio.io/service-type: ClusterIP
+spec:
+  gatewayClassName: istio
+  listeners:
+    - name: http
+      port: 80
+      protocol: HTTP
+      allowedRoutes:
+        namespaces:
+          from: All
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: coraza-crs-gateway
+  labels:
+    # kind + integration tests: align with operator Helm istio.revision (often "coraza").
+    # OpenShift: use the revision your control plane expects (e.g. openshift-gateway) or omit for default istiod.
+    # Integration tests read ISTIO_GATEWAY_REVISION instead of this file when using test/framework.
+    istio.io/rev: "coraza"
+  ## Uncomment below if you do not want to use LoadBalancer service type
+  #annotations:
+  #  networking.istio.io/service-type: ClusterIP
+spec:
+  gatewayClassName: istio
+  listeners:
+    - name: http
+      port: 80
+      protocol: HTTP
+      allowedRoutes:
+        namespaces:
+          from: All
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: unprotected-gateway
   labels:
     # kind + integration tests: align with operator Helm istio.revision (often "coraza").
     # OpenShift: use the revision your control plane expects (e.g. openshift-gateway) or omit for default istiod.
