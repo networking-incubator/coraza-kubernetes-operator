@@ -12,10 +12,10 @@ import sys
 import time
 from pathlib import Path
 
-from lib import (
-    HELM_CHART_DIR, HELM_RELEASE_NAME,
-    detect_container_runtime, die, run,
-)
+from lib.constants import HELM_CHART_DIR, HELM_RELEASE_NAME
+from lib.container_runtime import detect_container_runtime
+from lib.error import die
+from lib.run import run
 
 # ---------------------------------------------------------------------------
 # Version Helpers

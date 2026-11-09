@@ -10,7 +10,8 @@ Usage: list_bundle_images.py <catalog-file> <bundle-image-base> [package-name]
 
 import sys
 
-from lib import die, load_yaml_docs
+from lib.error import die
+from lib.yaml_helpers import load_yaml_docs
 
 # ---------------------------------------------------------------------------
 # Main
