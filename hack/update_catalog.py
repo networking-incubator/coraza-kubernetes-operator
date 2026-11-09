@@ -10,7 +10,8 @@ Usage: update_catalog.py <catalog-file> <version> [package-name] [channel]
 
 import sys
 
-from lib import die, load_yaml_docs, write_yaml_docs
+from lib.error import die
+from lib.yaml_helpers import load_yaml_docs, write_yaml_docs
 
 # ---------------------------------------------------------------------------
 # Catalog Helpers

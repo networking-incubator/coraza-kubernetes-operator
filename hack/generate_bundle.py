@@ -18,7 +18,9 @@ from pathlib import Path
 
 import yaml
 
-from lib import SemverYAML, die, load_yaml_docs, run, write_yaml
+from lib.error import die
+from lib.run import run
+from lib.yaml_helpers import SemverYAML, load_yaml_docs, write_yaml
 
 
 class LiteralBlockStr(str):
