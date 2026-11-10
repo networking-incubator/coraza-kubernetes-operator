@@ -7,6 +7,8 @@ set -euo pipefail
 : "${KIND_CLUSTER_NAME:?KIND_CLUSTER_NAME is required}"
 : "${DEMO_NAMESPACE:?DEMO_NAMESPACE is required}"
 
+source "$(dirname $(readlink -f $0))/curl_wrapper.sh"
+
 ctx="kind-$KIND_CLUSTER_NAME"
 addr=""
 deadline=$(( $(date +%s) + 300 ))
@@ -37,3 +39,10 @@ if [ "$allowed" != "200" ] || [ "$blocked" != "403" ] || [ "$data" != "403" ]; t
   exit 1
 fi
 echo "=== Demo verified: rules from the cluster block the request ==="
+
+if [[ $CONTAINER_TOOL =~ podman ]]; then
+  echo "(i) Info: if using podman, consider sourcing hack/curl_wrapper.sh"
+  echo "    source hack/curl_wrapper.sh"
+  echo "    curl -s -o /dev/null -w '%{http_code}' http://$addr/"
+  echo "    curl_restore  # to revert the wrapper override"
+fi
