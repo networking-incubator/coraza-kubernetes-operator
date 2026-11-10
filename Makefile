@@ -1,3 +1,4 @@
+.DEFAULT_GOAL := help
 # ------------------------------------------------------------------------------
 # Vars
 # ------------------------------------------------------------------------------
@@ -447,12 +448,12 @@ test.coverage: generate
 	echo "Total: $${total}%"
 
 .PHONY: test.integration
-test.integration:
+test.integration: container-engine-detect
 	go clean -testcache
 	KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) ISTIO_VERSION=${ISTIO_VERSION} ISTIO_GATEWAY_REVISION=${ISTIO_GATEWAY_REVISION} go test -tags=integration ./test/integration/... -v
 
 .PHONY: test.e2e
-test.e2e:
+test.e2e: container-engine-detect
 	go clean -testcache
 	KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) ISTIO_VERSION=${ISTIO_VERSION} ISTIO_GATEWAY_REVISION=${ISTIO_GATEWAY_REVISION} go test -tags=e2e ./test/e2e/... -v $(TEST_ARGS)
 
@@ -798,7 +799,7 @@ endif
 
 .PHONY: demo.verify
 demo.verify: container-engine-detect ## Assert the demo Gateway passes normal traffic and blocks the demo attack
-	@KIND_CLUSTER_NAME='$(KIND_CLUSTER_NAME)' DEMO_NAMESPACE='$(DEMO_NAMESPACE)' hack/demo-verify.sh
+	@KIND_CLUSTER_NAME='$(KIND_CLUSTER_NAME)' DEMO_NAMESPACE='$(DEMO_NAMESPACE)' CONTAINER_TOOL='$(CONTAINER_TOOL)' hack/demo-verify.sh
 
 
 .PHONY: observability.grafana.port-forward
