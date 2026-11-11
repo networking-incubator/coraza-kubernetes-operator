@@ -11,7 +11,27 @@ else
 GOBIN=$(shell go env GOBIN)
 endif
 
-CONTAINER_TOOL ?= docker
+# Auto-detect the container runtime (docker or podman) unless explicitly set.
+# Deliberately lazy: the detection only runs the first time CONTAINER_TOOL is
+# expanded (i.e. by a recipe that actually needs a runtime), and the result is
+# memoized so later expansions are free. An explicit value from the environment
+# or command line wins and skips detection entirely.
+CONTAINER_TOOL ?= $(eval CONTAINER_TOOL := $(shell python3 -c 'import sys; sys.path.insert(0, "hack"); from lib.container_runtime import detect_container_runtime; print(detect_container_runtime())'))$(CONTAINER_TOOL)
+
+# Validate the runtime. Targets needing a container runtime depend on this.
+.PHONY: container-engine-detect
+container-engine-detect:
+	@case "$(strip $(CONTAINER_TOOL))" in \
+		docker|podman) ;; \
+		*) echo "CONTAINER_TOOL must be 'docker' or 'podman', got '$(CONTAINER_TOOL)'" >&2; exit 1 ;; \
+	esac
+	export CONTAINER_TOOL=$(CONTAINER_TOOL)
+
+# Derive the kind provider from the container runtime so callers only need to
+# set CONTAINER_TOOL. The kind binary (used directly by the Go test targets via
+# `kind get kubeconfig`, and by hack/kind_cluster.py) reads this from the
+# environment. An explicit value wins.
+	export KIND_EXPERIMENTAL_PROVIDER=$(filter podman,$(CONTAINER_TOOL))
 
 # KIND_CLUSTER_NAME is used to detect if tests are running locally via kind.
 # Use a non-empty default for kind-based integration tests; override or clear
@@ -131,7 +151,7 @@ build.binaries:
 build: manifests generate fmt vet lint build.binaries
 
 .PHONY: build.image
-build.image:
+build.image: container-engine-detect
 	$(CONTAINER_TOOL) build $(OCI_LABELS_OPERATOR) -t ${CONTROLLER_MANAGER_CONTAINER_IMAGE} .
 
 .PHONY: build.installer
@@ -379,7 +399,7 @@ lint.api: kube-api-linter
 # ------------------------------------------------------------------------------
 
 .PHONY: cluster.kind
-cluster.kind: ## Create the KIND test cluster
+cluster.kind: container-engine-detect ## Create the KIND test cluster
 	ISTIO_VERSION=${ISTIO_VERSION} \
 		METALLB_VERSION=${METALLB_VERSION} \
 		METALLB_POOL_SIZE=${METALLB_POOL_SIZE} \
@@ -390,16 +410,20 @@ cluster.kind: ## Create the KIND test cluster
 
 # cluster.kind + OpenTelemetry Operator (central collector CRDs). Plain cluster.kind skips OTel.
 .PHONY: cluster.kind.otel
-cluster.kind.otel:
+cluster.kind.otel: container-engine-detect
 	INSTALL_OTEL_OPERATOR=true $(MAKE) cluster.kind
 
 .PHONY: cluster.load-images
-cluster.load-images: ## Load the operator image into the KIND test cluster
+cluster.load-images: container-engine-detect ## Load the operator image into the KIND test cluster
 	@$(CONTAINER_TOOL) exec ${KIND_CLUSTER_NAME}-control-plane crictl rmi ${CONTROLLER_MANAGER_CONTAINER_IMAGE} 2>/dev/null || true
-	$(KIND) load docker-image ${CONTROLLER_MANAGER_CONTAINER_IMAGE} --name ${KIND_CLUSTER_NAME}
+	@if [ "$(strip $(CONTAINER_TOOL))" = "podman" ]; then \
+		$(CONTAINER_TOOL) save ${CONTROLLER_MANAGER_CONTAINER_IMAGE} | $(KIND) load image-archive /dev/stdin --name ${KIND_CLUSTER_NAME}; \
+	else \
+		set -x; $(KIND) load docker-image ${CONTROLLER_MANAGER_CONTAINER_IMAGE} --name ${KIND_CLUSTER_NAME}; \
+	fi
 
 .PHONY: clean.cluster.kind
-clean.cluster.kind: ## Delete the KIND test cluster
+clean.cluster.kind: container-engine-detect ## Delete the KIND test cluster
 	python3 hack/kind_cluster.py delete --name ${KIND_CLUSTER_NAME}
 
 # -------------------------------------------------------------------------------
@@ -533,11 +557,11 @@ bundle.opp: bundle ## Run OPP kiwi tests against staged bundle (needs docker, an
 	KIND_KUBE_VERSION=v$(KUBE_VERSION) OPERATOR_VERSION=$(VERSION:v%=%) ./hack/operatorhub_opp_test.sh
 
 .PHONY: bundle.build
-bundle.build: ## Build the OLM bundle image
+bundle.build: container-engine-detect ## Build the OLM bundle image
 	$(CONTAINER_TOOL) build $(OCI_LABELS_BUNDLE) -f $(BUNDLE_DIR)/bundle.Dockerfile -t $(BUNDLE_IMG) $(BUNDLE_DIR)
 
 .PHONY: bundle.push
-bundle.push: ## Push the OLM bundle image
+bundle.push: container-engine-detect ## Push the OLM bundle image
 	$(CONTAINER_TOOL) push $(BUNDLE_IMG)
 
 .PHONY: catalog.update
@@ -545,7 +569,7 @@ catalog.update: ## Add the current VERSION to the OLM catalog channel
 	python3 hack/update_catalog.py $(CATALOG_FILE) $(VERSION) coraza-kubernetes-operator $(OLM_CHANNEL)
 
 .PHONY: catalog.build
-catalog.build: ## Build the OLM catalog image (renders bundles via opm)
+catalog.build: container-engine-detect ## Build the OLM catalog image (renders bundles via opm)
 	@rm -rf $(CATALOG_DIR)/bundles && mkdir -p $(CATALOG_DIR)/bundles
 	@if [ -z "$${BUNDLE_IMGS}" ] && [ -d "$(BUNDLE_DIR)/manifests" ]; then \
 		cp -r $(BUNDLE_DIR) $(CATALOG_DIR)/bundles/local; \
@@ -565,7 +589,7 @@ catalog.build: ## Build the OLM catalog image (renders bundles via opm)
 	@rm -rf $(CATALOG_DIR)/bundles
 
 .PHONY: catalog.push
-catalog.push: ## Push the OLM catalog image
+catalog.push: container-engine-detect ## Push the OLM catalog image
 	$(CONTAINER_TOOL) push $(CATALOG_IMG)
 
 CATALOG_NAMESPACE ?= olm
@@ -756,7 +780,7 @@ observability.demo.workload: demo.workload ## Apply demo CRs and seed traffic fo
 observability.demo: observability.prometheus.deploy observability.operator.monitoring observability.demo.workload observability.grafana.url ## Full observability demo on existing KIND cluster
 
 .PHONY: demo
-demo: ## Single command: get the CRS-enabled WASM module (WASM_SOURCE=release|build), create KIND, deploy the demo
+demo: container-engine-detect ## Single command: get the CRS-enabled WASM module (WASM_SOURCE=release|build), create KIND, deploy the demo
 ifeq ($(WASM_SOURCE),build)
 	$(MAKE) wasm.crs
 else
@@ -771,7 +795,7 @@ endif
 	@echo "note: $(ASSETS_DIR)/plugin.wasm now holds the built module; restore the committed fixture with: git checkout $(ASSETS_DIR)"
 
 .PHONY: demo.verify
-demo.verify: ## Assert the demo Gateway passes normal traffic and blocks the demo attack
+demo.verify: container-engine-detect ## Assert the demo Gateway passes normal traffic and blocks the demo attack
 	@KIND_CLUSTER_NAME='$(KIND_CLUSTER_NAME)' DEMO_NAMESPACE='$(DEMO_NAMESPACE)' hack/demo-verify.sh
 
 
@@ -801,17 +825,17 @@ DOCS_BASE_URL ?= https://networking-incubator.github.io/coraza-kubernetes-operat
 DOCS_IMG = coraza-kubernetes-operator-docs
 
 .PHONY: docs.image
-docs.image: ## Build the documentation container image
+docs.image: container-engine-detect ## Build the documentation container image
 	$(CONTAINER_TOOL) build -t $(DOCS_IMG) $(DOCS_DIR)
 
 .PHONY: docs.serve
-docs.serve: docs.image ## Serve documentation locally with live reload
+docs.serve: docs.image container-engine-detect ## Serve documentation locally with live reload
 	$(CONTAINER_TOOL) run --rm -it \
 		-v $(CURDIR)/$(DOCS_DIR):/src:z -p 1313:1313 $(DOCS_IMG) \
 		hugo server --bind 0.0.0.0 --baseURL http://localhost:1313/ --buildDrafts --buildFuture
 
 .PHONY: docs.api
-docs.api: docs.image ## Generate CRD API reference from Go types
+docs.api: docs.image container-engine-detect ## Generate CRD API reference from Go types
 	$(CONTAINER_TOOL) run --rm --user 0:0 \
 		-v $(CURDIR):/repo:z -w /repo $(DOCS_IMG) \
 		sh -c 'crd-ref-docs \
@@ -823,7 +847,7 @@ docs.api: docs.image ## Generate CRD API reference from Go types
 		&& chown $(shell id -u):$(shell id -g) $(DOCS_DIR)/content/reference/api.md'
 
 .PHONY: docs.build
-docs.build: docs.image ## Build multi-version documentation for production
+docs.build: docs.image container-engine-detect ## Build multi-version documentation for production
 	CONTAINER_TOOL=$(CONTAINER_TOOL) DOCS_IMG=$(DOCS_IMG) \
 		hack/build-versioned-docs.sh --base-url "$(DOCS_BASE_URL)"
 
@@ -837,7 +861,7 @@ CHROMA_LIGHT_STYLE ?= tango
 CHROMA_DARK_STYLE  ?= dracula
 
 .PHONY: docs.chroma
-docs.chroma: docs.image ## Regenerate Chroma syntax highlighting CSS for light and dark modes
+docs.chroma: docs.image container-engine-detect ## Regenerate Chroma syntax highlighting CSS for light and dark modes
 	$(CONTAINER_TOOL) run --rm --user 0:0 -v $(CURDIR)/$(DOCS_DIR):/src:z $(DOCS_IMG) \
 		sh -c 'hugo gen chromastyles --style=$(CHROMA_LIGHT_STYLE) > /src/assets/scss/_chroma_light.css \
 		&& hugo gen chromastyles --style=$(CHROMA_DARK_STYLE) > /src/assets/scss/_chroma_dark.css \
