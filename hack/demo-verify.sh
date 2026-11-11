@@ -40,7 +40,7 @@ if [ "$allowed" != "200" ] || [ "$blocked" != "403" ] || [ "$data" != "403" ]; t
 fi
 echo "=== Demo verified: rules from the cluster block the request ==="
 
-if [[ $CONTAINER_TOOL =~ podman ]]; then
+if [[ ${CONTAINER_TOOL:-} =~ podman ]]; then
   echo "(i) Info: if using podman, consider sourcing hack/curl_wrapper.sh"
   echo "    source hack/curl_wrapper.sh"
   echo "    curl -s -o /dev/null -w '%{http_code}' http://$addr/"
