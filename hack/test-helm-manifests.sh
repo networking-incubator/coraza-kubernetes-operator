@@ -56,7 +56,8 @@ echo "$out" | grep -q "kind: PrometheusRule" && fail "PrometheusRule should be g
 section "PodMonitor with gatewaySelector"
 out=$(render --set metrics.podMonitor.enabled=true --set 'metrics.podMonitor.gatewaySelector.app=my-gateway')
 echo "$out" | grep -q "kind: PodMonitor" && pass "PodMonitor rendered" || fail "PodMonitor missing"
-echo "$out" | grep -q "coraza_waf_" && pass "cardinality filter present" || fail "cardinality filter missing"
+echo "$out" | grep -qF 'waf_filter_.*' && pass "Gateway cardinality filter present" || fail "Gateway cardinality filter missing"
+! echo "$out" | grep -qF 'coraza_waf_.*' && pass "Gateway excludes collector metrics" || fail "Gateway must exclude collector metrics"
 
 # ── Test 6: PodMonitor with empty selector fails ──────────────────────────────
 section "PodMonitor rejects empty gatewaySelector"
@@ -109,7 +110,7 @@ out=$(render --set metrics.podMonitor.enabled=true \
   --set 'metrics.podMonitor.gatewaySelector.app=my-gateway' \
   --set-json 'metrics.podMonitor.metricRelabelings=[{"sourceLabels":["__name__"],"regex":"coraza_waf_requests_total","action":"drop"}]')
 echo "$out" | grep -q "coraza_waf_requests_total" && pass "User metricRelabelings injected" || fail "User metricRelabelings missing"
-echo "$out" | grep -qF 'coraza_waf_.*' && pass "Mandatory cardinality guard still present" || fail "Mandatory cardinality guard missing"
+echo "$out" | grep -qF 'waf_filter_.*' && pass "Mandatory Gateway cardinality guard still present" || fail "Mandatory Gateway cardinality guard missing"
 
 # ── Test 14: Grafana dashboard ConfigMap ─────────────────────────────────────
 section "Grafana dashboard ConfigMap"

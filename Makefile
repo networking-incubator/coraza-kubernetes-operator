@@ -393,6 +393,11 @@ cluster.kind: ## Create the KIND test cluster
 cluster.kind.otel:
 	INSTALL_OTEL_OPERATOR=true $(MAKE) cluster.kind
 
+# cluster.kind + OpenTelemetry Operator (central collector CRDs). Plain cluster.kind skips OTel.
+.PHONY: cluster.kind.otel
+cluster.kind.otel:
+	INSTALL_OTEL_OPERATOR=true $(MAKE) cluster.kind
+
 .PHONY: cluster.load-images
 cluster.load-images: ## Load the operator image into the KIND test cluster
 	@$(CONTAINER_TOOL) exec ${KIND_CLUSTER_NAME}-control-plane crictl rmi ${CONTROLLER_MANAGER_CONTAINER_IMAGE} 2>/dev/null || true
@@ -713,6 +718,9 @@ observability.operator.monitoring: ## Enable ServiceMonitor, PrometheusRule, and
 		--set metrics.serviceMonitor.additionalLabels.release="$(KUBE_PROM_STACK_RELEASE)" \
 		--set metrics.prometheusRule.enabled=true \
 		--set metrics.prometheusRule.additionalLabels.release="$(KUBE_PROM_STACK_RELEASE)" \
+		--set metrics.podMonitor.enabled=true \
+		--set-json 'metrics.podMonitor.gatewaySelector={"gateway.networking.k8s.io/gateway-name":"coraza-gateway"}' \
+		--set metrics.podMonitor.additionalLabels.release="$(KUBE_PROM_STACK_RELEASE)" \
 		--set metrics.grafanaDashboard.enabled=true \
 		--wait --timeout 5m; \
 	kubectl --context "$$ctx" -n "$(HELM_RELEASE_NAMESPACE)" wait --for=condition=Available \

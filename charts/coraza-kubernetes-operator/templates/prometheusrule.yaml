@@ -199,4 +199,86 @@ spec:
             sum(rate(coraza_cache_server_requests_total{code="200"}[5m]))
             /
             sum(rate(coraza_cache_server_requests_total{code=~"200|404"}[5m]))
+
+    # Dataplane block-ratio. Prefers contract coraza_waf_* from the ALS collector;
+    # falls back to Envoy waf_filter_* when those series are absent. If ALS is
+    # present but stuck (count connector not incrementing), the left side of `or`
+    # still has samples and the fallback is skipped.
+    - name: coraza-waf.dataplane
+      rules:
+        - record: coraza:waf_block_ratio:rate15m
+          expr: >-
+            (
+              (sum(rate(coraza_waf_requests_total{outcome="block"}[15m])) > 0)
+              or
+              sum(rate({__name__=~"waf_filter_tx_interruptions_.*"}[15m]))
+            )
+            /
+            clamp_min(
+              (
+                (sum(rate(coraza_waf_requests_total[15m])) > 0)
+                or
+                sum(rate(waf_filter_tx_total[15m]))
+              ),
+              1e-9
+            )
+
+        - record: coraza:waf_block_ratio:rate6h
+          expr: >-
+            (
+              (sum(rate(coraza_waf_requests_total{outcome="block"}[6h])) > 0)
+              or
+              sum(rate({__name__=~"waf_filter_tx_interruptions_.*"}[6h]))
+            )
+            /
+            clamp_min(
+              (
+                (sum(rate(coraza_waf_requests_total[6h])) > 0)
+                or
+                sum(rate(waf_filter_tx_total[6h]))
+              ),
+              1e-9
+            )
+
+        # Block share above 10% for 10m, with enough traffic that a single deny
+        # cannot trip it. Same 0.01 rps floor as the validation-rate alerts.
+        - alert: CorazaWAFBlockRatioHigh
+          expr: >-
+            (coraza:waf_block_ratio:rate15m > 0.1)
+            and
+            (
+              (
+                (sum(rate(coraza_waf_requests_total[15m])) > 0)
+                or
+                sum(rate(waf_filter_tx_total[15m]))
+              ) > 0.01
+            )
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "WAF block ratio is high"
+            description: 'Block ratio is {{ "{{" }} $value | humanizePercentage {{ "}}" }} over the last 15 minutes.'
+
+        # Short window is at least 5 percentage points above the 6h baseline.
+        # Require a non-trivial 15m ratio so idle-to-tiny-blip does not fire.
+        - alert: CorazaWAFBlockRatioSpike
+          expr: >-
+            (coraza:waf_block_ratio:rate15m - coraza:waf_block_ratio:rate6h > 0.05)
+            and
+            (coraza:waf_block_ratio:rate15m > 0.02)
+            and
+            (
+              (
+                (sum(rate(coraza_waf_requests_total[15m])) > 0)
+                or
+                sum(rate(waf_filter_tx_total[15m]))
+              ) > 0.01
+            )
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "WAF block ratio spiked relative to the 6h baseline"
+            description: '15m block ratio is {{ "{{" }} $value | humanizePercentage {{ "}}" }} above the 6h baseline.'
 {{- end }}
