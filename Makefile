@@ -775,7 +775,7 @@ demo.workload: ## Apply the demo CRs (config/samples) and wait for acceptance
 demo.workload.crs:
 # TODO CHECK existence of demo.workload
 	NAMESPACE="$(DEMO_NAMESPACE)" $(MAKE) coraza.coreruleset
-	kubectl --context "$$ctx" annotate -n "$(DEMO_NAMESPACE)" ruleset coraza-crs "waf.k8s.coraza.io/skip-unsupported-rules-check=true"
+	kubectl --context "$$ctx" annotate -n "$(DEMO_NAMESPACE)" ruleset default-ruleset "waf.k8s.coraza.io/skip-unsupported-rules-check=true"
 	echo "=== Waiting for CRS RuleSet Ready ==="; \
 	if ! kubectl --context "$$ctx" -n "$(DEMO_NAMESPACE)" wait --for=condition=Ready \
 		ruleset/default-ruleset --timeout=300s 2>/dev/null; then \
