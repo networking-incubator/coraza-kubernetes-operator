@@ -58,7 +58,7 @@ OCI_IMAGE_LICENSES ?= Apache-2.0
 
 # Must match the final stage in the root Dockerfile (distroless).
 OCI_OPERATOR_BASE_NAME ?= gcr.io/distroless/static:nonroot
-OCI_OPERATOR_BASE_DIGEST ?= sha256:e3f945647ffb95b5839c07038d64f9811adf17308b9121d8a2b87b6a22a80a39
+OCI_OPERATOR_BASE_DIGEST ?= sha256:25ac8f0c3b2334a9eb05452266bd4697864a8c8ef0ef71e5e6480d7f92868329
 
 OCI_IMAGE_TITLE_OPERATOR ?= Coraza Kubernetes Operator
 OCI_IMAGE_DESC_OPERATOR ?= Kubernetes operator for Coraza Web Application Firewall on Gateway API.
