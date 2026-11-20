@@ -167,6 +167,8 @@ def get_kind_network_range() -> str:
         networks = json.loads(result.stdout)
         cidr = _kind_network_ipv4_cidr(networks[0])
         net = ipaddress.ip_network(cidr)
+        if pool_size > net.num_addresses - 2:
+            raise ValueError("METALLB_POOL_SIZE exceeds usable subnet addresses")
         last = net.broadcast_address - 1
         first = net.broadcast_address - pool_size
         return f"{first}-{last}"
