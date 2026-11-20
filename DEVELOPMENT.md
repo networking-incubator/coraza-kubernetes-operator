@@ -25,8 +25,8 @@ Create the cluster:
 make cluster.kind
 ```
 
-> **Note**: The Makefile auto-detects whether to use `docker` or `podman`. Docker is prefered.
-> Override with `CONTAINER_TOOL` if needed, recommended is to export the overide for
+> **Note**: The Makefile auto-detects whether to use `docker` or `podman`. Docker is preferred.
+> Override with `CONTAINER_TOOL` if needed. Export the overide for
 > subsequent invocations:
 >
 > ```bash
