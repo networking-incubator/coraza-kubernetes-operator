@@ -6,9 +6,9 @@ __original_curl="$(which curl)"
 
 function curl() {
   if [[ ${CONTAINER_TOOL:-} =~ "podman" ]]; then
-    podman run -it --rm --network=kind quay.io/curl/curl:latest curl $@
+    podman run --rm --network=kind quay.io/curl/curl:latest curl "$@"
   else
-    $__original_curl $@
+    $__original_curl "$@"
   fi
 }
 

@@ -797,7 +797,7 @@ endif
 
 .PHONY: demo.verify
 demo.verify: container-engine-detect ## Assert the demo Gateway passes normal traffic and blocks the demo attack
-	@KIND_CLUSTER_NAME='$(KIND_CLUSTER_NAME)' DEMO_NAMESPACE='$(DEMO_NAMESPACE)' hack/demo-verify.sh
+	@KIND_CLUSTER_NAME='$(KIND_CLUSTER_NAME)' DEMO_NAMESPACE='$(DEMO_NAMESPACE)' CONTAINER_TOOL='$(CONTAINER_TOOL)' hack/demo-verify.sh
 
 
 .PHONY: observability.grafana.port-forward

@@ -7,7 +7,7 @@ set -euo pipefail
 : "${KIND_CLUSTER_NAME:?KIND_CLUSTER_NAME is required}"
 : "${DEMO_NAMESPACE:?DEMO_NAMESPACE is required}"
 
-source "$(dirname $(readlink -f $0))/curl_wrapper.sh"
+source "$(dirname "$(readlink -f "$0")")/curl_wrapper.sh"
 
 ctx="kind-$KIND_CLUSTER_NAME"
 addr=""
