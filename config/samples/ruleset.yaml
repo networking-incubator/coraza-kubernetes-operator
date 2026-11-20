@@ -1,7 +1,7 @@
 apiVersion: waf.k8s.coraza.io/v1alpha1
 kind: RuleSource
 metadata:
-  name: base-rules
+  name: demo-base-rules
 spec:
   rules: |
     SecRuleEngine On
@@ -108,10 +108,10 @@ spec:
 apiVersion: waf.k8s.coraza.io/v1alpha1
 kind: RuleSet
 metadata:
-  name: default-ruleset
+  name: demo-ruleset
 spec:
   sources:
-    - name: base-rules
+    - name: demo-base-rules
     - name: sqli-rules
     - name: xss-rules
     - name: no-evil-monkeys

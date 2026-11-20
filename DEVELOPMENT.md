@@ -25,19 +25,24 @@ Create the cluster:
 make cluster.kind
 ```
 
-> **Note**: On Linux systems using cgroup v2 (e.g. Fedora), `make cluster.kind`
-> may fail with Docker and the following error:
->
-> ```text
-> could not find a log line that matches "Reached target .*Multi-User System.*|detected cgroup v1"
-> ```
->
-> Use Podman instead by setting both `CONTAINER_TOOL` (for image build and load)
-> and `KIND_EXPERIMENTAL_PROVIDER` (for cluster creation):
+> **Note**: The Makefile auto-detects whether to use `docker` or `podman`. Docker is prefered.
+> Override with `CONTAINER_TOOL` if needed, recommended is to export the overide for
+> subsequent invocations:
 >
 > ```bash
-> CONTAINER_TOOL=podman KIND_EXPERIMENTAL_PROVIDER=podman make cluster.kind
+> export CONTAINER_TOOL=podman
+> make cluster.kind
 > ```
+>
+> `KIND_EXPERIMENTAL_PROVIDER` is derived automatically from the container runtime.
+>
+> **macOS with Podman**: Ensure the Podman machine is running (`podman machine start`).
+
+> **KNOWN PODMAN LIMITATIONS**
+> - Running with `podman` will not deploy *MetalLB* correctly. (to be fixed)
+>   - Workaround: use cluster gateway's internal domain name instead of its LoadBalancer IP.
+> - Podman rootless network isolation prevents connections from the host.
+>   - Workaround: curl from inside cluster, e.g. `kubectl create job curl --image quay.io/curl/curl:latest -- curl http://coraza-gateway-istio.integration-tests.svc.cluster.local/` then `kubectl logs jobs/curl`.
 
 This will have built the operator with your current changes and loaded the
 operator image into the cluster, and started the operator in the

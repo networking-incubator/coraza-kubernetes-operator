@@ -4,7 +4,7 @@ metadata:
   name: coraza
 spec:
   ruleSet:
-    name: default-ruleset
+    name: demo-ruleset
   target:
     type: Gateway
     name: coraza-gateway
@@ -13,4 +13,19 @@ spec:
   driver:
     type: wasm
     wasm: {}
-
+---
+apiVersion: waf.k8s.coraza.io/v1alpha1
+kind: Engine
+metadata:
+  name: coraza-crs
+spec:
+  ruleSet:
+    name: default-ruleset
+  target:
+    type: Gateway
+    name: coraza-crs-gateway
+    provider: Istio
+  failurePolicy: fail
+  driver:
+    type: wasm
+    wasm: {}
