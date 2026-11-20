@@ -1,3 +1,4 @@
+.DEFAULT_GOAL := help
 # ------------------------------------------------------------------------------
 # Vars
 # ------------------------------------------------------------------------------
@@ -445,12 +446,12 @@ test.coverage: generate
 	echo "Total: $${total}%"
 
 .PHONY: test.integration
-test.integration:
+test.integration: cotainer-engine-detect
 	go clean -testcache
 	KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) ISTIO_VERSION=${ISTIO_VERSION} ISTIO_GATEWAY_REVISION=${ISTIO_GATEWAY_REVISION} go test -tags=integration ./test/integration/... -v
 
 .PHONY: test.e2e
-test.e2e:
+test.e2e: container-engine-detect
 	go clean -testcache
 	KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) ISTIO_VERSION=${ISTIO_VERSION} ISTIO_GATEWAY_REVISION=${ISTIO_GATEWAY_REVISION} go test -tags=e2e ./test/e2e/... -v $(TEST_ARGS)
 
