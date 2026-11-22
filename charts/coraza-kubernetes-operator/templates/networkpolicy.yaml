@@ -1,3 +1,65 @@
+{{- $egress := (.Values.networkPolicy | default dict).egress | default dict }}
+{{- $apiServer := $egress.apiServer | default dict }}
+{{- $enabled := $egress.enabled | default false }}
+{{- if not (kindIs "bool" $enabled) }}
+{{- fail (printf "networkPolicy.egress.enabled must be true or false, got %q" (toString $enabled)) }}
+{{- end }}
+{{- $cidrs := list }}
+{{- $ports := list }}
+{{- if $enabled }}
+{{- $portValues := $apiServer.ports | default list }}
+{{- if not (kindIs "slice" $portValues) }}
+{{- fail (printf "networkPolicy.egress.apiServer.ports must be a list of ports, got %q" (toString $portValues)) }}
+{{- end }}
+{{- if not $portValues }}
+{{- fail "networkPolicy.egress.apiServer.ports must list at least one port" }}
+{{- end }}
+{{- range $portValues }}
+{{- if or (not (include "coraza-operator.isInt" .)) (lt (int64 .) 1) (gt (int64 .) 65535) }}
+{{- fail (printf "networkPolicy.egress.apiServer.ports entries must be integer ports from 1 to 65535, got %q" (toString .)) }}
+{{- end }}
+{{- $ports = append $ports (int64 .) }}
+{{- end }}
+{{- $cidrValues := $apiServer.cidrs | default list }}
+{{- if not (kindIs "slice" $cidrValues) }}
+{{- fail (printf "networkPolicy.egress.apiServer.cidrs must be a list of CIDRs, got %q" (toString $cidrValues)) }}
+{{- end }}
+{{- /* An IPv4 or IPv6 address and a prefix length of 1 to 32 or 1 to 128. */}}
+{{- $octet := `(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])` }}
+{{- $ipv4 := printf `^(%s\.){3}%s/([1-9]|[12][0-9]|3[0-2])$` $octet $octet }}
+{{- $h := `[0-9a-fA-F]{1,4}` }}
+{{- $ipv6 := printf `^((%[1]s:){7}%[1]s|(%[1]s:){1,7}:|(%[1]s:){1,6}:%[1]s|(%[1]s:){1,5}(:%[1]s){1,2}|(%[1]s:){1,4}(:%[1]s){1,3}|(%[1]s:){1,3}(:%[1]s){1,4}|(%[1]s:){1,2}(:%[1]s){1,5}|%[1]s:(:%[1]s){1,6}|:((:%[1]s){1,7}|:))/([1-9]|[1-9][0-9]|1[01][0-9]|12[0-8])$` $h }}
+{{- range $cidrValues }}
+{{- $cidr := trim (toString .) }}
+{{- if not (or (regexMatch $ipv4 $cidr) (regexMatch $ipv6 $cidr)) }}
+{{- fail (printf "networkPolicy.egress.apiServer.cidrs entries must be IPv4 or IPv6 addresses in CIDR form with a prefix length from 1 to 32 or 1 to 128, for example 10.0.0.1/32; got %q" (toString .)) }}
+{{- end }}
+{{- $cidrs = append $cidrs $cidr }}
+{{- end }}
+{{- if not $cidrs }}
+{{- /* Fall back to the endpoints of the "kubernetes" Service, their addresses
+       and ports. lookup returns nothing under helm template. */}}
+{{- range (lookup "discovery.k8s.io/v1" "EndpointSlice" "default" "").items }}
+{{- if eq (index (.metadata.labels | default dict) "kubernetes.io/service-name") "kubernetes" }}
+{{- range .endpoints | default list }}
+{{- range .addresses }}
+{{- $cidrs = append $cidrs (printf "%s/%d" . (ternary 128 32 (contains ":" .))) }}
+{{- end }}
+{{- end }}
+{{- range .ports | default list }}
+{{- if .port }}
+{{- $ports = append $ports (int64 .port) }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- $cidrs = $cidrs | uniq | sortAlpha }}
+{{- if not $cidrs }}
+{{- fail "networkPolicy.egress.enabled=true needs the API server addresses: set networkPolicy.egress.apiServer.cidrs (for example [\"10.0.0.1/32\"]); they could not be read from the kubernetes EndpointSlice in the default namespace" }}
+{{- end }}
+{{- end }}
+{{- $ports = $ports | uniq }}
+{{- end }}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -11,6 +73,9 @@ spec:
       {{- include "coraza-operator.selectorLabels" . | nindent 6 }}
   policyTypes:
     - Ingress
+    {{- if $enabled }}
+    - Egress
+    {{- end }}
   ingress:
     # Health probes (startup, liveness, readiness) — the kubelet connects
     # from the node IP so no source restriction is applied.
@@ -28,3 +93,20 @@ spec:
     # to allow only the specific gateway workloads that need cache access.
     # Kubernetes NetworkPolicies are additive, so those policies extend
     # this one without conflict.
+  {{- if $enabled }}
+  egress:
+    # The operator only connects to the Kubernetes API server (including
+    # TokenReview). In-cluster config uses KUBERNETES_SERVICE_HOST, so no DNS
+    # rule is needed. Rules name the API server endpoint addresses because most
+    # CNIs apply policy after the Service address is translated.
+    - to:
+        {{- range $cidrs }}
+        - ipBlock:
+            cidr: {{ . | quote }}
+        {{- end }}
+      ports:
+        {{- range $ports }}
+        - port: {{ . }}
+          protocol: TCP
+        {{- end }}
+  {{- end }}

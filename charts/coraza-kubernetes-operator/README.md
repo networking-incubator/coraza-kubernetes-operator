@@ -91,6 +91,9 @@ When `openshift.enabled=true`, `runAsUser`, `fsGroup`, and `fsGroupChangePolicy`
 | `tolerations`                                         | list   | `[]`                                                      | Tolerations                                                                                                 |
 | `affinity`                                            | object | `{}`                                                      | Affinity rules                                                                                              |
 | `topologySpreadConstraints`                           | list   | `[]`                                                      | Topology spread constraints for pod scheduling                                                              |
+| `networkPolicy.egress.enabled`                        | bool   | `false`                                                   | Restrict the operator's egress to the Kubernetes API server                                                 |
+| `networkPolicy.egress.apiServer.cidrs`                | list   | `[]`                                                      | API server endpoint addresses in CIDR form (usually `/32` or `/128`); read from the `kubernetes` EndpointSlice when empty |
+| `networkPolicy.egress.apiServer.ports`                | list   | `[6443, 443]`                                             | API server endpoint ports allowed by the egress rule (at least one); the EndpointSlice ports are added when the addresses are read from it |
 
 ### Serving certificate
 
@@ -125,6 +128,10 @@ Set `helm_release` to your release name. The selector discovers the chart-render
 An Engine whose RuleSet is `Degraded` (or whose inputs are unavailable) returns before applying its EnvoyFilter, so the restart does not publish the new CA for it and new Gateway connections can fail TLS. Repair those RuleSets, then confirm each EnvoyFilter carries the new `waf.k8s.coraza.io/ca-hash` annotation.
 
 Static manifests built with `make build.installer` or `make release.manifests` disable generation (`tls.generate=false`) so no private key is published. Before applying one of those manifests, create the serving Secret yourself as described above.
+
+### Restricting operator egress
+
+The operator only connects to the Kubernetes API server. With `networkPolicy.egress.enabled=true` the operator NetworkPolicy also limits egress to `networkPolicy.egress.apiServer.cidrs` on `networkPolicy.egress.apiServer.ports`; no DNS rule is added. The addresses must be the API server endpoints (the `kubernetes` EndpointSlice in the `default` namespace), not the Service ClusterIP. When `cidrs` is empty, `helm install`/`helm upgrade` read them from that EndpointSlice; `helm template` and GitOps renderers cannot, so set `cidrs` explicitly. See the [Helm values reference](https://github.com/networking-incubator/coraza-kubernetes-operator/blob/main/docs/content/reference/helm-values.md) for how to find the endpoints on OpenShift and managed clusters. It is off by default: leave it off when the API server runs outside the cluster behind addresses that change (for example a hosted control plane), because a stale address cuts the operator off. CNIs differ in how they match API server traffic, so verify the policy with the cluster's CNI before enabling it.
 
 ## Metrics
 
