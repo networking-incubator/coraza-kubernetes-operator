@@ -25,11 +25,14 @@ import (
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	wafv1alpha1 "github.com/networking-incubator/coraza-kubernetes-operator/api/v1alpha1"
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/ecds/render"
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/rulesets/assemble"
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/rulesets/cache"
+	"github.com/networking-incubator/coraza-kubernetes-operator/internal/rulesets/validation"
 	"github.com/networking-incubator/coraza-kubernetes-operator/test/utils"
 )
 
@@ -122,7 +125,9 @@ func TestRuleSetReconciler_PreservesAcceptedContentOnInvalidUpdate(t *testing.T)
 	tests := []struct {
 		name         string
 		invalidRules string
+		policy       validation.RulePolicy
 		wantReason   string
+		wantMessage  string
 	}{
 		{
 			name:         "empty rules under Reject",
@@ -138,6 +143,13 @@ func TestRuleSetReconciler_PreservesAcceptedContentOnInvalidUpdate(t *testing.T)
 			name:         "operator the gateway module does not support",
 			invalidRules: `SecRule REMOTE_ADDR "@rbl sbl.spamhaus.org" "id:55556,phase:1,deny,status:403"`,
 			wantReason:   "ReferencedRuleSourceInvalid",
+		},
+		{
+			name:         "edit the cluster rule policy denies",
+			invalidRules: `SecRule ARGS "@pm attack" "id:55557,phase:1,deny,status:403"`,
+			policy:       validation.RulePolicy{DeniedOperators: []string{"pm"}},
+			wantReason:   ruleSetDegradedReasonInvalidRuleSet,
+			wantMessage:  "@pm is not allowed by the cluster rule policy",
 		},
 	}
 
@@ -158,10 +170,11 @@ func TestRuleSetReconciler_PreservesAcceptedContentOnInvalidUpdate(t *testing.T)
 			require.NoError(t, k8sClient.Create(ctx, ruleSet))
 
 			reconciler := &RuleSetReconciler{
-				Client:   k8sClient,
-				Scheme:   scheme,
-				Recorder: utils.NewFakeRecorder(),
-				Cache:    cache.NewRuleSetCache(),
+				Client:     k8sClient,
+				Scheme:     scheme,
+				Recorder:   utils.NewFakeRecorder(),
+				Cache:      cache.NewRuleSetCache(),
+				RulePolicy: tt.policy,
 			}
 			nn := types.NamespacedName{Name: ruleSet.Name, Namespace: ruleSet.Namespace}
 			_, err := reconcileRuleSetWithRuleSources(ctx, t, nn, reconciler)
@@ -184,11 +197,152 @@ func TestRuleSetReconciler_PreservesAcceptedContentOnInvalidUpdate(t *testing.T)
 			require.NotNil(t, degraded, "invalid input must degrade the RuleSet")
 			assert.Equal(t, metav1.ConditionTrue, degraded.Status)
 			assert.Equal(t, tt.wantReason, degraded.Reason)
+			assert.Contains(t, degraded.Message, tt.wantMessage)
 
 			require.NotNil(t, ruleSet.Status.AcceptedContent, "last-known-good acceptance must be preserved")
 			assert.Equal(t, accepted, *ruleSet.Status.AcceptedContent)
 		})
 	}
+}
+
+// editRuleSetSource replaces the rules of source, reconciles ruleSet with
+// reconciler, and reads ruleSet back.
+func editRuleSetSource(t *testing.T, ctx context.Context, source *wafv1alpha1.RuleSource, rules string, ruleSet *wafv1alpha1.RuleSet, reconciler *RuleSetReconciler) {
+	t.Helper()
+	require.NoError(t, k8sClient.Get(ctx, client.ObjectKeyFromObject(source), source))
+	source.Spec.Rules = rules
+	require.NoError(t, k8sClient.Update(ctx, source))
+	nn := client.ObjectKeyFromObject(ruleSet)
+	_, err := reconcileRuleSetWithRuleSources(ctx, t, nn, reconciler)
+	require.NoError(t, err)
+	require.NoError(t, k8sClient.Get(ctx, nn, ruleSet))
+}
+
+// TestRuleSetReconciler_RulePolicyKeepsAcceptedContent covers a cluster rule
+// policy tightened across an operator restart: content accepted before stays
+// Ready and accepted, because the policy judges only content not accepted yet.
+func TestRuleSetReconciler_RulePolicyKeepsAcceptedContent(t *testing.T) {
+	ctx := context.Background()
+	ns := setupTestNamespace(t, ctx)
+
+	rules := `SecRule REQUEST_URI "@contains /admin" "id:1,phase:1,deny,status:403"`
+	source := utils.NewTestRuleSource("policy-restart-src", ns, rules)
+	require.NoError(t, k8sClient.Create(ctx, source))
+	ruleSet := utils.NewTestRuleSet(utils.RuleSetOptions{
+		Name:      "policy-restart-ruleset",
+		Namespace: ns,
+		Sources:   []wafv1alpha1.SourceReference{{Name: source.Name}},
+	})
+	require.NoError(t, k8sClient.Create(ctx, ruleSet))
+
+	nn := types.NamespacedName{Name: ruleSet.Name, Namespace: ruleSet.Namespace}
+	_, err := reconcileRuleSetWithRuleSources(ctx, t, nn, &RuleSetReconciler{
+		Client:   k8sClient,
+		Scheme:   scheme,
+		Recorder: utils.NewFakeRecorder(),
+		Cache:    cache.NewRuleSetCache(),
+	})
+	require.NoError(t, err)
+	require.NoError(t, k8sClient.Get(ctx, nn, ruleSet))
+	require.NotNil(t, ruleSet.Status.AcceptedContent)
+	accepted := *ruleSet.Status.AcceptedContent
+
+	policy := validation.RulePolicy{DeniedOperators: []string{"contains"}}
+	require.Error(t, validation.CheckRulePolicy(rules, nil, policy), "the new policy denies the accepted rule")
+	restarted := &RuleSetReconciler{
+		Client:     k8sClient,
+		Scheme:     scheme,
+		Recorder:   utils.NewFakeRecorder(),
+		Cache:      cache.NewRuleSetCache(),
+		RulePolicy: policy,
+	}
+	_, err = reconcileRuleSetWithRuleSources(ctx, t, nn, restarted)
+	require.NoError(t, err)
+
+	require.NoError(t, k8sClient.Get(ctx, nn, ruleSet))
+	require.NotNil(t, ruleSet.Status.AcceptedContent)
+	assert.Equal(t, accepted, *ruleSet.Status.AcceptedContent)
+	ready := apimeta.FindStatusCondition(ruleSet.Status.Conditions, conditionReady)
+	require.NotNil(t, ready)
+	assert.Equal(t, metav1.ConditionTrue, ready.Status)
+	assert.Equal(t, ruleSetReadyReasonRulesAccepted, ready.Reason)
+	assert.False(t, apimeta.IsStatusConditionTrue(ruleSet.Status.Conditions, conditionDegraded))
+
+	// A spec change that leaves the content unchanged is accepted again.
+	ruleSet.Spec.EmptyRulesPolicy = wafv1alpha1.EmptyRulesPolicyAllow
+	require.NoError(t, k8sClient.Update(ctx, ruleSet))
+	_, err = reconcileRuleSetWithRuleSources(ctx, t, nn, restarted)
+	require.NoError(t, err)
+	require.NoError(t, k8sClient.Get(ctx, nn, ruleSet))
+	assert.True(t, isConditionCurrent(ruleSet.Status.Conditions, conditionReady, ruleSetReadyReasonRulesAccepted, ruleSet.Generation))
+	require.NotNil(t, ruleSet.Status.AcceptedContent)
+	assert.Equal(t, accepted.ContentHash, ruleSet.Status.AcceptedContent.ContentHash)
+
+	// An edit the policy denies, then a return to the accepted content, which
+	// the policy also denies: the returned content is accepted again.
+	editSource := func(text string) { editRuleSetSource(t, ctx, source, text, ruleSet, restarted) }
+	editSource(`SecRule REQUEST_URI "@contains /private" "id:1,phase:1,deny,status:403"`)
+	degraded := apimeta.FindStatusCondition(ruleSet.Status.Conditions, conditionDegraded)
+	require.NotNil(t, degraded)
+	assert.Contains(t, degraded.Message, "@contains is not allowed by the cluster rule policy")
+	assert.Equal(t, accepted.ContentHash, ruleSet.Status.AcceptedContent.ContentHash)
+	editSource(rules)
+	assert.True(t, isConditionCurrent(ruleSet.Status.Conditions, conditionReady, ruleSetReadyReasonRulesAccepted, ruleSet.Generation))
+	assert.False(t, apimeta.IsStatusConditionTrue(ruleSet.Status.Conditions, conditionDegraded))
+	assert.Equal(t, accepted.ContentHash, ruleSet.Status.AcceptedContent.ContentHash)
+}
+
+// TestRuleSetReconciler_RulePolicyRevertToAcceptedContent covers an edit the
+// cluster rule policy denies: the RuleSet is Degraded with the last accepted
+// content kept, reconciling it again writes nothing, and reverting the edit
+// accepts the content again.
+func TestRuleSetReconciler_RulePolicyRevertToAcceptedContent(t *testing.T) {
+	ctx := context.Background()
+	ns := setupTestNamespace(t, ctx)
+
+	accepted := `SecRule REQUEST_URI "@contains /admin" "id:1,phase:1,deny,status:403"`
+	source := utils.NewTestRuleSource("policy-revert-src", ns, accepted)
+	require.NoError(t, k8sClient.Create(ctx, source))
+	ruleSet := utils.NewTestRuleSet(utils.RuleSetOptions{
+		Name:      "policy-revert-ruleset",
+		Namespace: ns,
+		Sources:   []wafv1alpha1.SourceReference{{Name: source.Name}},
+	})
+	require.NoError(t, k8sClient.Create(ctx, ruleSet))
+	reconciler := &RuleSetReconciler{
+		Client:     k8sClient,
+		Scheme:     scheme,
+		Recorder:   utils.NewFakeRecorder(),
+		Cache:      cache.NewRuleSetCache(),
+		RulePolicy: validation.RulePolicy{DeniedOperators: []string{"pm"}},
+	}
+	nn := types.NamespacedName{Name: ruleSet.Name, Namespace: ruleSet.Namespace}
+	editSource := func(rules string) { editRuleSetSource(t, ctx, source, rules, ruleSet, reconciler) }
+
+	_, err := reconcileRuleSetWithRuleSources(ctx, t, nn, reconciler)
+	require.NoError(t, err)
+	require.NoError(t, k8sClient.Get(ctx, nn, ruleSet))
+	require.NotNil(t, ruleSet.Status.AcceptedContent)
+	acceptedContent := *ruleSet.Status.AcceptedContent
+
+	editSource(`SecRule ARGS "@pm attack" "id:1,phase:1,deny,status:403"`)
+	degraded := apimeta.FindStatusCondition(ruleSet.Status.Conditions, conditionDegraded)
+	require.NotNil(t, degraded)
+	assert.Equal(t, ruleSetDegradedReasonInvalidRuleSet, degraded.Reason)
+	assert.Contains(t, degraded.Message, "@pm is not allowed by the cluster rule policy")
+	require.NotNil(t, ruleSet.Status.AcceptedContent)
+	assert.Equal(t, acceptedContent, *ruleSet.Status.AcceptedContent)
+
+	resourceVersion := ruleSet.ResourceVersion
+	_, err = reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: nn})
+	require.NoError(t, err)
+	require.NoError(t, k8sClient.Get(ctx, nn, ruleSet))
+	assert.Equal(t, resourceVersion, ruleSet.ResourceVersion, "reconciling a denied RuleSet again writes nothing")
+
+	editSource(accepted)
+	assert.True(t, isConditionCurrent(ruleSet.Status.Conditions, conditionReady, ruleSetReadyReasonRulesAccepted, ruleSet.Generation))
+	assert.False(t, apimeta.IsStatusConditionTrue(ruleSet.Status.Conditions, conditionDegraded))
+	assert.Equal(t, acceptedContent.ContentHash, ruleSet.Status.AcceptedContent.ContentHash)
 }
 
 func TestRuleSetReconciler_EmptyRulesPolicyAcceptance(t *testing.T) {

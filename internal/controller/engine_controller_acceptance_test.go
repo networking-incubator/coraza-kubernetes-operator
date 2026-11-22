@@ -37,6 +37,7 @@ import (
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/ecds/render"
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/rulesets/assemble"
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/rulesets/cache"
+	"github.com/networking-incubator/coraza-kubernetes-operator/internal/rulesets/validation"
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/xds"
 	"github.com/networking-incubator/coraza-kubernetes-operator/test/utils"
 )
@@ -725,6 +726,7 @@ func TestEngineReconciler_KeepsAcceptedConfigurationOnInvalidEdit(t *testing.T) 
 	tests := []struct {
 		name          string
 		invalidRules  string
+		policy        validation.RulePolicy
 		ruleSetReason string
 	}{
 		{
@@ -740,6 +742,12 @@ func TestEngineReconciler_KeepsAcceptedConfigurationOnInvalidEdit(t *testing.T) 
 			name:          "operator the gateway module does not support",
 			invalidRules:  `SecRule REMOTE_ADDR "@rbl sbl.spamhaus.org" "id:1,phase:1,deny"`,
 			ruleSetReason: "ReferencedRuleSourceInvalid",
+		},
+		{
+			name:          "edit the cluster rule policy denies",
+			invalidRules:  `SecRule ARGS "@pm attack" "id:1,phase:1,deny"`,
+			policy:        validation.RulePolicy{DeniedOperators: []string{"pm"}},
+			ruleSetReason: ruleSetDegradedReasonInvalidRuleSet,
 		},
 	}
 
@@ -782,10 +790,11 @@ func TestEngineReconciler_KeepsAcceptedConfigurationOnInvalidEdit(t *testing.T) 
 				Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(source)})
 			require.NoError(t, err)
 			_, err = (&RuleSetReconciler{
-				Client:   k8sClient,
-				Scheme:   scheme,
-				Recorder: utils.NewTestRecorder(),
-				Cache:    cache.NewRuleSetCache(),
+				Client:     k8sClient,
+				Scheme:     scheme,
+				Recorder:   utils.NewTestRecorder(),
+				Cache:      cache.NewRuleSetCache(),
+				RulePolicy: tt.policy,
 			}).Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(ruleSet)})
 			require.NoError(t, err)
 

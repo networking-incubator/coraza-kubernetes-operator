@@ -343,8 +343,8 @@ var requestBodyLimitPattern = regexp.MustCompile(`(?i)^secrequestbodylimit[ \t]+
 // enables body inspection only for "On".
 var requestBodyAccessPattern = regexp.MustCompile(`(?i)^secrequestbodyaccess[ \t]+(\S+)`)
 
-// maxRequestBodyLimit is envoy-coraza's WASM request-body ceiling.
-const maxRequestBodyLimit = 16 << 20
+// MaxRequestBodyLimit is envoy-coraza's WASM request-body ceiling.
+const MaxRequestBodyLimit = 16 << 20
 
 // checkHostDirective rejects directive values envoy-coraza's WASM host cannot
 // compile: any audit type other than Serial, and a request-body limit outside
@@ -366,8 +366,8 @@ func checkHostDirective(line string) error {
 	if limit <= 0 {
 		return errors.New("SecRequestBodyLimit must be positive")
 	}
-	if limit > maxRequestBodyLimit {
-		return fmt.Errorf("SecRequestBodyLimit %d exceeds the envoy-coraza WASM cap of %d bytes", limit, maxRequestBodyLimit)
+	if limit > MaxRequestBodyLimit {
+		return fmt.Errorf("SecRequestBodyLimit %d exceeds the envoy-coraza WASM cap of %d bytes", limit, MaxRequestBodyLimit)
 	}
 	return nil
 }
@@ -429,8 +429,8 @@ func ValidateAssembledBodyLimits(rules string, dataFiles map[string][]byte) erro
 		return errors.New("SecRequestBodyAccess On requires an explicit SecRequestBodyLimit at or below 16 MiB: envoy-coraza rejects the 128 MiB engine default")
 	}
 	bytes, err := strconv.ParseInt(limit, 10, 64)
-	if err != nil || bytes <= 0 || bytes > maxRequestBodyLimit {
-		return fmt.Errorf("SecRequestBodyLimit %s is not within the envoy-coraza range of (0, %d] bytes", limit, maxRequestBodyLimit)
+	if err != nil || bytes <= 0 || bytes > MaxRequestBodyLimit {
+		return fmt.Errorf("SecRequestBodyLimit %s is not within the envoy-coraza range of (0, %d] bytes", limit, MaxRequestBodyLimit)
 	}
 	return nil
 }

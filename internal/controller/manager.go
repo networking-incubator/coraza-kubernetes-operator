@@ -25,6 +25,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/metrics"
 
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/rulesets/cache"
+	"github.com/networking-incubator/coraza-kubernetes-operator/internal/rulesets/validation"
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/xds"
 )
 
@@ -58,6 +59,7 @@ type Deps struct {
 	ECDSConfig        ECDSConfig
 	AssetBaseURL      string
 	XDS               *xds.Dependencies
+	RulePolicy        validation.RulePolicy
 }
 
 // -----------------------------------------------------------------------------
@@ -72,11 +74,12 @@ func SetupControllers(mgr ctrl.Manager, deps Deps) error {
 	}
 
 	if err := (&RuleSetReconciler{
-		Client:   mgr.GetClient(),
-		Scheme:   mgr.GetScheme(),
-		Recorder: mgr.GetEventRecorder("ruleset-controller"),
-		Cache:    deps.RuleSetCache,
-		Metrics:  corazaMetrics,
+		Client:     mgr.GetClient(),
+		Scheme:     mgr.GetScheme(),
+		Recorder:   mgr.GetEventRecorder("ruleset-controller"),
+		Cache:      deps.RuleSetCache,
+		Metrics:    corazaMetrics,
+		RulePolicy: deps.RulePolicy,
 	}).SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("unable to create controller RuleSet: %w", err)
 	}

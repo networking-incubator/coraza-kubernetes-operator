@@ -34,6 +34,10 @@ The Coraza Kubernetes Operator Helm chart is located at `charts/coraza-kubernete
 | `istio.revision` | string | `""` | Istio control plane revision label. When empty, no revision label is set on managed resources. |
 | `xds.authFailureRate` | number | `10` | Failed ECDS authentication attempts allowed per second per peer IP. Successful authentication does not consume the bucket. |
 | `xds.authFailureBurst` | int | `1024` | Burst of failed ECDS authentication attempts per peer IP before the rate applies. |
+| `rulePolicy.deniedOperators` | list | `[]` | Operator names (without `@`) tenants may not use in new or changed rules. Matched case-insensitively; an alias is denied with its operator. An operator `envoy-coraza` does not support fails startup. |
+| `rulePolicy.deniedDirectives` | list | `[]` | Directive names tenants may not use in new or changed rules, and the `ctl` actions with the same effect. Matched case-insensitively; a directive `envoy-coraza` does not support fails startup. |
+| `rulePolicy.maxRequestBodyLimit` | int | `16777216` | Highest `SecRequestBodyLimit` accepted in new or changed rules, in bytes; at most 16777216, the `envoy-coraza` ceiling. |
+| `rulePolicy.responseBodyAccess` | string | `Allowed` | `Allowed` or `Denied`. `Denied` rejects `SecResponseBodyAccess On` in new or changed rules. |
 | `tls.existingSecret` | string | `""` | Existing Secret with `ca.crt`, `tls.crt`, and `tls.key` for the ECDS/WASM endpoint. When set, the chart creates no serving Secret. Required for GitOps and static-manifest installs. |
 | `tls.generate` | bool | `true` | Generate a self-signed serving certificate (365-day CA and leaf) when `tls.existingSecret` is empty. Reuse across upgrades via `lookup` works only with `helm install`/`helm upgrade`; set to `false` for `helm template` and GitOps pipelines (Argo CD, Flux), which cannot reuse the Secret and would regenerate the CA on every sync. |
 | `tls.sans` | list | `[]` | Extra DNS SANs added when the serving certificate is generated. Changing this list does not update a reused Secret; rotate the certificate and restart the operator before using a newly added hostname. |
@@ -45,6 +49,18 @@ The Coraza Kubernetes Operator Helm chart is located at `charts/coraza-kubernete
 | `tolerations` | list | `[]` | Tolerations. |
 | `affinity` | object | `{}` | Affinity rules. |
 | `topologySpreadConstraints` | list | `[]` | Topology spread constraints for pod scheduling. |
+
+## Cluster rule policy
+
+The `rulePolicy` values narrow what tenants may use in rule text. They apply to new or changed RuleSet content only; see [Rule Processing]({{< relref "../explanation/rule-processing#cluster-rule-policy" >}}).
+
+```yaml
+rulePolicy:
+  deniedOperators: [pmFromFile, ipMatchFromFile]
+  deniedDirectives: [SecRuleEngine]
+  maxRequestBodyLimit: 1048576
+  responseBodyAccess: Denied
+```
 
 ## Serving certificate and GitOps
 

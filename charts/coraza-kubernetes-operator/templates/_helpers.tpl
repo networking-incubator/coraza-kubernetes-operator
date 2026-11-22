@@ -48,3 +48,11 @@ Manager service FQDN (used in Istio resources and envoy cluster name).
 {{- define "coraza-operator.serviceFQDN" -}}
 {{- printf "%s.%s.svc.cluster.local" (include "coraza-operator.fullname" .) .Release.Namespace }}
 {{- end }}
+
+{{/*
+Renders "true" when the value is an integer: an int from --set, or a whole
+number from a values file.
+*/}}
+{{- define "coraza-operator.isInt" -}}
+{{- if or (kindIs "int64" .) (kindIs "int" .) (and (kindIs "float64" .) (eq . (float64 (int64 .)))) }}true{{ end }}
+{{- end }}

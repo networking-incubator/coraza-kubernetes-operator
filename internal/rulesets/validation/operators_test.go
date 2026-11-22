@@ -114,7 +114,8 @@ func TestUnsupportedOperatorsAreRejected(t *testing.T) {
 }
 
 // TestSupportedOperatorsCompile compiles a CRS-shaped rule set that uses every
-// operator envoy-coraza supports, so the unsupported list removes nothing else.
+// operator envoy-coraza supports, so the unsupported list removes nothing else
+// and every name the cluster rule policy accepts is one Coraza registers.
 func TestSupportedOperatorsCompile(t *testing.T) {
 	// SecDataset blocks are backtick-quoted, so they cannot sit in the raw string.
 	rules := "SecDataset words `\nattack\n`\nSecDataset nets `\n10.0.0.0/8\n`\n" + `
@@ -163,6 +164,10 @@ SecRule REQUEST_URI "/admin" "id:26,phase:1,pass"
 	}
 
 	require.NoError(t, ValidateRuleSourceRules(rules, "crs-like", dataFiles))
+	// The cluster rule policy accepts exactly these names.
+	for _, name := range supportedOperators {
+		assert.Regexp(t, `"!?@`+name+`[ "]`, rules, "the rule set must use @%s", name)
+	}
 }
 
 // TestUnsupportedOperatorBehindMissingFile covers a RuleSource whose per-source
