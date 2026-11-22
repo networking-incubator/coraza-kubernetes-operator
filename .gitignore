@@ -39,6 +39,7 @@ dist/
 # documentation
 !README.md
 !CLAUDE.md
+!AGENTS.md
 !CODE_OF_CONDUCT.md
 !CONTRIBUTING.md
 !DEVELOPMENT.md

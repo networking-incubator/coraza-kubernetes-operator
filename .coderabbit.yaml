@@ -1,0 +1,43 @@
+# CodeRabbit configuration. AGENTS.md holds the project rules for every coding
+# agent; CodeRabbit applies it as review guidelines.
+knowledge_base:
+  code_guidelines:
+    enabled: true
+    filePatterns:
+      - "**/AGENTS.md"
+
+reviews:
+  path_instructions:
+    - path: "{Makefile,Dockerfile}"
+      instructions: |
+        The manager must be built with the build tag
+        coraza.disabled_operators.validateSchema, next to no_fs_access and
+        coraza.no_memoize (see "Rules that must not be relaxed" in AGENTS.md).
+        Flag any change that removes the tag, drops it from one of the two
+        files, or adds a manager build without it, and request changes.
+    - path: "internal/rulesets/validation/**"
+      instructions: |
+        operators.go refuses the operators envoy-coraza does not provide
+        (inspectFile, rbl, validateSchema). Flag any change that removes an
+        entry, re-registers the real operator, or lets a flag, value or policy
+        re-enable one. Flag any change that skips, removes or loosens
+        TestManagerBuildTags or the unsupported-operator and gateway-parity
+        tests, and request changes.
+  pre_merge_checks:
+    custom_checks:
+      - name: "validateSchema stays disabled"
+        mode: "error"
+        instructions: |
+          Fail if the pull request does any of the following:
+          - removes the build tag coraza.disabled_operators.validateSchema from
+            the manager build in Makefile or in Dockerfile, or adds a manager
+            build without it;
+          - removes inspectFile, rbl or validateSchema from the refused
+            operators in internal/rulesets/validation/operators.go, registers
+            the real operator for one of them, or adds a flag, Helm value or
+            policy option that re-enables one;
+          - deletes, skips or weakens TestManagerBuildTags or the
+            unsupported-operator tests in internal/rulesets/validation/;
+          - removes or relaxes the "Rules that must not be relaxed" section of
+            AGENTS.md.
+          Pass otherwise.
