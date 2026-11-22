@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -28,6 +29,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	wafv1alpha1 "github.com/networking-incubator/coraza-kubernetes-operator/api/v1alpha1"
 	"github.com/networking-incubator/coraza-kubernetes-operator/test/utils"
@@ -71,6 +73,46 @@ func TestRuleSourceReconciler_InvalidRules(t *testing.T) {
 	assert.Equal(t, metav1.ConditionTrue, deg.Status)
 	assert.Equal(t, ruleSourceDegradedReasonInvalidRules, deg.Reason)
 	assert.Equal(t, float64(1), gatherValidationCounter(t, reg, "invalid"))
+}
+
+// TestRuleSourceReconciler_GatewayUnsupportedRules covers rules the gateway
+// module cannot load as written: the RuleSource reports InvalidRules.
+func TestRuleSourceReconciler_GatewayUnsupportedRules(t *testing.T) {
+	tests := []struct {
+		name    string
+		rules   string
+		wantMsg string
+	}{
+		{
+			name:    "operator the gateway module does not support",
+			rules:   `SecRule REMOTE_ADDR "@rbl sbl.spamhaus.org" "id:1,phase:1,deny"`,
+			wantMsg: "@rbl is not supported by the envoy-coraza plugin",
+		},
+		{
+			name:    "non-ASCII directive name",
+			rules:   "SecRuleEngİne Off",
+			wantMsg: `directive "SecRuleEngİne" is not supported`,
+		},
+	}
+
+	for i, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			rs := utils.NewTestRuleSource(fmt.Sprintf("rs-ctrl-gateway-%d", i), testNamespace, tt.rules)
+			require.NoError(t, k8sClient.Create(ctx, rs))
+			t.Cleanup(func() { _ = k8sClient.Delete(ctx, rs) })
+
+			rec := &RuleSourceReconciler{Client: k8sClient, Recorder: utils.NewTestRecorder()}
+			_, err := rec.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(rs)})
+			require.NoError(t, err)
+
+			require.NoError(t, k8sClient.Get(ctx, client.ObjectKeyFromObject(rs), rs))
+			deg := apimeta.FindStatusCondition(rs.Status.Conditions, conditionDegraded)
+			require.NotNil(t, deg)
+			assert.Equal(t, ruleSourceDegradedReasonInvalidRules, deg.Reason)
+			assert.Contains(t, deg.Message, tt.wantMsg)
+		})
+	}
 }
 
 func TestRuleSourceReconciler_AuditLogTargets(t *testing.T) {
@@ -316,4 +358,31 @@ func TestRuleSourceReconciler_ValidationSkipped(t *testing.T) {
 	require.NotNil(t, ready)
 	assert.Equal(t, metav1.ConditionTrue, ready.Status)
 	assert.Equal(t, ruleSourceReadyReasonValidationSkipped, ready.Reason)
+}
+
+// TestRuleSourceReconciler_SkipAnnotationRemoved covers removing the skip
+// annotation without a spec change: the rules are validated.
+func TestRuleSourceReconciler_SkipAnnotationRemoved(t *testing.T) {
+	ctx := context.Background()
+	rs := utils.NewTestRuleSource("rs-ctrl-unskip", testNamespace, `SecDefaultActionXPTO "INVALID"`)
+	rs.Annotations = map[string]string{wafv1alpha1.AnnotationSkipValidation: "false"}
+	require.NoError(t, k8sClient.Create(ctx, rs))
+	t.Cleanup(func() { _ = k8sClient.Delete(ctx, rs) })
+
+	rec := &RuleSourceReconciler{Client: k8sClient, Recorder: utils.NewTestRecorder()}
+	req := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(rs)}
+	_, err := rec.Reconcile(ctx, req)
+	require.NoError(t, err)
+	require.NoError(t, k8sClient.Get(ctx, req.NamespacedName, rs))
+	require.True(t, isConditionCurrent(rs.Status.Conditions, conditionReady, ruleSourceReadyReasonValidationSkipped, rs.Generation))
+
+	generation := rs.Generation
+	rs.Annotations = nil
+	require.NoError(t, k8sClient.Update(ctx, rs))
+	require.NoError(t, k8sClient.Get(ctx, req.NamespacedName, rs))
+	require.Equal(t, generation, rs.Generation, "removing the annotation does not change the spec")
+	_, err = rec.Reconcile(ctx, req)
+	require.NoError(t, err)
+	require.NoError(t, k8sClient.Get(ctx, req.NamespacedName, rs))
+	assert.True(t, isConditionCurrent(rs.Status.Conditions, conditionDegraded, ruleSourceDegradedReasonInvalidRules, rs.Generation))
 }

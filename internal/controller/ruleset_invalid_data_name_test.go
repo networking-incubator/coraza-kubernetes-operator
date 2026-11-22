@@ -22,6 +22,7 @@ import (
 
 	"github.com/go-logr/logr"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
@@ -304,6 +305,158 @@ func TestLegacyAcceptedContentIsRevalidatedOnUpgrade(t *testing.T) {
 			progressing := apimeta.FindStatusCondition(updatedEngine.Status.Conditions, conditionProgressing)
 			require.NotNil(t, progressing)
 			assert.Equal(t, reasonAwaitingRuleSetAcceptance, progressing.Reason)
+		})
+	}
+}
+
+// TestAcceptedContentIsCheckedForGatewayParity covers content an older build
+// accepted that envoy-coraza reads differently from Coraza. The accepted fast
+// path runs the gateway-parity checks: such content becomes Degraded with
+// InvalidRuleSet while its accepted record and the Engine's accepted
+// configuration are kept, a repeat reconcile writes nothing, and content that
+// passes the checks stays Ready.
+func TestAcceptedContentIsCheckedForGatewayParity(t *testing.T) {
+	tests := []struct {
+		name    string
+		rules   string
+		wantErr string
+	}{
+		{name: "operator with leading whitespace", rules: `SecRule ARGS " @contains evil" "id:1,phase:1,deny"`, wantErr: "must not start with whitespace"},
+		{name: "content that passes the checks", rules: `SecRule ARGS "@contains evil" "id:1,phase:1,deny"`},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+
+			source := utils.NewTestRuleSource("parity-accepted-source", testNamespace, tc.rules)
+			apimeta.SetStatusCondition(&source.Status.Conditions, metav1.Condition{
+				Type:               conditionReady,
+				Status:             metav1.ConditionTrue,
+				ObservedGeneration: source.Generation,
+				Reason:             ruleSourceReadyReasonValidated,
+				LastTransitionTime: metav1.Now(),
+			})
+			ruleset := utils.NewTestRuleSet(utils.RuleSetOptions{
+				Name:      "parity-accepted-ruleset",
+				Namespace: testNamespace,
+				Sources:   []wafv1alpha1.SourceReference{{Name: source.Name}},
+			})
+			ruleset.UID = "parity-accepted-ruleset-uid"
+
+			c := fake.NewClientBuilder().
+				WithScheme(scheme).
+				WithStatusSubresource(&wafv1alpha1.RuleSet{}, &wafv1alpha1.Engine{}).
+				WithObjects(ruleset, source).
+				Build()
+
+			// Record the content as accepted, as an older build left it.
+			var current wafv1alpha1.RuleSet
+			require.NoError(t, c.Get(ctx, client.ObjectKeyFromObject(ruleset), &current))
+			inputs, err := loadRuleSetInputs(ctx, c, &current)
+			require.NoError(t, err)
+			content, err := assemble.Assemble(inputs)
+			require.NoError(t, err)
+			hash, err := render.RuleSetContentHash(content)
+			require.NoError(t, err)
+			patch := client.MergeFrom(current.DeepCopy())
+			current.Status.AcceptedContent = &wafv1alpha1.RuleSetAcceptedContent{
+				ObservedGeneration: current.Generation,
+				ContentHash:        hash,
+			}
+			apimeta.SetStatusCondition(&current.Status.Conditions, metav1.Condition{
+				Type:               conditionReady,
+				Status:             metav1.ConditionTrue,
+				ObservedGeneration: current.Generation,
+				Reason:             ruleSetReadyReasonRulesAccepted,
+				LastTransitionTime: metav1.Now(),
+			})
+			require.NoError(t, c.Status().Patch(ctx, &current, patch))
+			acceptedContent := *current.Status.AcceptedContent
+
+			engine := utils.NewTestEngine(utils.EngineOptions{
+				Name:        "parity-accepted-engine",
+				Namespace:   testNamespace,
+				GatewayName: "parity-accepted-gw",
+				RuleSetName: ruleset.Name,
+				WasmURL:     utils.DefaultTestWasmURL,
+				WasmSHA256:  utils.DefaultTestWasmSHA256,
+			})
+			engine.UID = "parity-accepted-engine-uid"
+			engine.Status = &wafv1alpha1.EngineStatus{}
+			require.NoError(t, c.Create(ctx, engine))
+			engineReconciler := &EngineReconciler{
+				Client:       c,
+				Scheme:       scheme,
+				Recorder:     utils.NewTestRecorder(),
+				assetBaseURL: testAssetBaseURL,
+				xdsConfig:    testXDSConfig(),
+			}
+			engineReq := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(engine)}
+			_, err = engineReconciler.provisionWasmDriver(ctx, logr.Discard(), engineReq, engine)
+			require.NoError(t, err)
+			var published wafv1alpha1.Engine
+			require.NoError(t, c.Get(ctx, engineReq.NamespacedName, &published))
+			require.NotNil(t, published.Status.AcceptedConfiguration, "precondition: the Engine published the accepted content")
+			acceptedConfiguration := *published.Status.AcceptedConfiguration
+
+			metrics, err := NewCorazaMetrics(prometheus.NewRegistry())
+			require.NoError(t, err)
+			ruleSetReconciler := &RuleSetReconciler{
+				Client:   c,
+				Scheme:   scheme,
+				Recorder: utils.NewTestRecorder(),
+				Metrics:  metrics,
+			}
+			req := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(ruleset)}
+			_, err = ruleSetReconciler.Reconcile(ctx, req)
+			require.NoError(t, err)
+
+			var updated wafv1alpha1.RuleSet
+			require.NoError(t, c.Get(ctx, req.NamespacedName, &updated))
+			require.NotNil(t, updated.Status.AcceptedContent, "the accepted record is kept")
+			assert.Equal(t, acceptedContent, *updated.Status.AcceptedContent)
+			if tc.wantErr == "" {
+				assert.Equal(t, current.ResourceVersion, updated.ResourceVersion, "content that passes the checks takes the accepted fast path")
+				assert.True(t, isConditionCurrent(updated.Status.Conditions, conditionReady, ruleSetReadyReasonRulesAccepted, updated.Generation))
+				return
+			}
+			degraded := apimeta.FindStatusCondition(updated.Status.Conditions, conditionDegraded)
+			require.NotNil(t, degraded)
+			assert.Equal(t, metav1.ConditionTrue, degraded.Status)
+			assert.Equal(t, ruleSetDegradedReasonInvalidRuleSet, degraded.Reason)
+			assert.Contains(t, degraded.Message, tc.wantErr)
+			assert.False(t, apimeta.IsStatusConditionTrue(updated.Status.Conditions, conditionReady))
+			assert.Equal(t, 1.0, testutil.ToFloat64(metrics.rulesetValidations.WithLabelValues(testNamespace, "invalid")))
+
+			// A repeat reconcile writes nothing and counts nothing.
+			_, err = ruleSetReconciler.Reconcile(ctx, req)
+			require.NoError(t, err)
+			var again wafv1alpha1.RuleSet
+			require.NoError(t, c.Get(ctx, req.NamespacedName, &again))
+			assert.Equal(t, updated.ResourceVersion, again.ResourceVersion)
+			assert.Equal(t, 1.0, testutil.ToFloat64(metrics.rulesetValidations.WithLabelValues(testNamespace, "invalid")))
+
+			// A new generation with the same content goes through the full
+			// validation path, which also keeps the accepted record.
+			again.Generation++
+			require.NoError(t, c.Update(ctx, &again))
+			_, err = ruleSetReconciler.Reconcile(ctx, req)
+			require.NoError(t, err)
+			var bumped wafv1alpha1.RuleSet
+			require.NoError(t, c.Get(ctx, req.NamespacedName, &bumped))
+			require.Equal(t, again.Generation, bumped.Generation, "precondition: the generation changed")
+			assert.True(t, isConditionCurrent(bumped.Status.Conditions, conditionDegraded, ruleSetDegradedReasonInvalidRuleSet, bumped.Generation))
+			require.NotNil(t, bumped.Status.AcceptedContent, "the accepted record is kept on the full validation path")
+			assert.Equal(t, acceptedContent, *bumped.Status.AcceptedContent)
+
+			// The Engine keeps the configuration it accepted.
+			_, err = engineReconciler.provisionWasmDriver(ctx, logr.Discard(), engineReq, &published)
+			require.NoError(t, err)
+			var engineAfter wafv1alpha1.Engine
+			require.NoError(t, c.Get(ctx, engineReq.NamespacedName, &engineAfter))
+			require.NotNil(t, engineAfter.Status.AcceptedConfiguration)
+			assert.Equal(t, acceptedConfiguration, *engineAfter.Status.AcceptedConfiguration)
 		})
 	}
 }

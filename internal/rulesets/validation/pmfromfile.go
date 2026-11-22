@@ -32,22 +32,20 @@ import (
 // ("msg:'use @pmf foo'") is not scanned.
 var pmFromFilePattern = regexp.MustCompile(`(?i)"(!?@(?:pmFromFile|pmf))[ \t]+([^"\n]*)"`)
 
-// joinActiveRuleLines removes SecLang comment lines and joins trailing-backslash
-// continuations exactly like Coraza's parser, so a continued @pmf argument
-// cannot hide from the scan.
+// joinActiveRuleLines returns the directives of rule text one per line, each
+// ending with a newline, as scanDirectives assembles them: comments dropped,
+// continuations joined, so a continued @pmf argument is read as one directive,
+// and SecDataset items left out. A continuation left open at the end is kept
+// without a newline.
 func joinActiveRuleLines(rules string) string {
+	lines, dangling, _ := scanDirectives(rules)
 	var b strings.Builder
-	for line := range strings.SplitSeq(rules, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		continued := strings.HasSuffix(line, `\`)
-		b.WriteString(strings.TrimSuffix(line, `\`))
-		if !continued {
-			b.WriteByte('\n')
-		}
+	b.Grow(len(rules))
+	for _, line := range lines {
+		b.WriteString(line)
+		b.WriteByte('\n')
 	}
+	b.WriteString(dangling)
 	return b.String()
 }
 

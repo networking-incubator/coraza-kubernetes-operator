@@ -719,71 +719,94 @@ func TestEngineReconciler_KeepsAcceptedConfigurationWhenRuleDataIsGone(t *testin
 }
 
 // TestEngineReconciler_KeepsAcceptedConfigurationOnInvalidEdit covers an
-// ordinary aggregate-validation failure: the last-known-good content keeps
-// serving, unlike content the delivery contract rejects.
+// ordinary validation failure: the last-known-good content keeps serving,
+// unlike content the delivery contract rejects.
 func TestEngineReconciler_KeepsAcceptedConfigurationOnInvalidEdit(t *testing.T) {
-	ctx := context.Background()
-	ns := setupTestNamespace(t, ctx)
-	createTestGateway(t, ctx, k8sClient, "invalid-edit-gw", ns)
+	tests := []struct {
+		name          string
+		invalidRules  string
+		ruleSetReason string
+	}{
+		{
+			// A missing Include is deferred per RuleSource and only fails
+			// aggregate validation.
+			name:          "missing include",
+			invalidRules:  "Include absent.conf",
+			ruleSetReason: ruleSetDegradedReasonInvalidRuleSet,
+		},
+		{
+			// The RuleSource rejects an operator the gateway module does not
+			// support, so the RuleSet reports the invalid source.
+			name:          "operator the gateway module does not support",
+			invalidRules:  `SecRule REMOTE_ADDR "@rbl sbl.spamhaus.org" "id:1,phase:1,deny"`,
+			ruleSetReason: "ReferencedRuleSourceInvalid",
+		},
+	}
 
-	source := utils.NewTestRuleSource("invalid-edit-src", ns, testAcceptRuleText)
-	require.NoError(t, k8sClient.Create(ctx, source))
-	ruleSet := utils.NewTestRuleSet(utils.RuleSetOptions{
-		Name:      "invalid-edit-ruleset",
-		Namespace: ns,
-		Sources:   []wafv1alpha1.SourceReference{{Name: source.Name}},
-	})
-	require.NoError(t, k8sClient.Create(ctx, ruleSet))
-	acceptTestRuleSet(t, ctx, ruleSet, testAcceptRuleText)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			ns := setupTestNamespace(t, ctx)
+			createTestGateway(t, ctx, k8sClient, "invalid-edit-gw", ns)
 
-	engine := utils.NewTestEngine(utils.EngineOptions{
-		Name:        "invalid-edit-engine",
-		Namespace:   ns,
-		GatewayName: "invalid-edit-gw",
-		RuleSetName: ruleSet.Name,
-		WasmURL:     utils.DefaultTestWasmURL,
-		WasmSHA256:  utils.DefaultTestWasmSHA256,
-	})
-	require.NoError(t, k8sClient.Create(ctx, engine))
+			source := utils.NewTestRuleSource("invalid-edit-src", ns, testAcceptRuleText)
+			require.NoError(t, k8sClient.Create(ctx, source))
+			ruleSet := utils.NewTestRuleSet(utils.RuleSetOptions{
+				Name:      "invalid-edit-ruleset",
+				Namespace: ns,
+				Sources:   []wafv1alpha1.SourceReference{{Name: source.Name}},
+			})
+			require.NoError(t, k8sClient.Create(ctx, ruleSet))
+			acceptTestRuleSet(t, ctx, ruleSet, testAcceptRuleText)
 
-	reconciler := newAcceptedEngineTestReconciler()
-	reconcileEngine(t, ctx, reconciler, engine)
-	request := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(engine)}
-	var accepted wafv1alpha1.Engine
-	require.NoError(t, k8sClient.Get(ctx, request.NamespacedName, &accepted))
-	require.NotNil(t, accepted.Status.AcceptedConfiguration)
+			engine := utils.NewTestEngine(utils.EngineOptions{
+				Name:        "invalid-edit-engine",
+				Namespace:   ns,
+				GatewayName: "invalid-edit-gw",
+				RuleSetName: ruleSet.Name,
+				WasmURL:     utils.DefaultTestWasmURL,
+				WasmSHA256:  utils.DefaultTestWasmSHA256,
+			})
+			require.NoError(t, k8sClient.Create(ctx, engine))
 
-	// A missing Include is deferred per RuleSource and only fails aggregate
-	// validation, so the RuleSet becomes Degraded with InvalidRuleSet.
-	source.Spec.Rules = "Include absent.conf"
-	require.NoError(t, k8sClient.Update(ctx, source))
-	_, err := (&RuleSourceReconciler{Client: k8sClient, Recorder: utils.NewTestRecorder()}).
-		Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(source)})
-	require.NoError(t, err)
-	_, err = (&RuleSetReconciler{
-		Client:   k8sClient,
-		Scheme:   scheme,
-		Recorder: utils.NewTestRecorder(),
-		Cache:    cache.NewRuleSetCache(),
-	}).Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(ruleSet)})
-	require.NoError(t, err)
+			reconciler := newAcceptedEngineTestReconciler()
+			reconcileEngine(t, ctx, reconciler, engine)
+			request := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(engine)}
+			var accepted wafv1alpha1.Engine
+			require.NoError(t, k8sClient.Get(ctx, request.NamespacedName, &accepted))
+			require.NotNil(t, accepted.Status.AcceptedConfiguration)
 
-	var degradedRuleSet wafv1alpha1.RuleSet
-	require.NoError(t, k8sClient.Get(ctx, client.ObjectKeyFromObject(ruleSet), &degradedRuleSet))
-	degradedCondition := apimeta.FindStatusCondition(degradedRuleSet.Status.Conditions, conditionDegraded)
-	require.NotNil(t, degradedCondition)
-	require.Equal(t, ruleSetDegradedReasonInvalidRuleSet, degradedCondition.Reason)
+			source.Spec.Rules = tt.invalidRules
+			require.NoError(t, k8sClient.Update(ctx, source))
+			_, err := (&RuleSourceReconciler{Client: k8sClient, Recorder: utils.NewTestRecorder()}).
+				Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(source)})
+			require.NoError(t, err)
+			_, err = (&RuleSetReconciler{
+				Client:   k8sClient,
+				Scheme:   scheme,
+				Recorder: utils.NewTestRecorder(),
+				Cache:    cache.NewRuleSetCache(),
+			}).Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(ruleSet)})
+			require.NoError(t, err)
 
-	_, err = reconciler.Reconcile(ctx, request)
-	require.NoError(t, err)
+			var degradedRuleSet wafv1alpha1.RuleSet
+			require.NoError(t, k8sClient.Get(ctx, client.ObjectKeyFromObject(ruleSet), &degradedRuleSet))
+			degradedCondition := apimeta.FindStatusCondition(degradedRuleSet.Status.Conditions, conditionDegraded)
+			require.NotNil(t, degradedCondition)
+			require.Equal(t, tt.ruleSetReason, degradedCondition.Reason)
 
-	var updated wafv1alpha1.Engine
-	require.NoError(t, k8sClient.Get(ctx, request.NamespacedName, &updated))
-	assert.NotNil(t, updated.Status.AcceptedConfiguration,
-		"an ordinary invalid edit must keep the last-known-good configuration")
-	degraded := apimeta.FindStatusCondition(updated.Status.Conditions, conditionDegraded)
-	require.NotNil(t, degraded)
-	assert.Equal(t, "RuleSetDegraded", degraded.Reason)
+			_, err = reconciler.Reconcile(ctx, request)
+			require.NoError(t, err)
+
+			var updated wafv1alpha1.Engine
+			require.NoError(t, k8sClient.Get(ctx, request.NamespacedName, &updated))
+			assert.Equal(t, accepted.Status.AcceptedConfiguration, updated.Status.AcceptedConfiguration,
+				"an ordinary invalid edit must keep the last-known-good configuration")
+			degraded := apimeta.FindStatusCondition(updated.Status.Conditions, conditionDegraded)
+			require.NotNil(t, degraded)
+			assert.Equal(t, "RuleSetDegraded", degraded.Reason)
+		})
+	}
 }
 
 // TestEngineReconciler_ClearsAcceptedConfigurationWhenRecreatedRuleSetIsDegraded

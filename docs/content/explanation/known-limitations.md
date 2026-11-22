@@ -43,6 +43,12 @@ Unsupported rules are classified into two tiers:
 
 Both tiers are rejected by default.
 
+## Unsupported Operators
+
+`envoy-coraza` is built without the `@inspectFile`, `@rbl`, and `@validateSchema`
+operators, so the operator rejects any rule that uses them. See
+[Rule text references]({{< relref "../reference/ecds-plugin-contract#rule-text-references" >}}).
+
 ## Enhanced Security (45 tests)
 
 These tests fail because Envoy blocks or sanitizes attacks before they reach the WAF. This represents defense-in-depth, not a security gap.

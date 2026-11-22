@@ -195,6 +195,22 @@ func (r *RuleSetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	alreadyAccepted := isConditionCurrent(ruleset.Status.Conditions, conditionReady, ruleSetReadyReasonRulesAccepted, ruleset.Generation) &&
 		isRuleSetContentAccepted(&ruleset, contentHash)
 	if alreadyAccepted {
+		// Accepted content is checked on every reconcile against what
+		// envoy-coraza reads differently from Coraza, so content an earlier
+		// build accepted stops reporting Ready. As with unsupported rules, the
+		// accepted record is kept, and the Engine keeps its accepted
+		// configuration.
+		parityStart := time.Now()
+		if parityErr := validation.CheckGatewayParity(content.Rules, content.DataFiles); parityErr != nil {
+			if err := r.markParityInvalid(ctx, log, req, &ruleset, parityErr); !errors.Is(err, errRuleSetRulesInvalid) {
+				return ctrl.Result{}, err
+			}
+			if !alreadyInvalid {
+				r.Metrics.IncRuleSetValidation(req.Namespace, "invalid")
+				r.Metrics.ObserveRuleSetValidation(req.Namespace, "invalid", assembleDur+time.Since(parityStart))
+			}
+			return ctrl.Result{}, nil
+		}
 		// Annotation-only reconciles (e.g. removing skip-unsupported-rules-check) do not
 		// bump generation; still re-run unsupported-rule policy before skipping work.
 		if ruleset.Annotations[wafv1alpha1.AnnotationSkipUnsupportedRulesCheck] != "true" {
@@ -211,8 +227,7 @@ func (r *RuleSetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 
 	logInfo(log, req, "RuleSet", "Validating aggregated rules")
 
-	conf := validation.BuildWAFConfig(content.Rules, content.DataFiles)
-	corazaDur, err := r.validateAggregatedRules(ctx, log, req, &ruleset, contentHash, conf)
+	corazaDur, err := r.validateAggregatedRules(ctx, log, req, &ruleset, contentHash, content)
 	if err != nil {
 		if errors.Is(err, errRuleSetRulesInvalid) {
 			if !alreadyInvalid {

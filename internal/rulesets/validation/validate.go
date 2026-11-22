@@ -84,15 +84,28 @@ func CloseWAF(waf coraza.WAF) {
 // including file's directory.
 func validationStubTargets(rules string, dataFiles map[string][]byte) []string {
 	var targets []string
-	queue := []struct{ name, text string }{{text: rules}}
+	_ = forEachRuleText(rules, dataFiles, func(_, text string) error {
+		targets = append(targets, crsIncludeTargets(text)...)
+		targets = append(targets, embeddedDataTargets(text)...)
+		return nil
+	})
+	return targets
+}
+
+// forEachRuleText calls fn on the rule text and then on every RuleData file it
+// Includes, once each, resolving a nested Include relative to the including
+// file's directory as Coraza does. name is empty for the rule text itself.
+func forEachRuleText(rules string, dataFiles map[string][]byte, fn func(name, text string) error) error {
 	seen := make(map[string]struct{}, len(dataFiles))
+	queue := []struct{ name, text string }{{text: rules}}
 	for len(queue) > 0 {
 		current := queue[0]
 		queue = queue[1:]
-		targets = append(targets, crsIncludeTargets(current.text)...)
-		targets = append(targets, embeddedDataTargets(current.text)...)
-		for _, name := range ruleDataIncludeNames(current.text) {
-			name = path.Join(path.Dir(current.name), name)
+		if err := fn(current.name, current.text); err != nil {
+			return err
+		}
+		for _, include := range ruleDataIncludeNames(current.text) {
+			name := path.Join(path.Dir(current.name), include)
 			if _, ok := seen[name]; ok {
 				continue
 			}
@@ -104,7 +117,7 @@ func validationStubTargets(rules string, dataFiles map[string][]byte) []string {
 			queue = append(queue, struct{ name, text string }{name: name, text: string(data)})
 		}
 	}
-	return targets
+	return nil
 }
 
 // includeTarget returns the Include argument exactly as Coraza's evaluateLine
@@ -570,6 +583,9 @@ func ValidateRuleSourceRules(rules, ruleSourceName string, dataFiles map[string]
 	// The guard is cheap and applies to patch-only fragments too: they are
 	// skipped by Coraza, not by the directive and Include rules.
 	if err := ValidateIncludes(rules, dataFiles); err != nil {
+		return fmt.Errorf("RuleSource %s doesn't contain valid rules: %w", ruleSourceName, err)
+	}
+	if err := CheckDirectiveSyntax(rules, dataFiles); err != nil {
 		return fmt.Errorf("RuleSource %s doesn't contain valid rules: %w", ruleSourceName, err)
 	}
 	if IsPatchOnlyFragment(rules) {
