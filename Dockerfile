@@ -19,7 +19,9 @@ COPY . .
 # coraza.no_memoize: validation compiles untrusted rule text, and a failed parse
 # returns a nil WAF that cannot release the memoizer it registered, so it leaks.
 # The operator runs no WAF transactions, so nothing benefits from the cache.
-RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} go build -a -o manager -tags 'no_fs_access coraza.no_memoize' ./cmd/manager
+# coraza.disabled_operators.validateSchema: envoy-coraza is built without this
+# operator, so the operator does not compile it either.
+RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} go build -a -o manager -tags 'no_fs_access coraza.no_memoize coraza.disabled_operators.validateSchema' ./cmd/manager
 
 # ------------------------------------------------------------------------------
 # Final

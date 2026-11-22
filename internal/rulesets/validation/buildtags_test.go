@@ -25,7 +25,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestManagerBuildDisablesMemoizer guards the shipped manager build tags.
+// TestManagerBuildTags guards the shipped manager build tags.
 // coraza.NewWAF registers its memoizer before parsing and returns a nil WAF on a
 // parse error, so CloseWAF cannot release it: every failed validation of new
 // content leaks its owner, which a tenant can trigger repeatedly. The tag
@@ -33,7 +33,10 @@ import (
 // operator runs no WAF transactions, so nothing loses caching. Dropping the tag
 // would silently reinstate the leak; it is asserted here because a build does
 // not fail on an unknown tag.
-func TestManagerBuildDisablesMemoizer(t *testing.T) {
+//
+// coraza.disabled_operators.validateSchema is asserted too: envoy-coraza is
+// built without this operator, so the operator must not compile it either.
+func TestManagerBuildTags(t *testing.T) {
 	for _, file := range []string{"../../../Dockerfile", "../../../Makefile"} {
 		raw, err := os.ReadFile(file)
 		require.NoError(t, err)
@@ -44,7 +47,9 @@ func TestManagerBuildDisablesMemoizer(t *testing.T) {
 				continue
 			}
 			found++
-			assert.Contains(t, line, "coraza.no_memoize", "%s must build the manager with coraza.no_memoize: %s", file, line)
+			for _, tag := range []string{"coraza.no_memoize", "coraza.disabled_operators.validateSchema"} {
+				assert.Contains(t, line, tag, "%s must build the manager with %s: %s", file, tag, line)
+			}
 		}
 		assert.NotZero(t, found, "%s must build the manager", file)
 	}
