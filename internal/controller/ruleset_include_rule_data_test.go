@@ -136,8 +136,9 @@ func TestIncludedRuleDataIsAcceptedAndDelivered(t *testing.T) {
 // TestInvalidIncludedRuleDataIsDegraded covers the aggregate path: the
 // per-source validation defers an included RuleData name, so the RuleSet
 // validation is the one that must report a missing file, a rule in it the
-// gateway module cannot load, or rule text Coraza and the gateway module read
-// differently. The status message keeps only the basename. preValidated cases
+// gateway module cannot load, rule text Coraza and the gateway module read
+// differently, or what the cluster rule policy denies. The status message
+// keeps only the basename. preValidated cases
 // are ones the RuleSource rejects too, so they start from a RuleSource a
 // status already marks Validated.
 func TestInvalidIncludedRuleDataIsDegraded(t *testing.T) {
@@ -147,6 +148,7 @@ func TestInvalidIncludedRuleDataIsDegraded(t *testing.T) {
 		rules        string
 		files        map[string]string
 		preValidated bool
+		policy       validation.RulePolicy
 		wantMsg      string
 		// writesDebugLog marks a case that checks the rejected file is never
 		// compiled; it uses a debug log path.
@@ -200,6 +202,13 @@ func TestInvalidIncludedRuleDataIsDegraded(t *testing.T) {
 			preValidated: true,
 			wantMsg:      "a backtick block is only supported to list SecDataset items",
 		},
+		{
+			name:    "directive the cluster rule policy denies",
+			rules:   "Include extra.conf",
+			files:   map[string]string{"extra.conf": "SecResponseBodyAccess On\n"},
+			policy:  validation.RulePolicy{DenyResponseBodyAccess: true},
+			wantMsg: "included RuleData file extra.conf: SecResponseBodyAccess On is not allowed by the cluster rule policy",
+		},
 	}
 
 	for _, tt := range tests {
@@ -237,10 +246,11 @@ func TestInvalidIncludedRuleDataIsDegraded(t *testing.T) {
 			metrics, err := NewCorazaMetrics(prometheus.NewRegistry())
 			require.NoError(t, err)
 			ruleSetReconciler := &RuleSetReconciler{
-				Client:   c,
-				Scheme:   scheme,
-				Recorder: utils.NewTestRecorder(),
-				Metrics:  metrics,
+				Client:     c,
+				Scheme:     scheme,
+				Recorder:   utils.NewTestRecorder(),
+				Metrics:    metrics,
+				RulePolicy: tt.policy,
 			}
 			req := ctrl.Request{NamespacedName: types.NamespacedName{Name: ruleset.Name, Namespace: ruleset.Namespace}}
 			_, err = ruleSetReconciler.Reconcile(ctx, req)

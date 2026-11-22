@@ -18,7 +18,9 @@ package main
 
 import (
 	"crypto/tls"
+	"flag"
 	"path/filepath"
+	"strconv"
 	"testing"
 
 	"github.com/go-logr/logr"
@@ -28,6 +30,7 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	ctrlcache "sigs.k8s.io/controller-runtime/pkg/cache"
 
+	"github.com/networking-incubator/coraza-kubernetes-operator/internal/rulesets/validation"
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/xds"
 )
 
@@ -170,4 +173,45 @@ func TestBuildMetricsServerOptions_SelfSignedWhenNoCert(t *testing.T) {
 	assert.Empty(t, opts.CertDir)
 	assert.Empty(t, opts.CertName)
 	assert.Empty(t, opts.KeyName)
+}
+
+// -----------------------------------------------------------------------------
+// Cluster rule policy flag Tests
+// -----------------------------------------------------------------------------
+
+func TestRulePolicyFlags(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want validation.RulePolicy
+	}{
+		{name: "defaults deny nothing", want: validation.RulePolicy{}},
+		{
+			name: "every flag set",
+			args: []string{
+				"--rule-denied-operators=pmf, RX",
+				"--rule-denied-directives=secruleengine,Include",
+				"--rule-max-request-body-limit=1024",
+				"--rule-response-body-access=Denied",
+			},
+			want: validation.RulePolicy{
+				DeniedOperators:        []string{"pmFromFile", "rx"},
+				DeniedDirectives:       []string{"SecRuleEngine", "Include"},
+				MaxRequestBodyLimit:    1024,
+				DenyResponseBodyAccess: true,
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fs := flag.NewFlagSet("test", flag.ContinueOnError)
+			var cfg config
+			addRulePolicyFlags(fs, &cfg)
+			require.NoError(t, fs.Parse(tt.args))
+			assert.Equal(t, strconv.Itoa(validation.MaxRequestBodyLimit), fs.Lookup("rule-max-request-body-limit").DefValue)
+			got, err := cfg.rulePolicy()
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
 }

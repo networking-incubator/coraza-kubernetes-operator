@@ -25,7 +25,8 @@ import (
 
 // gatewayModuleCheckedAt is the coraza-rs commit (CORAZA_RS_VERSION in the
 // Makefile) the lists of what envoy-coraza supports in this package were
-// checked against: unsupportedOperators. A test fails when the Makefile pin
+// checked against: unsupportedOperators, supportedOperators, operatorAliases,
+// supportedDirectives and ctlDirectives. A test fails when the Makefile pin
 // moves, so bumping the gateway module forces a re-check of the lists.
 const gatewayModuleCheckedAt = "81f0a2b73f53337462368eff590946356e1193bf"
 

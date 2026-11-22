@@ -51,6 +51,7 @@ import (
 	wafv1alpha1 "github.com/networking-incubator/coraza-kubernetes-operator/api/v1alpha1"
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/controller"
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/rulesets/cache"
+	"github.com/networking-incubator/coraza-kubernetes-operator/internal/rulesets/validation"
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/xds"
 	// +kubebuilder:scaffold:imports
 )
@@ -85,6 +86,12 @@ func main() {
 	logFlags()
 	setupLog.Info("Deprecated flags are accepted but ignored",
 		"flags", "--default-wasm-image, --envoy-cluster-name")
+
+	rulePolicy, err := cfg.rulePolicy()
+	if err != nil {
+		setupLog.Error(err, "Invalid cluster rule policy")
+		os.Exit(1)
+	}
 
 	tlsOpts := buildTLSOpts()
 
@@ -148,6 +155,7 @@ func main() {
 		ECDSConfig:        ecdsConfig,
 		AssetBaseURL:      assetBaseURL,
 		XDS:               xdsDeps,
+		RulePolicy:        rulePolicy,
 	}); err != nil {
 		setupLog.Error(err, "unable to setup controllers")
 		os.Exit(1)
@@ -213,6 +221,12 @@ type config struct {
 	xdsCertName      string
 	xdsKeyName       string
 	xdsLimits        xds.Limits
+
+	// Cluster rule policy, applied to RuleSet content not accepted yet.
+	ruleDeniedOperators     string
+	ruleDeniedDirectives    string
+	ruleMaxRequestBodyLimit int64
+	ruleResponseBodyAccess  string
 }
 
 func parseFlags() config {
@@ -261,6 +275,7 @@ func parseFlags() config {
 		"The name of the xDS serving key file")
 	cfg.xdsLimits = xds.DefaultLimits()
 	cfg.xdsLimits.AddFlags(flag.CommandLine)
+	addRulePolicyFlags(flag.CommandLine, &cfg)
 
 	opts := zap.Options{Development: false}
 	opts.BindFlags(flag.CommandLine)
@@ -270,6 +285,24 @@ func parseFlags() config {
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
 
 	return cfg
+}
+
+// addRulePolicyFlags registers the cluster rule policy flags.
+func addRulePolicyFlags(fs *flag.FlagSet, cfg *config) {
+	fs.StringVar(&cfg.ruleDeniedOperators, "rule-denied-operators", "",
+		"Comma-separated operator names tenants may not use in new or changed rules, matched case-insensitively")
+	fs.StringVar(&cfg.ruleDeniedDirectives, "rule-denied-directives", "",
+		"Comma-separated directive names tenants may not use in new or changed rules, and the ctl actions with the same effect, matched case-insensitively")
+	fs.Int64Var(&cfg.ruleMaxRequestBodyLimit, "rule-max-request-body-limit", validation.MaxRequestBodyLimit,
+		"Highest SecRequestBodyLimit accepted in new or changed rules, in bytes; at most the envoy-coraza ceiling of 16777216")
+	fs.StringVar(&cfg.ruleResponseBodyAccess, "rule-response-body-access", validation.ResponseBodyAccessAllowed,
+		"Allowed or Denied; Denied rejects SecResponseBodyAccess On in new or changed rules")
+}
+
+// rulePolicy builds the cluster rule policy from the flags.
+func (cfg config) rulePolicy() (validation.RulePolicy, error) {
+	return validation.ParseRulePolicy(cfg.ruleDeniedOperators, cfg.ruleDeniedDirectives,
+		cfg.ruleMaxRequestBodyLimit, cfg.ruleResponseBodyAccess)
 }
 
 // buildECDSConfig derives the ECDS endpoint and asset base URL from the flags,

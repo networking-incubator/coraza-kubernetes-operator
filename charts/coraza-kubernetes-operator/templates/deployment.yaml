@@ -65,6 +65,35 @@ spec:
             - --xds-ca-path=/etc/coraza-tls/{{ .Values.tls.caName | default "ca.crt" }}
             - --xds-auth-failure-rate={{ .Values.xds.authFailureRate }}
             - --xds-auth-failure-burst={{ .Values.xds.authFailureBurst }}
+            {{- with .Values.rulePolicy }}
+            {{- $policy := . }}
+            {{- range $key := list "deniedOperators" "deniedDirectives" }}
+            {{- $names := index $policy $key | default list }}
+            {{- if not (kindIs "slice" $names) }}
+            {{- fail (printf "rulePolicy.%s must be a list, got %v" $key (index $policy $key)) }}
+            {{- end }}
+            {{- range $names }}
+            {{- if not (kindIs "string" .) }}
+            {{- fail (printf "rulePolicy.%s entries must be strings, got %v" $key .) }}
+            {{- end }}
+            {{- end }}
+            {{- end }}
+            {{- with compact (.deniedOperators | default list) }}
+            - {{ printf "--rule-denied-operators=%s" (join "," .) | quote }}
+            {{- end }}
+            {{- with compact (.deniedDirectives | default list) }}
+            - {{ printf "--rule-denied-directives=%s" (join "," .) | quote }}
+            {{- end }}
+            {{- $limit := .maxRequestBodyLimit }}
+            {{- if or (not (include "coraza-operator.isInt" $limit)) (le (int64 $limit) 0) (gt (int64 $limit) 16777216) }}
+            {{- fail (printf "rulePolicy.maxRequestBodyLimit must be an integer number of bytes from 1 to 16777216, got %v" $limit) }}
+            {{- end }}
+            {{- if not (has .responseBodyAccess (list "Allowed" "Denied")) }}
+            {{- fail (printf "rulePolicy.responseBodyAccess must be Allowed or Denied, got %v" .responseBodyAccess) }}
+            {{- end }}
+            - {{ printf "--rule-max-request-body-limit=%d" (int64 $limit) | quote }}
+            - {{ printf "--rule-response-body-access=%s" .responseBodyAccess | quote }}
+            {{- end }}
             {{- if .Values.defaultWasmImage }}
             - --default-wasm-image={{ .Values.defaultWasmImage }}
             {{- end }}

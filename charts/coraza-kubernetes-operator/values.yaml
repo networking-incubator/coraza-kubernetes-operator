@@ -125,6 +125,32 @@ xds:
   authFailureRate: 10
   authFailureBurst: 1024
 
+# Cluster rule policy. It narrows what tenant rule text (RuleSource rules and
+# the RuleData files they Include) may use below what envoy-coraza supports and
+# never allows more; the bundled crs/ tree is not scanned. It applies to new or
+# changed RuleSet content: a tightened policy applies to the next change of a
+# RuleSet's content, does not report RuleSets whose accepted content it would
+# refuse, and returning to the last accepted content is accepted. A violation
+# marks the RuleSet Degraded with reason InvalidRuleSet; the policy is enforced
+# on the RuleSet, so a RuleSource can show Validated while its RuleSet reports
+# InvalidRuleSet. Only the operator should have write access to
+# rulesets/status; the policy reads status.acceptedContent to tell accepted
+# content from new content.
+rulePolicy:
+  # Operator names tenants may not use, without the "@" (e.g. [pmFromFile]).
+  # Matched case-insensitively; an alias is denied with its operator (pmf with
+  # pmFromFile). An operator envoy-coraza does not support fails startup.
+  deniedOperators: []
+  # Directive names tenants may not use (e.g. [SecRuleEngine, Include]), and
+  # the ctl actions with the same effect. Matched case-insensitively; a
+  # directive envoy-coraza does not support fails startup.
+  deniedDirectives: []
+  # Highest SecRequestBodyLimit accepted, in bytes: at most 16777216, the
+  # envoy-coraza ceiling.
+  maxRequestBodyLimit: 16777216
+  # Allowed or Denied. Denied rejects SecResponseBodyAccess On.
+  responseBodyAccess: Allowed
+
 # Serving certificate for the ECDS and WASM asset endpoint. When existingSecret
 # is empty and generate is true, `helm install`/`helm upgrade` create a
 # self-signed CA and certificate valid for 365 days and reuse the generated

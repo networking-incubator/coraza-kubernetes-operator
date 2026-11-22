@@ -68,6 +68,17 @@ The operator serves Envoy Configuration Discovery Service (ECDS) streams and the
 | `--xds-auth-failure-rate` | `10` | Failed ECDS authentication attempts allowed per second per peer IP; successful authentication does not consume the bucket. |
 | `--xds-auth-failure-burst` | `1024` | Burst of failed ECDS authentication attempts per peer IP before the rate applies. |
 
+### Cluster Rule Policy
+
+These flags narrow what tenants may use in rule text. They apply to new or changed RuleSet content only; see [Rule Processing]({{< relref "../explanation/rule-processing#cluster-rule-policy" >}}). An invalid value stops the manager at startup.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--rule-denied-operators` | (none) | Comma-separated operator names (without `@`) tenants may not use, matched case-insensitively. An alias is denied with its operator (`pmf` with `pmFromFile`). A name `envoy-coraza` does not support is a startup error. |
+| `--rule-denied-directives` | (none) | Comma-separated directive names tenants may not use, and the `ctl` actions with the same effect, matched case-insensitively. A directive `envoy-coraza` does not support is a startup error. |
+| `--rule-max-request-body-limit` | `16777216` (16 MiB) | Highest `SecRequestBodyLimit` accepted, in bytes. Must be in (0, 16777216], the `envoy-coraza` ceiling. |
+| `--rule-response-body-access` | `Allowed` | `Allowed` or `Denied`. `Denied` rejects `SecResponseBodyAccess On`. |
+
 ### Istio Integration
 
 | Flag | Default | Description |

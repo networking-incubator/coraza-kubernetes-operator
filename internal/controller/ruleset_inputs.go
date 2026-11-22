@@ -152,8 +152,9 @@ const (
 var errRuleSetRulesInvalid = errors.New("aggregated rules failed validation")
 
 // validateAggregatedRules checks the aggregated rule set against what
-// envoy-coraza reads differently from Coraza, then compiles it with Coraza.
-// The caller has already run the directive and Include guard
+// envoy-coraza reads differently from Coraza and, for content not accepted
+// yet, against the cluster rule policy, then compiles it with Coraza. The
+// caller has already run the directive and Include guard
 // (validation.ValidateIncludes), which must also cover accepted content.
 // Sets Degraded status and emits Warning events on failure.
 // The returned duration covers validation only (not status patches).
@@ -168,6 +169,13 @@ func (r *RuleSetReconciler) validateAggregatedRules(
 	start := time.Now()
 	if err := validation.CheckGatewayParity(content.Rules, content.DataFiles); err != nil {
 		return time.Since(start), r.markParityInvalid(ctx, log, req, ruleset, err)
+	}
+	// The cluster rule policy applies to content the RuleSet has not accepted
+	// yet, so a tightened policy takes effect on the next content change.
+	if accepted := ruleset.Status.AcceptedContent; accepted == nil || accepted.ContentHash != rejectedContentHash {
+		if err := validation.CheckRulePolicy(content.Rules, content.DataFiles, r.RulePolicy); err != nil {
+			return time.Since(start), r.markRulesInvalid(ctx, log, req, ruleset, ruleSetDegradedReasonInvalidRuleSet, rejectedContentHash, err)
+		}
 	}
 	waf, err := coraza.NewWAF(validation.BuildWAFConfig(content.Rules, content.DataFiles))
 	if err != nil {

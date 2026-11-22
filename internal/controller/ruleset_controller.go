@@ -71,6 +71,8 @@ type RuleSetReconciler struct {
 	Recorder events.EventRecorder
 	Cache    *cache.RuleSetCache
 	Metrics  *CorazaMetrics
+	// RulePolicy is the cluster rule policy applied to content not accepted yet.
+	RulePolicy validation.RulePolicy
 }
 
 // SetupWithManager sets up the controller with the Manager.

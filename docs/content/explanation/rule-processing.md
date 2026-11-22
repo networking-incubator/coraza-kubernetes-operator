@@ -29,6 +29,35 @@ Rules that use `@pmFromFile` reference pattern files by name. The operator loads
 
 The merged files are exposed to the Coraza compiler via an in-memory virtual filesystem (nothing is written to node disk).
 
+## Cluster rule policy
+
+Cluster administrators can narrow what tenants may use in rule text below what `envoy-coraza` supports, with the `rulePolicy` Helm values (manager flags `--rule-denied-operators`, `--rule-denied-directives`, `--rule-max-request-body-limit`, `--rule-response-body-access`). See [Helm Chart Values]({{< relref "../reference/helm-values#cluster-rule-policy" >}}). The policy can only deny: it never allows anything the plugin does not support.
+
+The policy applies to new or changed RuleSet content: the tenant rule text and every RuleData file it `Include`s. The CRS tree bundled in a CRS-enabled module (`crs/...`) is not scanned. A tightened policy, including across an operator restart, applies to the next change of a RuleSet's content: content the RuleSet already accepted is not checked against it again, and RuleSets whose accepted content it would refuse are not reported. Returning to the last accepted content is accepted. The directive and `Include` guard, the body-limit checks and the gateway-parity checks run on every reconcile, also for content the RuleSet already accepted; the Coraza compile runs when the merged content, the generation or readiness changes, and the policy only when the merged content differs from the content the RuleSet last accepted. A violation marks the RuleSet `Degraded` with reason `InvalidRuleSet` and a message such as `@pmFromFile is not allowed by the cluster rule policy`; the last accepted configuration keeps serving. The policy is enforced on the RuleSet, so a RuleSource can show `Validated` while the RuleSet that uses it reports `InvalidRuleSet`.
+
+Operator names and directive names are matched case-insensitively. An operator alias is denied with its operator (`pmf` with `pmFromFile`, `ipMatchF` with `ipMatchFromFile`, `geoLookup` with `unconditionalMatch`). Items of a `SecDataset` block are data and are not matched; a backtick block opened by any other directive is rejected. A `ctl` action in `SecRule`, `SecAction`, `SecDefaultAction` or `SecRuleUpdateActionById` (where Coraza and `envoy-coraza` take the action list from different arguments, both are checked) is judged like the directive with the same effect:
+
+| `ctl` action | Directive |
+|---|---|
+| `auditEngine` | `SecAuditEngine` |
+| `auditLogParts` | `SecAuditLogParts` |
+| `debugLogLevel` | `SecDebugLogLevel` |
+| `requestBodyAccess` | `SecRequestBodyAccess` |
+| `requestBodyLimit` | `SecRequestBodyLimit` |
+| `responseBodyAccess` | `SecResponseBodyAccess` |
+| `responseBodyLimit` | `SecResponseBodyLimit` |
+| `ruleEngine` | `SecRuleEngine` |
+| `ruleRemoveById` | `SecRuleRemoveById` |
+| `ruleRemoveByMsg` | `SecRuleRemoveByMsg` |
+| `ruleRemoveByTag` | `SecRuleRemoveByTag` |
+| `ruleRemoveTargetById` | `SecRuleUpdateTargetById` |
+| `ruleRemoveTargetByTag` | `SecRuleUpdateTargetByTag` |
+| `ruleRemoveTargetByMsg` | `SecRuleUpdateTargetById` or `SecRuleUpdateTargetByTag` |
+
+Denying a directive denies its `ctl` action. `ctl:responseBodyAccess=On` is rejected when response body access is `Denied`, and, when the request body maximum is below 16 MiB, `ctl:requestBodyLimit` above it is rejected. When the request body maximum is below 16 MiB, `ctl:requestBodyAccess=On` needs an explicit `SecRequestBodyLimit` in the tenant rule text, because without one `envoy-coraza` inspects up to 16 MiB.
+
+Only the operator should have write access to `rulesets/status`; the policy reads `status.acceptedContent` to tell accepted content from new content.
+
 ## Unsupported rule detection
 
 After compilation, the operator checks for rules that are known to be unsupported in the current execution environment. In WASM mode, unsupported rules fall into two categories:
