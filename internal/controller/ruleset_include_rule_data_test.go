@@ -18,6 +18,8 @@ package controller
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/go-logr/logr"
@@ -131,49 +133,133 @@ func TestIncludedRuleDataIsAcceptedAndDelivered(t *testing.T) {
 	assert.Equal(t, updatedRuleSet.Status.AcceptedContent.ContentHash, updatedEngine.Status.AcceptedConfiguration.RuleSetContentHash)
 }
 
-// TestMissingIncludedRuleDataIsDegraded covers the aggregate path: the per-source
-// validation defers an unknown RuleData name, so the RuleSet compilation is the
-// one that must report it. The status message keeps only the basename.
-func TestMissingIncludedRuleDataIsDegraded(t *testing.T) {
-	ctx := context.Background()
-
-	source := utils.NewTestRuleSource("missing-include-source", testNamespace, "Include nope.conf")
-	data := utils.NewTestRuleData("unrelated-data", testNamespace, map[string]string{"other.data": "x\n"})
-	ruleset := utils.NewTestRuleSet(utils.RuleSetOptions{
-		Name:      "missing-include-ruleset",
-		Namespace: testNamespace,
-		Sources:   []wafv1alpha1.SourceReference{{Name: source.Name}},
-		Data:      []wafv1alpha1.DataReference{{Name: data.Name}},
-	})
-
-	c := fake.NewClientBuilder().
-		WithScheme(scheme).
-		WithStatusSubresource(&wafv1alpha1.RuleSet{}, &wafv1alpha1.RuleData{}, &wafv1alpha1.Engine{}, &wafv1alpha1.RuleSource{}).
-		WithObjects(ruleset, source, data).
-		Build()
-
-	reconcileTestRuleSource(t, ctx, c, source)
-
-	metrics, err := NewCorazaMetrics(prometheus.NewRegistry())
-	require.NoError(t, err)
-	ruleSetReconciler := &RuleSetReconciler{
-		Client:   c,
-		Scheme:   scheme,
-		Recorder: utils.NewTestRecorder(),
-		Metrics:  metrics,
+// TestInvalidIncludedRuleDataIsDegraded covers the aggregate path: the
+// per-source validation defers an included RuleData name, so the RuleSet
+// validation is the one that must report a missing file, a rule in it the
+// gateway module cannot load, or rule text Coraza and the gateway module read
+// differently. The status message keeps only the basename. preValidated cases
+// are ones the RuleSource rejects too, so they start from a RuleSource a
+// status already marks Validated.
+func TestInvalidIncludedRuleDataIsDegraded(t *testing.T) {
+	debugLog := filepath.Join(t.TempDir(), "debug.log")
+	tests := []struct {
+		name         string
+		rules        string
+		files        map[string]string
+		preValidated bool
+		wantMsg      string
+		// writesDebugLog marks a case that checks the rejected file is never
+		// compiled; it uses a debug log path.
+		writesDebugLog bool
+	}{
+		{
+			name:    "missing file",
+			rules:   "Include nope.conf",
+			files:   map[string]string{"other.data": "x\n"},
+			wantMsg: "open nope.conf: data does not exist",
+		},
+		{
+			name:    "operator the gateway module does not support",
+			rules:   "Include extra.conf",
+			files:   map[string]string{"extra.conf": `SecRule REMOTE_ADDR "@rbl sbl.spamhaus.org" "id:1,phase:1,deny"` + "\n"},
+			wantMsg: "@rbl is not supported by the envoy-coraza plugin",
+		},
+		{
+			name:    "whitespace before the operator in an included file",
+			rules:   "Include extra.conf",
+			files:   map[string]string{"extra.conf": `SecRule ARGS " @contains evil" "id:1,phase:1,deny"`},
+			wantMsg: `included RuleData file extra.conf: SecRule operator must not start with whitespace`,
+		},
+		{
+			name:    "whitespace before the operator",
+			rules:   `SecRule ARGS " @contains evil" "id:1,phase:1,deny"`,
+			wantMsg: `SecRule operator must not start with whitespace before "@" or "!"`,
+		},
+		{
+			name:         "non-ASCII directive name",
+			rules:        "SecRuleEngİne Off",
+			preValidated: true,
+			wantMsg:      `directive "SecRuleEngİne" is not supported`,
+		},
+		{
+			name:           "non-ASCII Include",
+			rules:          "İnclude extra.conf",
+			files:          map[string]string{"extra.conf": "SecDebugLog " + debugLog + "\n"},
+			preValidated:   true,
+			wantMsg:        `directive "İnclude" is not supported`,
+			writesDebugLog: true,
+		},
+		{
+			name:    "rule compilation errors ignored",
+			rules:   "SecIgnoreRuleCompilationErrors On\n" + `SecRule REMOTE_ADDR "@rbl x" "id:1,phase:1,deny"`,
+			wantMsg: "SecIgnoreRuleCompilationErrors On is not supported",
+		},
+		{
+			name:         "SecAction backtick block containing a ctl action",
+			rules:        "SecAction \"id:1,phase:1,pass,nolog,tag:`\n`,ctl:ruleEngine=Off\"",
+			preValidated: true,
+			wantMsg:      "a backtick block is only supported to list SecDataset items",
+		},
 	}
-	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: ruleset.Name, Namespace: ruleset.Namespace}}
-	_, err = ruleSetReconciler.Reconcile(ctx, req)
-	require.NoError(t, err)
 
-	var updated wafv1alpha1.RuleSet
-	require.NoError(t, c.Get(ctx, req.NamespacedName, &updated))
-	assert.Nil(t, updated.Status.AcceptedContent, "a missing included RuleData must not be accepted")
-	degraded := apimeta.FindStatusCondition(updated.Status.Conditions, conditionDegraded)
-	require.NotNil(t, degraded)
-	assert.Equal(t, ruleSetDegradedReasonInvalidRuleSet, degraded.Reason)
-	assert.Contains(t, degraded.Message, "open nope.conf: data does not exist")
-	assert.NotContains(t, degraded.Message, "/", "the status message must not leak a filesystem path")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+
+			source := utils.NewTestRuleSource("invalid-include-source", testNamespace, tt.rules)
+			if tt.preValidated {
+				apimeta.SetStatusCondition(&source.Status.Conditions, metav1.Condition{
+					Type:               conditionReady,
+					Status:             metav1.ConditionTrue,
+					ObservedGeneration: source.Generation,
+					Reason:             ruleSourceReadyReasonValidated,
+					LastTransitionTime: metav1.Now(),
+				})
+			}
+			data := utils.NewTestRuleData("invalid-include-data", testNamespace, tt.files)
+			ruleset := utils.NewTestRuleSet(utils.RuleSetOptions{
+				Name:      "invalid-include-ruleset",
+				Namespace: testNamespace,
+				Sources:   []wafv1alpha1.SourceReference{{Name: source.Name}},
+				Data:      []wafv1alpha1.DataReference{{Name: data.Name}},
+			})
+
+			c := fake.NewClientBuilder().
+				WithScheme(scheme).
+				WithStatusSubresource(&wafv1alpha1.RuleSet{}, &wafv1alpha1.RuleData{}, &wafv1alpha1.Engine{}, &wafv1alpha1.RuleSource{}).
+				WithObjects(ruleset, source, data).
+				Build()
+
+			if !tt.preValidated {
+				reconcileTestRuleSource(t, ctx, c, source)
+			}
+
+			metrics, err := NewCorazaMetrics(prometheus.NewRegistry())
+			require.NoError(t, err)
+			ruleSetReconciler := &RuleSetReconciler{
+				Client:   c,
+				Scheme:   scheme,
+				Recorder: utils.NewTestRecorder(),
+				Metrics:  metrics,
+			}
+			req := ctrl.Request{NamespacedName: types.NamespacedName{Name: ruleset.Name, Namespace: ruleset.Namespace}}
+			_, err = ruleSetReconciler.Reconcile(ctx, req)
+			require.NoError(t, err)
+
+			var updated wafv1alpha1.RuleSet
+			require.NoError(t, c.Get(ctx, req.NamespacedName, &updated))
+			assert.Nil(t, updated.Status.AcceptedContent, "invalid content must not be accepted")
+			degraded := apimeta.FindStatusCondition(updated.Status.Conditions, conditionDegraded)
+			require.NotNil(t, degraded)
+			assert.Equal(t, ruleSetDegradedReasonInvalidRuleSet, degraded.Reason)
+			assert.Contains(t, degraded.Message, tt.wantMsg)
+			assert.NotContains(t, degraded.Message, "/", "the status message must not leak a filesystem path")
+			if tt.writesDebugLog {
+				_, err = os.Stat(debugLog)
+				assert.ErrorIs(t, err, os.ErrNotExist, "rejected rule text is never compiled")
+			}
+		})
+	}
 }
 
 func TestRuleSetValidationRejectsLegacyAliasesAndAcceptsCRS(t *testing.T) {
@@ -182,12 +268,19 @@ func TestRuleSetValidationRejectsLegacyAliasesAndAcceptsCRS(t *testing.T) {
 	orig := validation.BundledCRSVersion
 	validation.BundledCRSVersion = "v4.30.0"
 	t.Cleanup(func() { validation.BundledCRSVersion = orig })
+	debugLog := filepath.Join(t.TempDir(), "debug.log")
 
 	tests := []struct {
 		name    string
 		rules   string
 		wantErr string
 	}{
+		{
+			name: "SecDataset block continued into another block",
+			rules: "SecDataset a `\nx\n`\\\nSecDataset b `\ny\n`\nSecDebugLog " + debugLog + "\n" +
+				`SecRule ARGS "@rx a" "id:1,phase:1,deny"`,
+			wantErr: "SecDebugLog is not allowed",
+		},
 		{
 			name:    "legacy alias",
 			rules:   "Include @owasp_crs/*.conf",
@@ -257,6 +350,8 @@ SecRule ARGS "@pmFromFile crs/restricted-files.data" "id:1,phase:1,pass"`,
 			require.NotNil(t, degraded)
 			assert.Equal(t, ruleSetDegradedReasonRejectedContent, degraded.Reason)
 			assert.Contains(t, degraded.Message, tc.wantErr)
+			_, err = os.Stat(debugLog)
+			assert.ErrorIs(t, err, os.ErrNotExist, "rejected rule text is never compiled")
 			assert.NotContains(t, degraded.Message, "@owasp_crs")
 		})
 	}

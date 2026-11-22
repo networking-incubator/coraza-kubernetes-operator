@@ -147,25 +147,29 @@ const (
 	ruleSetReadyReasonRulesAccepted      = "RulesAccepted"
 )
 
-// errRuleSetRulesInvalid indicates aggregate Coraza validation failed and the
-// RuleSet status was patched to Degraded. Reconcile should stop without error.
-var errRuleSetRulesInvalid = errors.New("aggregated rules failed Coraza validation")
+// errRuleSetRulesInvalid indicates aggregate validation failed and the RuleSet
+// status was patched to Degraded. Reconcile should stop without error.
+var errRuleSetRulesInvalid = errors.New("aggregated rules failed validation")
 
-// validateAggregatedRules compiles the aggregated rule set with Coraza. The
-// caller has already run the directive and Include guard
+// validateAggregatedRules checks the aggregated rule set against what
+// envoy-coraza reads differently from Coraza, then compiles it with Coraza.
+// The caller has already run the directive and Include guard
 // (validation.ValidateIncludes), which must also cover accepted content.
 // Sets Degraded status and emits Warning events on failure.
-// The returned duration covers Coraza parsing only (not status patches).
+// The returned duration covers validation only (not status patches).
 func (r *RuleSetReconciler) validateAggregatedRules(
 	ctx context.Context,
 	log logr.Logger,
 	req ctrl.Request,
 	ruleset *wafv1alpha1.RuleSet,
 	rejectedContentHash string,
-	conf coraza.WAFConfig,
+	content assemble.Content,
 ) (time.Duration, error) {
 	start := time.Now()
-	waf, err := coraza.NewWAF(conf)
+	if err := validation.CheckGatewayParity(content.Rules, content.DataFiles); err != nil {
+		return time.Since(start), r.markParityInvalid(ctx, log, req, ruleset, err)
+	}
+	waf, err := coraza.NewWAF(validation.BuildWAFConfig(content.Rules, content.DataFiles))
 	if err != nil {
 		return time.Since(start), r.markRulesInvalid(ctx, log, req, ruleset, ruleSetDegradedReasonInvalidRuleSet, rejectedContentHash, err)
 	}
@@ -184,7 +188,7 @@ func (r *RuleSetReconciler) markRulesInvalid(
 	rejectedContentHash string,
 	cause error,
 ) error {
-	msg := fmt.Sprintf("Ruleset is invalid\n%v", validation.SanitizeErrorMessage(cause))
+	msg := invalidRuleSetMessage(cause)
 	if isConditionCurrent(ruleset.Status.Conditions, conditionDegraded, reason, ruleset.Generation) &&
 		degradedConditionMessage(ruleset, reason) == msg {
 		return errRuleSetRulesInvalid
@@ -203,6 +207,33 @@ func (r *RuleSetReconciler) markRulesInvalid(
 		return patchErr
 	}
 	return errRuleSetRulesInvalid
+}
+
+// markParityInvalid patches Degraded with InvalidRuleSet for content that
+// fails the gateway-parity checks and keeps status.acceptedContent, so content
+// a RuleSet accepted earlier keeps its record and the Engine its configuration.
+func (r *RuleSetReconciler) markParityInvalid(
+	ctx context.Context,
+	log logr.Logger,
+	req ctrl.Request,
+	ruleset *wafv1alpha1.RuleSet,
+	cause error,
+) error {
+	msg := invalidRuleSetMessage(cause)
+	if isConditionCurrent(ruleset.Status.Conditions, conditionDegraded, ruleSetDegradedReasonInvalidRuleSet, ruleset.Generation) &&
+		degradedConditionMessage(ruleset, ruleSetDegradedReasonInvalidRuleSet) == msg {
+		return errRuleSetRulesInvalid
+	}
+	if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "RuleSet", ruleset, &ruleset.Status.Conditions, ruleset.Generation, ruleSetDegradedReasonInvalidRuleSet, msg); patchErr != nil {
+		return patchErr
+	}
+	return errRuleSetRulesInvalid
+}
+
+// invalidRuleSetMessage is the Degraded message of a RuleSet whose content
+// failed validation with cause.
+func invalidRuleSetMessage(cause error) string {
+	return fmt.Sprintf("Ruleset is invalid\n%v", validation.SanitizeErrorMessage(cause))
 }
 
 // degradedConditionMessage returns the current Degraded message for reason, so

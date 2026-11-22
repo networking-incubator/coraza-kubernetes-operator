@@ -52,7 +52,7 @@ for counters by Prometheus convention).
 | `coraza_rulesource_validations_total` | counter | `namespace`, `outcome` | 3 per namespace (valid/invalid/skipped) | Incremented once per status transition, not per informer resync |
 | `coraza_ruleset_validations_total` | counter | `namespace`, `outcome` | 2 per namespace (valid/invalid) | `valid` recorded after successful cache; `invalid` on degrade transition |
 | `coraza_rulesource_validation_duration_seconds` | histogram | `namespace`, `outcome` | 2 × 13 per namespace (valid/invalid) | `skipped` increments the counter only; 11 buckets + sum + count |
-| `coraza_ruleset_validation_duration_seconds` | histogram | `namespace`, `outcome` | 2 × 13 per namespace | PMFromFile + Coraza parse only; excludes status patches and cache |
+| `coraza_ruleset_validation_duration_seconds` | histogram | `namespace`, `outcome` | 2 × 13 per namespace | PMFromFile, rule text checks and aggregate parse; excludes status patches and cache writes |
 | `coraza_cache_set_duration_seconds` | histogram | `namespace` | 1 × 10 per namespace | Recorded once per cache transition; excludes resync and unchanged content |
 
 ### Controller-Runtime Built-ins (not `coraza_` prefixed)

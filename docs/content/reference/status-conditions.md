@@ -105,7 +105,7 @@ Per-source rule validation failed.
 
 | Reason | Description | Resolution |
 |--------|-------------|------------|
-| `InvalidRules` | The SecLang rules failed Coraza validation. | Check the condition message for the validation error and fix the rule text. |
+| `InvalidRules` | The SecLang rules failed Coraza validation, or use something `envoy-coraza` does not support or reads differently from Coraza (see the ECDS plugin contract). | Check the condition message for the validation error and fix the rule text. |
 
 ## RuleData Conditions
 
@@ -140,7 +140,7 @@ The RuleSet could not be compiled or accepted. Common reasons:
 | Reason | Description | Resolution |
 |--------|-------------|------------|
 | `UnsupportedRules` | The RuleSet contains rules not supported in the current execution environment. | Remove the unsupported rules, or add the annotation `waf.k8s.coraza.io/skip-unsupported-rules-check: "true"` to the RuleSet. |
-| `InvalidRuleSet` | Aggregate validation failed (including `@pmFromFile` references that are not backed by a key in merged **RuleData**). The Engine keeps its last accepted configuration. | Add or fix `spec.data` so every `@pmFromFile` basename exists in the referenced RuleData objects; fix other SecLang issues in the message. |
+| `InvalidRuleSet` | Aggregate validation failed (including `@pmFromFile` references that are not backed by a key in merged **RuleData**), or the content uses something `envoy-coraza` does not support or reads differently from Coraza (see the ECDS plugin contract). The Engine keeps its last accepted configuration. | Add or fix `spec.data` so every `@pmFromFile` basename exists in the referenced RuleData objects; fix other SecLang issues in the message. |
 | `RejectedContent` | The content violates the delivery contract: a host-file directive, an unsupported `Include` target, or a request-body limit `envoy-coraza` would reject. The Engine clears its accepted configuration. | Remove the directive or include, or set `SecRequestBodyLimit` at or below 16 MiB; see the ECDS plugin contract. |
 | `ReferencedRuleSourceInvalid` | A referenced **RuleSource** is in `Degraded` with `InvalidRules` for its current spec generation. | Fix the **RuleSource** `spec.rules` (see that object’s status message). |
 | `RuleSourceNotFound` | A RuleSource named in `spec.sources` does not exist. | Create the RuleSource or correct the name; it must be in the same namespace as the RuleSet. |

@@ -157,7 +157,7 @@ func NewCorazaMetrics(reg prometheus.Registerer) (*CorazaMetrics, error) {
 
 		rulesetValidations: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "coraza_ruleset_validations_total",
-			Help: "RuleSet aggregate validation outcomes recorded once per status transition (valid=Coraza parse succeeded and rules cached, invalid=parse failed).",
+			Help: "RuleSet aggregate validation outcomes recorded once per status transition (valid=rule text checks and Coraza parse succeeded and rules cached, invalid=a rule text check or the parse failed).",
 		}, []string{"namespace", "outcome"}),
 
 		rulesourceValidationDuration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
@@ -168,7 +168,7 @@ func NewCorazaMetrics(reg prometheus.Registerer) (*CorazaMetrics, error) {
 
 		rulesetValidationDuration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
 			Name:    "coraza_ruleset_validation_duration_seconds",
-			Help:    "Duration of RuleSet Coraza validation (PMFromFile + aggregate parse) by outcome; excludes status patches and cache writes.",
+			Help:    "Duration of RuleSet validation (PMFromFile, rule text checks and aggregate parse) by outcome; excludes status patches and cache writes.",
 			Buckets: []float64{.001, .005, .01, .025, .05, .1, .25, .5, 1, 2.5, 5},
 		}, []string{"namespace", "outcome"}),
 

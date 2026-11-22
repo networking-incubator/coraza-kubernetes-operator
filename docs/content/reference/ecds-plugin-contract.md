@@ -135,6 +135,51 @@ references before an Engine accepts the configuration:
   Only `SecAuditLogType Serial` is supported; `Concurrent`, `Syslog`, and `Https`
   are rejected. `SecAuditLog` is rejected: this WASM build has no audit sink, and a
   policy that names one fails to configure while the Engine reports `Ready`.
+- Operators `envoy-coraza` is built without are rejected: `@inspectFile`, `@rbl`, and
+  `@validateSchema`, negated or not, in rule text or in an included RuleData file. The
+  RuleSet validation rejects them with `InvalidRuleSet`. A RuleSource that uses one
+  usually reports `InvalidRules` first, unless its per-source check stops earlier at a
+  RuleData reference it cannot resolve on its own.
+- Rule text that Coraza, which validates it, and `envoy-coraza`, which runs it, would
+  read differently is rejected, in rule text and in any RuleData file the rules
+  `Include`:
+  - a `SecRule` operator that starts with whitespace before `@` or `!` (`" @rbl x"`):
+    `envoy-coraza` trims the operator, so it would run the named operator or negation
+    where Coraza reads an `@rx` pattern;
+  - `SecIgnoreRuleCompilationErrors On`: Coraza would skip a rule it cannot compile
+    instead of reporting it, and `envoy-coraza` refuses a configuration in which a
+    directive was skipped;
+  - directive arguments in double quotes that are empty or start or end with another
+    double quote (`SecAction ""id:1,phase:1,pass""`): Coraza removes every leading and
+    trailing quote, while `envoy-coraza` removes one pair;
+  - a line of 65536 bytes or more: Coraza stops reading rule text there, so split long
+    rules with a trailing backslash;
+  - a directive name with a non-ASCII letter: directive names are ASCII, and the two
+    engines lowercase other letters differently;
+  - a backtick block other than a `SecDataset` item list closed by a line holding just
+    a backtick: both engines pass the lines of a block, the rest of its closing line,
+    and any lines that closing line continues to the directive that opened it;
+  - an action list in `SecRule`, `SecAction`, `SecDefaultAction` or
+    `SecRuleUpdateActionById` with unbalanced double quotes, or a
+    `SecRuleUpdateActionById` action list with a double quote, escaped or not,
+    inside its enclosing pair: for `SecRuleUpdateActionById`, `envoy-coraza` reads only
+    the part after the last one;
+  - `SecRuleUpdateActionById`, `SecRuleUpdateTargetById` and `SecRuleUpdateTargetByTag`
+    arguments that the two engines split differently: write the last argument as one
+    field, in one pair of double quotes or in none, with no other double quote (an
+    unquoted last argument must not end with a quote, escaped or not);
+  - a `SecRuleUpdateActionById` that lists another ID or range after a single rule ID:
+    Coraza stops at the first single ID, while `envoy-coraza` updates every ID and
+    range listed.
+
+  The RuleSet reports these as `InvalidRuleSet`. A non-ASCII directive name and a
+  backtick block other than a closed `SecDataset` item list are also rejected on the
+  RuleSource (`InvalidRules`), before Coraza compiles its rules. The directive and
+  `Include` guard, the body-limit checks and these checks run on every reconcile,
+  also for content the RuleSet already accepted; the Coraza compile runs when the
+  merged content, the generation or readiness changes. Accepted content that fails
+  these checks reports `InvalidRuleSet` and keeps its accepted record, so the Engine
+  keeps its accepted configuration.
 - The previous Go plugin's `@owasp_crs` aliases are gone. A CRS-enabled build
   exposes the tree under coraza-rs's native `crs/` namespace (pinned CRS release,
   recorded in the manifest); the release bundle does not. Rules that used

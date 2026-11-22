@@ -28,6 +28,10 @@ Unsupported rules are classified into two tiers:
 
 Both tiers are rejected by default. For the complete list of affected rule IDs, see the categories below.
 
+## Unsupported Operators
+
+`envoy-coraza` is built without the `@inspectFile`, `@rbl`, and `@validateSchema` operators, so the operator rejects any rule that uses them, in rule text or in an included RuleData file. See the [ECDS plugin contract](docs/content/reference/ecds-plugin-contract.md#rule-text-references).
+
 ## Overview
 
 Out of approximately 4,600 CoreRuleSet conformance tests, 72 tests are currently ignored and 43 are overridden with adjusted expectations, resulting in a ~98% pass rate. These fall into five categories:

@@ -51,28 +51,9 @@ func ValidateCorazaRSIncludes(rules string, dataFiles map[string][]byte) error {
 // capability. Unknown is rejected conservatively: accepting a crs/ reference
 // for a module that cannot resolve it serves a zero-rule WAF.
 func ValidateCorazaRSIncludesForModule(rules string, dataFiles map[string][]byte, crsVersion string) error {
-	seen := make(map[string]struct{}, len(dataFiles))
-	queue := []struct{ name, text string }{{text: rules}}
-	for len(queue) > 0 {
-		current := queue[0]
-		queue = queue[1:]
-		if err := validateCorazaRSRuleText(current.text, crsVersion); err != nil {
-			return err
-		}
-		for _, include := range ruleDataIncludeNames(current.text) {
-			name := path.Join(path.Dir(current.name), include)
-			if _, ok := seen[name]; ok {
-				continue
-			}
-			data, ok := dataFiles[name]
-			if !ok {
-				continue
-			}
-			seen[name] = struct{}{}
-			queue = append(queue, struct{ name, text string }{name: name, text: string(data)})
-		}
-	}
-	return nil
+	return forEachRuleText(rules, dataFiles, func(_, text string) error {
+		return validateCorazaRSRuleText(text, crsVersion)
+	})
 }
 
 func validateCorazaRSRuleText(rules, crsVersion string) error {

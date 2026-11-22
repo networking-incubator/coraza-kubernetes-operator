@@ -122,14 +122,22 @@ func TestRuleSetReconciler_PreservesAcceptedContentOnInvalidUpdate(t *testing.T)
 	tests := []struct {
 		name         string
 		invalidRules string
+		wantReason   string
 	}{
 		{
 			name:         "empty rules under Reject",
 			invalidRules: "   ",
+			wantReason:   ruleSetDegradedReasonInvalidRuleSet,
 		},
 		{
 			name:         "invalid pmFromFile reference",
 			invalidRules: `SecRule ARGS "@pmFromFile missing.data" "id:55555,phase:1,deny,status:403"`,
+			wantReason:   ruleSetDegradedReasonInvalidRuleSet,
+		},
+		{
+			name:         "operator the gateway module does not support",
+			invalidRules: `SecRule REMOTE_ADDR "@rbl sbl.spamhaus.org" "id:55556,phase:1,deny,status:403"`,
+			wantReason:   "ReferencedRuleSourceInvalid",
 		},
 	}
 
@@ -175,7 +183,7 @@ func TestRuleSetReconciler_PreservesAcceptedContentOnInvalidUpdate(t *testing.T)
 			degraded := apimeta.FindStatusCondition(ruleSet.Status.Conditions, conditionDegraded)
 			require.NotNil(t, degraded, "invalid input must degrade the RuleSet")
 			assert.Equal(t, metav1.ConditionTrue, degraded.Status)
-			assert.Equal(t, ruleSetDegradedReasonInvalidRuleSet, degraded.Reason)
+			assert.Equal(t, tt.wantReason, degraded.Reason)
 
 			require.NotNil(t, ruleSet.Status.AcceptedContent, "last-known-good acceptance must be preserved")
 			assert.Equal(t, accepted, *ruleSet.Status.AcceptedContent)
