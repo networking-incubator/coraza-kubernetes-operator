@@ -275,6 +275,58 @@ else
 fi
 echo "$out" | grep -q "secretName: my-serving-cert" && pass "deployment mounts existingSecret" || fail "deployment does not reference existingSecret"
 
+# ── Test 22: operator egress restriction is off by default ───────────────────
+section "NetworkPolicy egress disabled by default"
+out=$(render -s templates/networkpolicy.yaml)
+echo "$out" | grep -q "^    - Egress" && fail "Egress policyType should be absent by default" || pass "Egress policyType absent by default"
+echo "$out" | grep -q "^  egress:" && fail "egress rules should be absent by default" || pass "egress rules absent by default"
+
+# ── Test 22b: null networkPolicy maps still render the ingress policy ────────
+section "NetworkPolicy with null values"
+for value in "networkPolicy=null" "networkPolicy.egress=null" "networkPolicy.egress.apiServer=null" "networkPolicy.egress.enabled=null"; do
+  if out=$(render -s templates/networkpolicy.yaml --set "$value"); then
+    echo "$out" | grep -q "port: 8081" && ! echo "$out" | grep -q "^  egress:" &&
+      pass "$value renders the ingress policy without egress" || fail "$value did not render the ingress policy alone"
+  else
+    fail "$value should render: $out"
+  fi
+done
+
+# ── Test 23: egress restricted to the configured API server addresses ────────
+section "NetworkPolicy egress with apiServer.cidrs"
+out=$(render -s templates/networkpolicy.yaml --set networkPolicy.egress.enabled=true \
+  --set-json 'networkPolicy.egress.apiServer.cidrs=[" 10.0.0.1/32 ","fd00::1/128"]')
+echo "$out" | grep -q "^    - Egress" && pass "Egress policyType added" || fail "Egress policyType missing"
+echo "$out" | grep -qF 'cidr: "10.0.0.1/32"' && echo "$out" | grep -qF 'cidr: "fd00::1/128"' && pass "API server cidrs trimmed and quoted" || fail "API server cidrs missing"
+echo "$out" | grep -q "port: 6443" && echo "$out" | grep -q "port: 443" && pass "API server ports rendered" || fail "API server ports missing"
+echo "$out" | grep -q "0.0.0.0/0" && fail "egress must not allow all addresses" || pass "no allow-all egress rule"
+
+# ── Test 24: egress enabled without addresses fails under helm template ──────
+section "NetworkPolicy egress without cidrs fails"
+expect_render_fail "networkPolicy.egress.apiServer.cidrs" -s templates/networkpolicy.yaml --set networkPolicy.egress.enabled=true
+
+# ── Test 25: egress needs at least one valid port, with explicit cidrs too ───
+section "NetworkPolicy egress ports are required"
+for ports in "networkPolicy.egress.apiServer.ports=null" "networkPolicy.egress.apiServer.ports={}" \
+  "networkPolicy.egress.apiServer.ports={443.7}" "networkPolicy.egress.apiServer.ports=443"; do
+  expect_render_fail "networkPolicy.egress.apiServer.ports" -s templates/networkpolicy.yaml \
+    --set networkPolicy.egress.enabled=true --set 'networkPolicy.egress.apiServer.cidrs={10.0.0.1/32}' --set "$ports"
+done
+
+# ── Test 26: explicit egress cidrs need a non-zero prefix length ─────────────
+section "NetworkPolicy egress cidrs are validated"
+for cidr in "10.0.0.1" "0.0.0.0/0" "::/0" "10.0.0.1/00" "::/00" "10.0.0.1/33" "fd00::1/129" "256.0.0.1/32"; do
+  expect_render_fail "networkPolicy.egress.apiServer.cidrs entries must be" -s templates/networkpolicy.yaml \
+    --set networkPolicy.egress.enabled=true --set "networkPolicy.egress.apiServer.cidrs={$cidr}"
+done
+
+# ── Test 27: egress values must have the right type ──────────────────────────
+section "NetworkPolicy egress value types are validated"
+expect_render_fail "networkPolicy.egress.enabled must be true or false" -s templates/networkpolicy.yaml \
+  --set networkPolicy.egress.enabled=true --set-string networkPolicy.egress.enabled=false
+expect_render_fail "networkPolicy.egress.apiServer.cidrs must be a list" -s templates/networkpolicy.yaml \
+  --set networkPolicy.egress.enabled=true --set networkPolicy.egress.apiServer.cidrs=10.0.0.1/32
+
 # ── Summary ───────────────────────────────────────────────────────────────────
 echo
 echo "Results: $PASS passed, $FAIL failed"

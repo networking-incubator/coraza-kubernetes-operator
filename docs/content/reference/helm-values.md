@@ -41,6 +41,9 @@ The Coraza Kubernetes Operator Helm chart is located at `charts/coraza-kubernete
 | `tls.existingSecret` | string | `""` | Existing Secret with `ca.crt`, `tls.crt`, and `tls.key` for the ECDS/WASM endpoint. When set, the chart creates no serving Secret. Required for GitOps and static-manifest installs. |
 | `tls.generate` | bool | `true` | Generate a self-signed serving certificate (365-day CA and leaf) when `tls.existingSecret` is empty. Reuse across upgrades via `lookup` works only with `helm install`/`helm upgrade`; set to `false` for `helm template` and GitOps pipelines (Argo CD, Flux), which cannot reuse the Secret and would regenerate the CA on every sync. |
 | `tls.sans` | list | `[]` | Extra DNS SANs added when the serving certificate is generated. Changing this list does not update a reused Secret; rotate the certificate and restart the operator before using a newly added hostname. |
+| `networkPolicy.egress.enabled` | bool | `false` | Restrict the operator's egress to the Kubernetes API server. Adds `Egress` to the operator NetworkPolicy with one rule for `apiServer.cidrs` on `apiServer.ports`. No DNS rule is added. |
+| `networkPolicy.egress.apiServer.cidrs` | list | `[]` | API server endpoint addresses in CIDR form (usually `/32` or `/128`). When empty, `helm install`/`helm upgrade` read them from the `kubernetes` EndpointSlice in the `default` namespace; if none are found, rendering fails. Set explicitly for `helm template` and GitOps renderers. |
+| `networkPolicy.egress.apiServer.ports` | list | `[6443, 443]` | API server endpoint ports allowed by the egress rule; at least one is required. When the addresses are read from the `kubernetes` EndpointSlice, its ports are allowed too. |
 | `defaultWasmImage` | string | `""` | Deprecated and ignored. Use the bundled module or `spec.driver.wasm.url` with `sha256`. |
 | `createNamespace` | bool | `true` | Manage the release namespace with Pod Security Standard labels. Requires `--create-namespace` on first install. |
 | `openshift.enabled` | bool | `false` | Omit `runAsUser`, `fsGroup`, and `fsGroupChangePolicy` from the pod security context for OpenShift SCC compatibility. |
@@ -67,6 +70,69 @@ rulePolicy:
 The chart's default `tls.generate=true` mints a self-signed CA and leaf (365-day lifetime) and reuses the generated Secret across upgrades via `lookup`. That reuse is a **`helm install`/`helm upgrade` behavior only**: `helm template`, `--dry-run`, and GitOps renderers (Argo CD, Flux) cannot read the cluster, so they regenerate the CA on every render, which breaks the Gateway trust bundle inlined into EnvoyFilters and causes ECDS TLS failures.
 
 For GitOps and static-manifest installs, set `tls.generate=false` and provide the serving Secret out-of-band — via `tls.existingSecret`, platform tooling, or a certificate manager such as cert-manager (the chart itself adds no cert-manager dependency). Rotate a helm-managed certificate by deleting the generated Secret and re-running `helm upgrade`. Changing `tls.sans` does not update a reused Secret; rotate the certificate and restart the chart-rendered Deployment before using a newly added hostname. A new CA requires this restart so EnvoyFilters receive the new trust bundle; a leaf-only renewal does not.
+
+## Restricting operator egress
+
+The operator only opens outbound connections to the Kubernetes API server (including TokenReview); the ECDS listener, metrics and probes are inbound. `networkPolicy.egress.enabled=true` adds `Egress` to the operator's NetworkPolicy with a single rule: the API server endpoint addresses in `apiServer.cidrs`, on `apiServer.ports`. Everything else, including DNS, is denied. It is off by default because the right addresses depend on where the cluster's API server runs.
+
+### When to enable it
+
+Enable it when the API server endpoint addresses are known and stable, for example a self-managed cluster whose control-plane nodes keep their addresses.
+
+Leave it off, or manage egress with your own policy, when:
+
+- the API server runs outside the cluster behind addresses that change, such as a hosted or managed control plane whose load-balancer addresses are replaced during upgrades or scaling. A stale address cuts the operator off from the API server;
+- the cluster's CNI does not match API server traffic against `ipBlock` rules for those addresses. CNIs differ here, so test it once per cluster type.
+
+The rule lists the API server endpoint addresses, not the `kubernetes` Service ClusterIP, because most CNIs evaluate NetworkPolicy after the Service address is translated. The operator uses `KUBERNETES_SERVICE_HOST` (an IP), so no DNS rule is needed.
+
+### Enable it with `helm install` or `helm upgrade`
+
+When `apiServer.cidrs` is empty, the chart reads the addresses from the `kubernetes` EndpointSlice in the `default` namespace, and adds that EndpointSlice's ports to `apiServer.ports`:
+
+```bash
+helm upgrade --install coraza-kubernetes-operator charts/coraza-kubernetes-operator \
+  --namespace coraza-system --reset-then-reuse-values \
+  --set networkPolicy.egress.enabled=true
+```
+
+`--reset-then-reuse-values` keeps the values you set before and takes the new chart's defaults for the rest.
+
+The addresses are read when the chart is rendered. If the API server endpoints change later, run `helm upgrade` again so the policy picks up the new addresses.
+
+### Enable it with `helm template` or a GitOps tool
+
+`lookup` returns nothing under `helm template`, `--dry-run` and GitOps renderers, so set the addresses explicitly; rendering fails if they are missing. Find them with:
+
+```bash
+kubectl get endpointslices -n default -l kubernetes.io/service-name=kubernetes \
+  -o jsonpath='{range .items[*].endpoints[*]}{.addresses[*]}{"\n"}{end}'
+kubectl get endpointslices -n default -l kubernetes.io/service-name=kubernetes \
+  -o jsonpath='{.items[*].ports[*].port}'
+```
+
+Then set them as `/32` (IPv4) or `/128` (IPv6) entries:
+
+```yaml
+networkPolicy:
+  egress:
+    enabled: true
+    apiServer:
+      cidrs: ["172.18.0.2/32"]
+      ports: [6443, 443]
+```
+
+On OpenShift and managed clusters (EKS, GKE, AKS) the endpoints are control-plane node or load-balancer addresses. Include every address the cluster can return, and keep the list up to date when the control plane is scaled or replaced.
+
+### Check that it works
+
+After enabling it:
+
+1. The operator pod stays `Ready` and does not restart: `kubectl -n coraza-system get pods`.
+2. Leader election keeps renewing: `kubectl -n coraza-system get lease waf.k8s.coraza.io -o jsonpath='{.spec.renewTime}'` changes over time.
+3. The operator logs show no API connection errors, and Engines keep reconciling.
+
+If the operator loses the API server, set `networkPolicy.egress.enabled=false` (or fix `apiServer.cidrs`) and run `helm upgrade` again.
 
 ## Platform Requirements
 

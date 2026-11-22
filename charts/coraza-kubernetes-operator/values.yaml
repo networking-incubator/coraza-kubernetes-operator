@@ -182,6 +182,27 @@ tls:
   # and restart the operator before using a newly added hostname.
   sans: []
 
+networkPolicy:
+  # The operator only opens outbound connections to the Kubernetes API server.
+  # When enabled, the operator's NetworkPolicy also restricts egress to the
+  # API server addresses and ports below (no DNS rule is added). Off by
+  # default: the addresses depend on where the API server runs, and a stale
+  # address cuts the operator off. See the Helm values reference before enabling.
+  egress:
+    enabled: false
+    apiServer:
+      # API server endpoint addresses in CIDR form (usually /32 or /128), for
+      # example ["10.0.0.1/32"]
+      # (use the node or control-plane addresses behind the kubernetes Service,
+      # not the Service ClusterIP). When empty, `helm install`/`helm upgrade`
+      # read them from the kubernetes EndpointSlice in the default namespace;
+      # `helm template` and GitOps renderers cannot, so set them explicitly.
+      cidrs: []
+      # API server endpoint ports (the kubernetes Service port and the
+      # endpoint's target port, for example 443 and 6443); at least one. When
+      # the addresses are read from the EndpointSlice, its ports are added too.
+      ports: [6443, 443]
+
 # Deprecated and ignored. The Engine API no longer has spec.driver.wasm.image.
 # Use the bundled module, or set spec.driver.wasm.url with sha256.
 defaultWasmImage: ""
