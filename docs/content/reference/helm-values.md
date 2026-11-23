@@ -17,9 +17,9 @@ The Coraza Kubernetes Operator Helm chart is located at `charts/coraza-kubernete
 | `image.pullPolicy` | string | `IfNotPresent` | Image pull policy. |
 | `imagePullSecrets` | list | `[]` | Image pull secrets for private registries. |
 | `resources.requests.cpu` | string | `10m` | CPU request. |
-| `resources.requests.memory` | string | `128Mi` | Memory request. |
+| `resources.requests.memory` | string | `512Mi` | Memory request. See [Sizing the operator](#sizing-the-operator). |
 | `resources.limits.cpu` | string | `500m` | CPU limit. |
-| `resources.limits.memory` | string | `256Mi` | Memory limit. |
+| `resources.limits.memory` | string | `1Gi` | Memory limit. The operator sets its Go memory limit to 90% of it. See [Sizing the operator](#sizing-the-operator). |
 | `metrics.enabled` | bool | `true` | Enable the controller-runtime metrics endpoint (HTTPS on port 8443). |
 | `metrics.certSecret` | string | `""` | Name of a Secret with TLS cert/key for metrics. When empty, a self-signed certificate is generated. |
 | `metrics.certName` | string | `tls.crt` | Key name of the certificate file inside `certSecret`. |
@@ -64,6 +64,30 @@ rulePolicy:
   deniedDirectives: [SecRuleEngine]
   maxRequestBodyLimit: 1048576
   responseBodyAccess: Denied
+```
+
+## Sizing the operator
+
+Every replica caches all RuleSource and RuleData objects in the cluster and compiles one RuleSet at a time. Plan the memory limit as:
+
+- **Steady state:** the cached rule text and RuleData (about 1 byte of memory per byte stored; the kubectl last-applied annotation and managed fields are not cached), plus one published configuration per Engine, plus a runtime baseline. The operator with the OWASP CRS and three Engines uses about 63 MiB.
+- **One RuleSet compile:** its cost depends on the shape of the rules, not only on their size, and the content limits bound what can be delivered rather than what a compile costs. Measured on a kind cluster: a maximal CRS-shaped RuleSet peaked at 492 to 556 MiB of container memory, with up to about 350 MiB of live heap. The rule limit refuses RuleSets of many small rules; the costliest shape within it, rules with long inline `@pm` lists, reached about 400 MiB of live heap and took about 18 s at 500m of CPU. Regular expressions that expand when compiled are not bounded yet. Without a memory limit the heap grows further.
+
+The defaults (`512Mi` request, `1Gi` limit) cover one maximal CRS-shaped compile on top of a modest rule cache. The operator sets the Go runtime memory limit to 90% of `resources.limits.memory`, read from the `MEMORY_LIMIT_BYTES` environment variable when the container starts (an explicit `GOMEMLIMIT` takes precedence), so the garbage collector works harder before the container reaches its limit; it does not cap the live heap. Because the value is read at start, the chart's `resizePolicy` restarts the container on an in-place memory resize. Without a memory limit, Kubernetes passes the node's allocatable memory instead. Raise the limit when tenants store many large RuleSources.
+
+Because every replica caches every rule object, and every RuleSet change can start a compile, cluster administrators should bound how many of each a tenant can create with a `ResourceQuota` in each tenant namespace, for example:
+
+```yaml
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: coraza-rule-objects
+  namespace: tenant-a
+spec:
+  hard:
+    count/rulesets.waf.k8s.coraza.io: "10"
+    count/rulesources.waf.k8s.coraza.io: "100"
+    count/ruledata.waf.k8s.coraza.io: "20"
 ```
 
 ## Serving certificate and GitOps

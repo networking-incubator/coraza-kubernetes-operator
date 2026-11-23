@@ -74,10 +74,10 @@ metrics:
 resources:
   requests:
     cpu: 50m
-    memory: 256Mi
+    memory: 512Mi
   limits:
     cpu: "1"
-    memory: 512Mi
+    memory: 1Gi
 ```
 
 ```bash

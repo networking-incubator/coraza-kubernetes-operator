@@ -46,6 +46,16 @@ echo "$out" | grep -q "kind: PrometheusRule" && fail "PrometheusRule should not 
 echo "$out" | grep -q "kind: PodMonitor" && fail "PodMonitor should not be present by default" || pass "PodMonitor absent (correct)"
 echo "$out" | grep -q "kind: ServiceMonitor" && fail "ServiceMonitor should not be present by default" || pass "ServiceMonitor absent when disabled (correct)"
 
+# ── Test 1b: operator memory sizing ──────────────────────────────────────────
+section "Operator memory sizing"
+out=$(render -s templates/deployment.yaml)
+echo "$out" | grep -A4 "^ *limits:" | grep -q "memory: 1Gi" && pass "memory limit defaults to 1Gi" || fail "memory limit default is not 1Gi"
+echo "$out" | grep -A4 "^ *requests:" | grep -q "memory: 512Mi" && pass "memory request defaults to 512Mi" || fail "memory request default is not 512Mi"
+echo "$out" | grep -A3 "name: MEMORY_LIMIT_BYTES" | grep -q "resource: limits.memory" &&
+  pass "MEMORY_LIMIT_BYTES comes from limits.memory" || fail "MEMORY_LIMIT_BYTES is not set from limits.memory"
+echo "$out" | grep -A1 "resourceName: memory" | grep -q "restartPolicy: RestartContainer" &&
+  pass "a memory resize restarts the container" || fail "memory resizePolicy is not RestartContainer"
+
 # ── Test 2: ServiceMonitor enabled ───────────────────────────────────────────
 section "ServiceMonitor enabled"
 out=$(render --set metrics.enabled=true --set metrics.serviceMonitor.enabled=true)
