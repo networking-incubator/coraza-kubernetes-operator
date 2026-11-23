@@ -65,6 +65,8 @@ spec:
             - --xds-ca-path=/etc/coraza-tls/{{ .Values.tls.caName | default "ca.crt" }}
             - --xds-auth-failure-rate={{ .Values.xds.authFailureRate }}
             - --xds-auth-failure-burst={{ .Values.xds.authFailureBurst }}
+            - --xds-max-request-bytes={{ int .Values.xds.maxRequestBytes }}
+            - --xds-write-timeout={{ .Values.xds.writeTimeout }}
             {{- with .Values.rulePolicy }}
             {{- $policy := . }}
             {{- range $key := list "deniedOperators" "deniedDirectives" }}

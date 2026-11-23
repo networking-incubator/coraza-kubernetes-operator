@@ -22,6 +22,9 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net"
+	"net/http"
+	"net/netip"
 	"strconv"
 	"strings"
 	"sync"
@@ -35,7 +38,7 @@ import (
 	"github.com/go-logr/logr"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 )
 
@@ -50,8 +53,8 @@ const (
 	// instead of stalling; there is no attempt or time bound because giving
 	// up strands a fail-closed proxy.
 	nackRetryMaxDelay = 30 * time.Second
-	// authenticationDeadline bounds an unauthenticated stream that never sends
-	// its first request, so idle clients cannot occupy every stream slot.
+	// authenticationDeadline bounds a stream that never sends its first
+	// request, so idle clients cannot occupy every stream slot.
 	authenticationDeadline = 10 * time.Second
 )
 
@@ -120,10 +123,42 @@ func retryAttempt(version string) int {
 // the go-control-plane callbacks, which have no other way to close a stream.
 type lifecycleKey struct{}
 
+// admissionKey carries the listener's streamAdmission into the stream
+// callbacks through the request context.
+type admissionKey struct{}
+
+// streamAdmission is one ECDS request the listener authenticated before
+// reading its body, and the slots it holds until it is released.
+type streamAdmission struct {
+	identity Identity
+	token    string
+	// writer is the request's response writer, set before gRPC serves it.
+	writer *deadlineWriter
+	// body is the request's body, set before gRPC serves it.
+	body *requestBody
+
+	mu        sync.Mutex
+	sessionID uint64
+	released  bool
+}
+
+// bind records the request's registry session. It reports false when the
+// request has already been released, in which case the caller unregisters.
+func (a *streamAdmission) bind(sessionID uint64) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.released {
+		return false
+	}
+	a.sessionID = sessionID
+	return true
+}
+
 type serverStream struct {
 	ctx          context.Context
 	streamID     int64
 	identity     Identity
+	admission    *streamAdmission
 	session      *StreamSession
 	resourceName string
 	engineKey    string
@@ -131,12 +166,12 @@ type serverStream struct {
 	proxyKey     string
 	proxyBound   bool
 
-	mu            sync.Mutex
-	lastVersion   string
-	lastNonce     string
-	nackKey       string
-	authenticated atomic.Bool
-	authTimer     *time.Timer
+	mu          sync.Mutex
+	lastVersion string
+	lastNonce   string
+	nackKey     string
+	requested   atomic.Bool
+	authTimer   *time.Timer
 	// retryPending is true while a rejected-configuration retry is scheduled.
 	// retryTimer is that retry, kept so ACK and stream close can cancel it.
 	retryPending bool
@@ -196,23 +231,83 @@ func NewServer(store *SnapshotStore, auth *Authenticator, authz *AuthzIndex, str
 	return s
 }
 
-// streamOnlyECDS registers only the authenticated state-of-the-world stream.
-// The generated ECDS service also exposes unary and delta RPCs; those would
-// bypass this server's stream interceptor, authentication, authorization and
-// node.id pinning, so they fail explicitly instead of serving snapshots.
-type streamOnlyECDS struct {
-	extensionconfigservice.UnimplementedExtensionConfigDiscoveryServiceServer
-	srv extensionconfigservice.ExtensionConfigDiscoveryServiceServer
+// ecdsStreamMethod is the only gRPC method the listener serves.
+const ecdsStreamMethod = extensionconfigservice.ExtensionConfigDiscoveryService_StreamExtensionConfigs_FullMethodName
+
+// ecdsStreamService registers only the authenticated state-of-the-world
+// stream. The generated ECDS service also has unary and delta methods, which
+// would decode a request outside this server's stream lifecycle, so they are
+// not registered.
+var ecdsStreamService = grpc.ServiceDesc{
+	ServiceName: extensionconfigservice.ExtensionConfigDiscoveryService_ServiceDesc.ServiceName,
+	HandlerType: (*extensionconfigservice.ExtensionConfigDiscoveryServiceServer)(nil),
+	Streams: []grpc.StreamDesc{{
+		StreamName: "StreamExtensionConfigs",
+		Handler: func(srv any, stream grpc.ServerStream) error {
+			return srv.(extensionconfigservice.ExtensionConfigDiscoveryServiceServer).StreamExtensionConfigs(
+				&grpc.GenericServerStream[discoveryv3.DiscoveryRequest, discoveryv3.DiscoveryResponse]{ServerStream: stream})
+		},
+		ServerStreams: true,
+		ClientStreams: true,
+	}},
+	Metadata: extensionconfigservice.ExtensionConfigDiscoveryService_ServiceDesc.Metadata,
 }
 
-// StreamExtensionConfigs delegates the supported state-of-the-world stream.
-func (s streamOnlyECDS) StreamExtensionConfigs(stream extensionconfigservice.ExtensionConfigDiscoveryService_StreamExtensionConfigsServer) error {
-	return s.srv.StreamExtensionConfigs(stream)
-}
-
-// Register registers the ECDS service on the gRPC server.
+// Register registers the ECDS stream on the gRPC server.
 func (s *Server) Register(registrar grpc.ServiceRegistrar) {
-	extensionconfigservice.RegisterExtensionConfigDiscoveryServiceServer(registrar, streamOnlyECDS{srv: s.srv})
+	registrar.RegisterService(&ecdsStreamService, s.srv)
+}
+
+// admit authenticates an ECDS request from its headers, before any of its
+// body is read, and reserves an open-stream slot. A non-nil admission must be
+// released; see release.
+func (s *Server) admit(r *http.Request) (_ *streamAdmission, err error) {
+	if s.openStreams.Add(1) > int64(s.Limits.MaxStreams) {
+		s.openStreams.Add(-1)
+		s.Metrics.StreamLimitRejected()
+		return nil, status.Error(codes.ResourceExhausted, "stream limit exceeded")
+	}
+	defer func() {
+		if err != nil {
+			s.openStreams.Add(-1)
+		}
+	}()
+	token, err := bearerToken(r.Header.Values(authorizationHeader))
+	if err != nil {
+		s.Metrics.AuthFailure("error")
+		return nil, status.Error(codes.Unauthenticated, "authentication failed")
+	}
+	identity, err := s.Auth.Authenticate(requestPeerContext(r), token)
+	if err != nil {
+		return nil, s.authenticationFailure(err)
+	}
+	s.Metrics.AuthSuccess()
+	return &streamAdmission{identity: *identity, token: token}, nil
+}
+
+// release frees the slots an admitted request holds when its HTTP handler
+// returns. They are kept after the stream's handler ends until any response
+// still being written is done or aborted, so a stream cannot leave responses
+// in flight beyond its caps; a stalled connection ends at its write timeout.
+func (s *Server) release(admission *streamAdmission) {
+	admission.mu.Lock()
+	admission.released = true
+	sessionID := admission.sessionID
+	admission.mu.Unlock()
+	s.openStreams.Add(-1)
+	if sessionID != 0 {
+		s.Streams.Unregister(sessionID)
+	}
+}
+
+// requestPeerContext exposes the request's source address to the per-source
+// authentication failure limiter.
+func requestPeerContext(r *http.Request) context.Context {
+	address, err := netip.ParseAddrPort(r.RemoteAddr)
+	if err != nil {
+		return r.Context()
+	}
+	return peer.NewContext(r.Context(), &peer.Peer{Addr: net.TCPAddrFromAddrPort(address)})
 }
 
 // lifecycleStatus maps a stream close cause to the bounded gRPC status
@@ -234,10 +329,22 @@ func lifecycleStatus(cause error) error {
 func (s *Server) StreamInterceptor() grpc.StreamServerInterceptor {
 	return func(srv any, stream grpc.ServerStream, _ *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
 		ctx, cancel := context.WithCancelCause(stream.Context())
-
+		// A stream that ends while its response is written, because its
+		// handler returned or was closed, for example by a revocation while
+		// it waits behind that write, ends the write at once. It then ends
+		// with RST_STREAM rather than its status, such as PermissionDenied;
+		// Envoy retries and admission refuses the retry.
 		wrapped := &streamWithContext{
 			ServerStream: stream,
 			ctx:          context.WithValue(ctx, lifecycleKey{}, cancel),
+		}
+		if admission, ok := ctx.Value(admissionKey{}).(*streamAdmission); ok {
+			stop := context.AfterFunc(ctx, admission.writer.abort)
+			defer func() {
+				stop()
+				admission.writer.abort()
+			}()
+			wrapped.body = admission.body
 		}
 		err := handler(srv, wrapped)
 		if err != nil || ctx.Err() != nil {
@@ -268,6 +375,9 @@ func (s *Server) StreamInterceptor() grpc.StreamServerInterceptor {
 type streamWithContext struct {
 	grpc.ServerStream
 	ctx context.Context
+	// body, set for an admitted request, reads one more message for each the
+	// handler receives.
+	body *requestBody
 }
 
 // Context returns the stream lifecycle context.
@@ -278,7 +388,13 @@ func (s *streamWithContext) Context() context.Context { return s.ctx }
 // when the server closes the stream.
 func (s *streamWithContext) RecvMsg(m any) error {
 	done := make(chan error, 1)
-	go func() { done <- s.ServerStream.RecvMsg(m) }()
+	go func() {
+		err := s.ServerStream.RecvMsg(m)
+		if err == nil && s.body != nil {
+			s.body.received()
+		}
+		done <- err
+	}()
 	select {
 	case err := <-done:
 		return err
@@ -296,18 +412,16 @@ func (s *streamWithContext) SendMsg(m any) error {
 }
 
 func (s *Server) onStreamOpen(ctx context.Context, streamID int64, _ string) error {
-	// The cap must hold at open time: a client can hold streams open without
-	// ever sending a request, which RegisterWithCancel would never see.
-	if s.openStreams.Add(1) > int64(s.Limits.MaxStreams) {
-		s.openStreams.Add(-1)
-		s.Metrics.StreamLimitRejected()
-		return status.Error(codes.ResourceExhausted, "stream limit exceeded")
+	// The listener authenticated the request before handing it to gRPC; a
+	// stream without an admission did not come through it.
+	admission, ok := ctx.Value(admissionKey{}).(*streamAdmission)
+	if !ok {
+		s.Metrics.AuthFailure("error")
+		return status.Error(codes.Unauthenticated, "authentication failed")
 	}
-	// Authentication runs on the first request, after the stream is fully
-	// established, so an auth failure is delivered as a gRPC status rather
-	// than an early stream reset. Bound how long a stream may stay idle before
-	// its first request so it cannot reserve a slot indefinitely.
-	entry := &serverStream{ctx: ctx, streamID: streamID}
+	// Bound how long a stream may stay idle before its first request so it
+	// cannot reserve an open-stream slot indefinitely.
+	entry := &serverStream{ctx: ctx, streamID: streamID, identity: admission.identity, admission: admission}
 	deadline := s.authDeadline
 	if deadline <= 0 {
 		deadline = authenticationDeadline
@@ -315,7 +429,7 @@ func (s *Server) onStreamOpen(ctx context.Context, streamID int64, _ string) err
 	if cancel, ok := ctx.Value(lifecycleKey{}).(context.CancelCauseFunc); ok {
 		entry.authTimer = time.AfterFunc(deadline, func() {
 			entry.mu.Lock()
-			idle := !entry.authenticated.Load()
+			idle := !entry.requested.Load()
 			entry.mu.Unlock()
 			if idle {
 				cancel(ErrRevalidateFailed)
@@ -334,32 +448,24 @@ func (s *Server) onStreamRequest(streamID int64, req *discoveryv3.DiscoveryReque
 	entry := raw.(*serverStream)
 
 	if entry.session == nil {
-		// The deadline bounds a stream that never sends a request, not a slow
-		// TokenReview: a request arrived, so stop it before authenticating.
+		// The deadline bounds a stream that never sends a request: one arrived.
 		entry.mu.Lock()
 		if entry.authTimer != nil {
 			entry.authTimer.Stop()
 		}
-		entry.authenticated.Store(true)
+		entry.requested.Store(true)
 		entry.mu.Unlock()
 
-		token, err := bearerToken(entry.ctx)
-		if err != nil {
-			s.Metrics.AuthFailure("error")
-			return status.Error(codes.Unauthenticated, "authentication failed")
-		}
-		identity, err := s.Auth.Authenticate(entry.ctx, token)
-		if err != nil {
-			return s.authenticationFailure(err)
-		}
 		cancel, _ := entry.ctx.Value(lifecycleKey{}).(context.CancelCauseFunc)
-		session, err := s.Streams.RegisterWithCancel(entry.ctx, cancel, "", *identity, token)
+		session, err := s.Streams.RegisterWithCancel(entry.ctx, cancel, "", entry.identity, entry.admission.token)
 		if err != nil {
 			s.Metrics.StreamLimitRejected()
 			return status.Error(codes.ResourceExhausted, "stream limit exceeded")
 		}
-		s.Metrics.AuthSuccess()
-		entry.identity = *identity
+		if !entry.admission.bind(session.ID) {
+			s.Streams.Unregister(session.ID)
+			return status.Error(codes.Unavailable, "stream must be re-established")
+		}
 		entry.session = session
 	}
 	pinRequestNode(entry, req)
@@ -736,8 +842,8 @@ func (s *Server) rejectedVersion(entry *serverStream, req *discoveryv3.Discovery
 func (s *Server) onStreamClosed(streamID int64, _ *corev3.Node) {
 	raw, ok := s.streams.Load(streamID)
 	if !ok {
-		// Rejected opens also trigger the closed callback; their slot was
-		// already rolled back.
+		// A refused open also triggers the closed callback; it stored no
+		// entry and holds no slot.
 		return
 	}
 	entry := raw.(*serverStream)
@@ -755,23 +861,14 @@ func (s *Server) onStreamClosed(streamID int64, _ *corev3.Node) {
 	entry.proxyBound = false
 	s.streams.Delete(streamID)
 	entry.mu.Unlock()
-	s.openStreams.Add(-1)
 	s.clearNack(entry)
 	if proxyBound && s.Store != nil {
 		s.Store.ReleaseRejectedRetry(proxyKey)
 	}
-	if entry.session != nil {
-		s.Streams.Unregister(entry.session.ID)
-	}
 }
 
 // bearerToken extracts exactly one "Bearer <token>" authorization header.
-func bearerToken(ctx context.Context) (string, error) {
-	md, ok := metadata.FromIncomingContext(ctx)
-	if !ok {
-		return "", errors.New("missing gRPC metadata")
-	}
-	values := md.Get(authorizationHeader)
+func bearerToken(values []string) (string, error) {
 	if len(values) != 1 {
 		return "", errors.New("missing or duplicate authorization header")
 	}

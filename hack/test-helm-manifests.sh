@@ -346,6 +346,15 @@ expect_render_fail "networkPolicy.egress.enabled must be true or false" -s templ
 expect_render_fail "networkPolicy.egress.apiServer.cidrs must be a list" -s templates/networkpolicy.yaml \
   --set networkPolicy.egress.enabled=true --set networkPolicy.egress.apiServer.cidrs=10.0.0.1/32
 
+# ── Test 28: xDS request and write bounds ────────────────────────────────────
+section "xDS request and write bounds"
+out=$(render)
+grep -qxE -- " *- --xds-max-request-bytes=262144" <<<"$out" && pass "default request size limit passed" || fail "default --xds-max-request-bytes missing"
+grep -qxE -- " *- --xds-write-timeout=30s" <<<"$out" && pass "default write timeout passed" || fail "default --xds-write-timeout missing"
+out=$(render --set xds.maxRequestBytes=1048576 --set xds.writeTimeout=45s)
+grep -qxE -- " *- --xds-max-request-bytes=1048576" <<<"$out" && pass "request size limit override rendered as an integer" || fail "--xds-max-request-bytes override missing"
+grep -qxE -- " *- --xds-write-timeout=45s" <<<"$out" && pass "write timeout override passed" || fail "--xds-write-timeout override missing"
+
 # ── Summary ───────────────────────────────────────────────────────────────────
 echo
 echo "Results: $PASS passed, $FAIL failed"

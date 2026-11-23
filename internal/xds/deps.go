@@ -115,7 +115,7 @@ func NewDependencies(config Config) (*Dependencies, error) {
 		CertName:    config.CertName,
 		KeyName:     config.KeyName,
 		CAPath:      config.CAPath,
-	}, server, NewAssetHandler(manifest, data, metrics), limits, logger.WithName("xds-listener"))
+	}, server, NewAssetHandler(manifest, data, metrics, limits.WriteTimeout), limits, logger.WithName("xds-listener"))
 	if err != nil {
 		return nil, err
 	}

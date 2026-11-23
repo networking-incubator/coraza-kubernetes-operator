@@ -218,6 +218,7 @@ func TestBuildEnvoyFilterShape(t *testing.T) {
 			apiConfig := nestedMap(t, filter, "config_discovery", "config_source", "api_config_source")
 			assert.Equal(t, "GRPC", nestedString(t, apiConfig, "api_type"))
 			assert.Equal(t, "V3", nestedString(t, apiConfig, "transport_api_version"))
+			assert.Equal(t, true, apiConfig["set_node_on_first_message_only"])
 			discovery := nestedMap(t, filter, "config_discovery")
 
 			grpcServices := nestedSlice(t, apiConfig, "grpc_services")

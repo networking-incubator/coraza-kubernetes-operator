@@ -20,12 +20,17 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"encoding/base64"
+	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
+	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -34,6 +39,8 @@ import (
 	"golang.org/x/net/http2"
 	"golang.org/x/net/netutil"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"sigs.k8s.io/controller-runtime/pkg/certwatcher"
 
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/assets"
@@ -63,6 +70,32 @@ const (
 	// h2MaxReadFrameSize bounds one HTTP/2 frame from the peer; 16 KiB is the
 	// protocol default, kept explicit as a DoS bound.
 	h2MaxReadFrameSize = 1 << 14
+
+	// h2ReadIdleTimeout and h2PingTimeout close a connection whose peer stops
+	// answering: after a minute without frames it is pinged.
+	h2ReadIdleTimeout = time.Minute
+	h2PingTimeout     = 15 * time.Second
+	// writeChunk bounds how much of a response one armed write deadline
+	// covers. gRPC hands a whole response message to one Write, so the
+	// deadline bounds progress rather than message size.
+	writeChunk = 256 << 10
+	// minResponseWriteRate bounds a whole ECDS response's write time to the
+	// write timeout plus its size at this rate, so a peer that reads just
+	// fast enough for each chunk still cannot hold a response for long.
+	minResponseWriteRate = 64 << 10
+
+	// requestReadTimeout bounds how long one ECDS request message may take to
+	// arrive once its first byte is read. Envoy writes each request at once.
+	requestReadTimeout = 10 * time.Second
+	// grpcMessageHeaderBytes is the gRPC length-prefixed message header: one
+	// compression flag byte and a four-byte big-endian length.
+	grpcMessageHeaderBytes = 5
+	// grpcContentType is the gRPC media type.
+	grpcContentType = "application/grpc"
+	// messagesAhead bounds how many request messages a stream reads ahead of
+	// its handler: Envoy has at most an acknowledgement and a subscription
+	// change outstanding. Each can be up to MaxRequestBytes.
+	messagesAhead = 2
 )
 
 // ListenerConfig configures the shared TLS listener.
@@ -80,6 +113,7 @@ type ListenerConfig struct {
 type Listener struct {
 	config  ListenerConfig
 	handler http.Handler
+	server  *Server
 	h2      *http2.Server
 	grpc    *grpc.Server
 	http    *http.Server
@@ -88,6 +122,11 @@ type Listener struct {
 	expiry  *certificateExpiry
 	logger  logr.Logger
 	limits  Limits
+	// requestTimeout bounds one request message once its first byte is read.
+	// It defaults to requestReadTimeout and is a field so tests can shorten it.
+	requestTimeout time.Duration
+	// minWriteRate is minResponseWriteRate, a field so tests can raise it.
+	minWriteRate int
 
 	mu          sync.Mutex
 	listener    net.Listener
@@ -116,7 +155,7 @@ func NewListener(config ListenerConfig, server *Server, handler http.Handler, li
 	}
 
 	grpcServer := grpc.NewServer(
-		grpc.MaxRecvMsgSize(limits.MaxMessageBytes),
+		grpc.MaxRecvMsgSize(limits.MaxRequestBytes),
 		grpc.MaxSendMsgSize(limits.MaxMessageBytes),
 		grpc.ChainStreamInterceptor(server.StreamInterceptor()),
 	)
@@ -125,10 +164,18 @@ func NewListener(config ListenerConfig, server *Server, handler http.Handler, li
 	return &Listener{
 		config:  config,
 		handler: handler,
+		server:  server,
 		h2: &http2.Server{
 			IdleTimeout:          assetIdleTimeout,
 			MaxConcurrentStreams: h2MaxConcurrentStreams,
 			MaxReadFrameSize:     h2MaxReadFrameSize,
+			// A peer that stops reading at the TCP level blocks the
+			// connection's writer, where a stream's write deadline can only
+			// queue a reset; close the connection once a write makes no
+			// progress, which ends all of its streams.
+			WriteByteTimeout: limits.WriteTimeout,
+			ReadIdleTimeout:  h2ReadIdleTimeout,
+			PingTimeout:      h2PingTimeout,
 		},
 		grpc: grpcServer,
 		http: &http.Server{
@@ -139,12 +186,14 @@ func NewListener(config ListenerConfig, server *Server, handler http.Handler, li
 			IdleTimeout:       assetIdleTimeout,
 			MaxHeaderBytes:    assetMaxHeaderBytes,
 		},
-		certs:   certs,
-		ca:      ca,
-		expiry:  expiry,
-		logger:  logger,
-		limits:  limits,
-		started: make(chan struct{}),
+		certs:          certs,
+		ca:             ca,
+		expiry:         expiry,
+		logger:         logger,
+		limits:         limits,
+		requestTimeout: requestReadTimeout,
+		minWriteRate:   minResponseWriteRate,
+		started:        make(chan struct{}),
 	}, nil
 }
 
@@ -351,13 +400,311 @@ func (l *Listener) dispatch(ctx context.Context, connection net.Conn, http1 *con
 }
 
 // serveH2 routes a gRPC request to the xDS server and everything else to the
-// asset handler, so /wasm/<digest>.wasm is reachable over HTTP/2 too.
+// asset handler, so /wasm/<digest>.wasm is reachable over HTTP/2 too. A gRPC
+// request is authenticated from its headers first; a refused request is
+// answered with a gRPC status and its body is never read.
 func (l *Listener) serveH2(w http.ResponseWriter, r *http.Request) {
-	if strings.HasPrefix(r.Header.Get("Content-Type"), "application/grpc") {
-		l.grpc.ServeHTTP(w, r)
+	contentType := r.Header.Get("Content-Type")
+	if !strings.HasPrefix(contentType, grpcContentType) {
+		l.handler.ServeHTTP(w, r)
 		return
 	}
-	l.handler.ServeHTTP(w, r)
+	// Refuse a request grpc-go would refuse for its method, media type,
+	// timeout or binary metadata before any TokenReview.
+	if r.Method != http.MethodPost || !validGRPCContentType(contentType) || r.URL.Path != ecdsStreamMethod ||
+		!validGRPCMetadata(r.Header) {
+		l.server.Metrics.Refused(RefusalMethod)
+		writeGRPCStatus(w, status.Error(codes.Unimplemented, "unknown method"))
+		return
+	}
+	admission, err := l.server.admit(r)
+	if err != nil {
+		writeGRPCStatus(w, err)
+		return
+	}
+	defer l.server.release(admission)
+
+	// Build the controller on the original writer; the wrappers below do not
+	// unwrap to it.
+	controller := http.NewResponseController(w)
+	admission.body = &requestBody{
+		ReadCloser: r.Body,
+		controller: controller,
+		timeout:    l.requestTimeout,
+		maxBytes:   l.limits.MaxRequestBytes,
+		metrics:    l.server.Metrics,
+		ahead:      make(chan struct{}, messagesAhead),
+		done:       r.Context().Done(),
+		closed:     make(chan struct{}),
+	}
+	r.Body = admission.body
+	admission.writer = &deadlineWriter{
+		ResponseWriter: w,
+		controller:     controller,
+		timeout:        l.limits.WriteTimeout,
+		minRate:        l.minWriteRate,
+		metrics:        l.server.Metrics,
+	}
+	l.grpc.ServeHTTP(admission.writer, r.WithContext(context.WithValue(r.Context(), admissionKey{}, admission)))
+}
+
+// validGRPCContentType reports whether grpc-go accepts contentType: the gRPC
+// media type alone or followed by "+" and a subtype or ";" and parameters.
+func validGRPCContentType(contentType string) bool {
+	rest, ok := strings.CutPrefix(contentType, grpcContentType)
+	return ok && (rest == "" || rest[0] == '+' || rest[0] == ';')
+}
+
+// grpcTimeoutPattern is grpc-go's timeout syntax: up to eight digits and a
+// unit.
+var grpcTimeoutPattern = regexp.MustCompile(`^[0-9]{1,8}[HMSmun]$`)
+
+// validGRPCMetadata reports whether grpc-go accepts the request's timeout and
+// binary metadata, which it decodes as standard base64, padded when the value
+// length is a multiple of four and unpadded otherwise.
+func validGRPCMetadata(header http.Header) bool {
+	if timeout := header.Get("Grpc-Timeout"); timeout != "" && !grpcTimeoutPattern.MatchString(timeout) {
+		return false
+	}
+	for name, values := range header {
+		if len(name) < 4 || !strings.EqualFold(name[len(name)-4:], "-bin") {
+			continue
+		}
+		for _, value := range values {
+			encoding := base64.RawStdEncoding
+			if len(value)%4 == 0 {
+				encoding = base64.StdEncoding
+			}
+			if _, err := encoding.DecodeString(value); err != nil {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// writeGRPCStatus answers a gRPC request with a trailers-only status. Status
+// messages are fixed ASCII strings, so they need no percent-encoding.
+func writeGRPCStatus(w http.ResponseWriter, err error) {
+	st := status.Convert(err)
+	header := w.Header()
+	header.Set("Content-Type", grpcContentType)
+	header.Set("Grpc-Status", strconv.Itoa(int(st.Code())))
+	header.Set("Grpc-Message", st.Message())
+	w.WriteHeader(http.StatusOK)
+}
+
+// expired is a write deadline in the past: setting it resets the stream.
+var expired = time.Unix(1, 0)
+
+// deadlineWriter arms a write deadline for every writeChunk bytes written and
+// for Flush, and restores the resting deadline after Flush, so a peer that
+// stops reading is reset within timeout while an idle stream between
+// responses is kept. Under grpc.Server.ServeHTTP, SendMsg returns once a write
+// is handed over, so the deadline must wrap the ResponseWriter, not SendMsg.
+type deadlineWriter struct {
+	http.ResponseWriter
+	controller *http.ResponseController
+	timeout    time.Duration
+	// minRate, when set, bounds a whole message's write time to timeout plus
+	// its size at minRate bytes per second.
+	minRate int
+	// rest is the deadline between writes; zero means none.
+	rest    time.Time
+	metrics *Metrics
+
+	mu      sync.Mutex
+	writing bool      // a message is written and not yet flushed
+	aborted bool      // the stream ended; message writes fail
+	message time.Time // bound on the message being written; zero for none
+}
+
+func (w *deadlineWriter) Write(p []byte) (int, error) {
+	// A gRPC message header fits the server's write buffer; it never blocks.
+	if len(p) <= grpcMessageHeaderBytes {
+		return w.ResponseWriter.Write(p)
+	}
+	w.mu.Lock()
+	w.writing = true
+	if w.minRate > 0 {
+		w.message = time.Now().Add(w.timeout + time.Duration(len(p))*time.Second/time.Duration(w.minRate))
+	}
+	w.mu.Unlock()
+	written := 0
+	for len(p) > 0 {
+		deadline := w.arm()
+		n, err := w.ResponseWriter.Write(p[:min(len(p), writeChunk)])
+		written += n
+		if err != nil {
+			w.countTimeout(deadline)
+			return written, err
+		}
+		p = p[n:]
+	}
+	return written, nil
+}
+
+// Flush implements http.Flusher, which grpc.Server.ServeHTTP requires. Every
+// gRPC write ends with it, so it also clears the deadline the writes armed. A
+// message stays in flight until its flush returns: a small one fits the
+// server's write buffer and waits for flow-control credit only here.
+func (w *deadlineWriter) Flush() {
+	deadline := w.arm()
+	err := w.controller.Flush()
+	w.mu.Lock()
+	w.writing = false
+	w.message = time.Time{}
+	if !w.aborted {
+		_ = w.controller.SetWriteDeadline(w.rest)
+	}
+	w.mu.Unlock()
+	if err != nil {
+		w.countTimeout(deadline)
+	}
+}
+
+// arm sets the deadline for the next write: timeout from now, capped by the
+// message bound and the resting deadline, or expired for a message once
+// aborted.
+func (w *deadlineWriter) arm() time.Time {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	deadline := time.Now().Add(w.timeout)
+	for _, bound := range []time.Time{w.message, w.rest} {
+		if !bound.IsZero() && bound.Before(deadline) {
+			deadline = bound
+		}
+	}
+	if w.aborted && w.writing {
+		deadline = expired
+	}
+	_ = w.controller.SetWriteDeadline(deadline)
+	return deadline
+}
+
+// abort resets the stream if a message is being written or flushed and fails
+// the messages after it, so a stream whose handler ended does not keep a
+// response in flight. A flush with no message pending, such as the stream's
+// status, is not reset.
+func (w *deadlineWriter) abort() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.aborted = true
+	if w.writing {
+		_ = w.controller.SetWriteDeadline(expired)
+	}
+}
+
+// countTimeout counts a failed write that ended at its deadline, but not one
+// that abort ended.
+func (w *deadlineWriter) countTimeout(deadline time.Time) {
+	if !deadline.Equal(expired) && !time.Now().Before(deadline) {
+		w.metrics.Refused(RefusalWriteTimeout)
+	}
+}
+
+// requestBody hands the gRPC handler whole request messages. grpc-go's
+// ServeHTTP transport reads the body on its own goroutine into one pooled
+// 16 KiB buffer per Read and keeps every buffer until a message completes, so
+// a peer sending one-byte frames would hold about 16 KiB of heap per message
+// byte. Filling each Read up to the end of the current message bounds that to
+// the message size; a message above maxBytes is refused, and one that does not
+// arrive within timeout of its first byte is cut by a read deadline.
+// The time before a message starts is not bounded, so idle streams are kept.
+// grpc-go also queues every message without waiting for the handler, so the
+// body reads at most messagesAhead messages ahead of it, holding the rest back
+// in the peer's flow-control window.
+type requestBody struct {
+	io.ReadCloser
+	controller *http.ResponseController
+	timeout    time.Duration
+	maxBytes   int
+	metrics    *Metrics
+	// ahead holds one token per message read and not yet received by the
+	// handler; received takes one back.
+	ahead  chan struct{}
+	done   <-chan struct{} // the request ended
+	closed chan struct{}   // the body was closed
+	once   sync.Once
+
+	header    [grpcMessageHeaderBytes]byte
+	pending   []byte // header bytes not yet returned
+	remaining int    // message bytes not yet read
+}
+
+var errRequestTooLarge = errors.New("request message exceeds the request size limit")
+
+func (b *requestBody) Read(p []byte) (int, error) {
+	if len(b.pending) == 0 && b.remaining == 0 {
+		if err := b.nextMessage(); err != nil {
+			return 0, err
+		}
+	}
+	n := copy(p, b.pending)
+	b.pending = b.pending[n:]
+	if want := min(len(p)-n, b.remaining); want > 0 {
+		read, err := io.ReadFull(b.ReadCloser, p[n:n+want])
+		n += read
+		b.remaining -= read
+		if err != nil {
+			return n, b.failed(err)
+		}
+	}
+	if len(b.pending) == 0 && b.remaining == 0 {
+		_ = b.controller.SetReadDeadline(time.Time{})
+	}
+	return n, nil
+}
+
+// nextMessage waits until the handler has room for another message and reads
+// its header. Neither the wait nor waiting for the first byte is bounded; the
+// rest of the message is bounded from then on.
+func (b *requestBody) nextMessage() error {
+	select {
+	case b.ahead <- struct{}{}:
+	case <-b.closed:
+		return http.ErrBodyReadAfterClose
+	case <-b.done:
+		return context.Canceled
+	}
+	if _, err := io.ReadFull(b.ReadCloser, b.header[:1]); err != nil {
+		return err
+	}
+	_ = b.controller.SetReadDeadline(time.Now().Add(b.timeout))
+	if _, err := io.ReadFull(b.ReadCloser, b.header[1:]); err != nil {
+		return b.failed(err)
+	}
+	length := binary.BigEndian.Uint32(b.header[1:])
+	if int64(length) > int64(b.maxBytes) {
+		b.metrics.Refused(RefusalRequestSize)
+		return errRequestTooLarge
+	}
+	b.pending = b.header[:]
+	b.remaining = int(length)
+	return nil
+}
+
+// received records that the handler received a message, so one more can be
+// read ahead of it.
+func (b *requestBody) received() {
+	select {
+	case <-b.ahead:
+	default:
+	}
+}
+
+// Close wakes a read waiting for the handler; grpc-go closes the body and
+// waits for its reader when the stream ends.
+func (b *requestBody) Close() error {
+	b.once.Do(func() { close(b.closed) })
+	return b.ReadCloser.Close()
+}
+
+func (b *requestBody) failed(err error) error {
+	if errors.Is(err, os.ErrDeadlineExceeded) {
+		b.metrics.Refused(RefusalSlowRequest)
+	}
+	return err
 }
 
 func (l *Listener) track(connection net.Conn) {
@@ -561,14 +908,16 @@ var assetNamePattern = regexp.MustCompile(`^[0-9a-f]{64}\.wasm$`)
 // entries are addressable; the handler never touches the filesystem, never
 // redirects, and requires no bearer token.
 type AssetHandler struct {
-	manifest *assets.Manifest
-	data     []byte
-	metrics  *Metrics
+	manifest     *assets.Manifest
+	data         []byte
+	metrics      *Metrics
+	writeTimeout time.Duration
 }
 
-// NewAssetHandler returns a handler for the verified bundled module.
-func NewAssetHandler(manifest *assets.Manifest, data []byte, metrics *Metrics) *AssetHandler {
-	return &AssetHandler{manifest: manifest, data: data, metrics: metrics}
+// NewAssetHandler returns a handler for the verified bundled module. Each
+// write to a client must complete within writeTimeout.
+func NewAssetHandler(manifest *assets.Manifest, data []byte, metrics *Metrics, writeTimeout time.Duration) *AssetHandler {
+	return &AssetHandler{manifest: manifest, data: data, metrics: metrics, writeTimeout: writeTimeout}
 }
 
 // ServeHTTP implements http.Handler.
@@ -592,10 +941,23 @@ func (h *AssetHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	code = http.StatusOK
 	w.Header().Set("Content-Type", wasmContentType)
 	w.Header().Set("Cache-Control", immutableCacheMax)
-	recorder := &assetStatusWriter{ResponseWriter: w, status: code}
+	// HTTP/2 drops the HTTP/1 server write timeout, so bound each write and
+	// the whole response here; the controller is built on the original writer
+	// because assetStatusWriter does not unwrap.
+	writer := &deadlineWriter{
+		ResponseWriter: w,
+		controller:     http.NewResponseController(w),
+		timeout:        h.writeTimeout,
+		rest:           time.Now().Add(assetWriteTimeout),
+		metrics:        h.metrics,
+	}
+	recorder := &assetStatusWriter{ResponseWriter: writer, status: code}
 	// ServeContent adds Range/If-Range support and Content-Length; the digest
 	// path remains the only addressable name.
 	http.ServeContent(recorder, r, name, time.Time{}, bytes.NewReader(h.data))
+	// Write the last buffered chunk under the deadline too; otherwise it is
+	// flushed after the handler returns.
+	writer.Flush()
 	code = recorder.status
 }
 
@@ -605,9 +967,9 @@ type assetStatusWriter struct {
 }
 
 // WriteHeader records and forwards the response status.
-func (w *assetStatusWriter) WriteHeader(status int) {
-	w.status = status
-	w.ResponseWriter.WriteHeader(status)
+func (w *assetStatusWriter) WriteHeader(code int) {
+	w.status = code
+	w.ResponseWriter.WriteHeader(code)
 }
 
 func assetNameFromPath(path string) (string, bool) {

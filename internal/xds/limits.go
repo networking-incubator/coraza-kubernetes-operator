@@ -38,6 +38,13 @@ import (
 const (
 	// DefaultMaxMessageBytes bounds a single gRPC message (16 MiB).
 	DefaultMaxMessageBytes = 16 << 20
+	// DefaultMaxRequestBytes bounds one ECDS request message (256 KiB). Envoy's
+	// node metadata dominates the first request on a stream (about 47 KB for an
+	// Istio Gateway) and grows with the Gateway pod's labels and annotations.
+	DefaultMaxRequestBytes = 256 << 10
+	// DefaultWriteTimeout bounds one write to a peer, so a peer that stops
+	// reading is reset while an idle stream is kept.
+	DefaultWriteTimeout = 30 * time.Second
 	// DefaultMaxDecodedDataBytes bounds the decoded RuleData carried by one
 	// Engine (6 MiB). envoy-coraza carries rule_data as plain JSON strings and
 	// caps the whole plugin configuration at 8 MiB, so the default leaves
@@ -118,6 +125,8 @@ const (
 // DefaultLimits; the constant-only fields are not flags.
 type Limits struct {
 	MaxMessageBytes           int
+	MaxRequestBytes           int
+	WriteTimeout              time.Duration
 	MaxDecodedDataBytes       int
 	MaxDataFiles              int
 	MaxStreams                int
@@ -137,6 +146,8 @@ type Limits struct {
 func DefaultLimits() Limits {
 	return Limits{
 		MaxMessageBytes:           DefaultMaxMessageBytes,
+		MaxRequestBytes:           DefaultMaxRequestBytes,
+		WriteTimeout:              DefaultWriteTimeout,
 		MaxDecodedDataBytes:       DefaultMaxDecodedDataBytes,
 		MaxDataFiles:              DefaultMaxDataFiles,
 		MaxStreams:                DefaultMaxStreams,
@@ -170,6 +181,8 @@ func orDefault[T cmp.Ordered](v, d T) T {
 func (l Limits) WithDefaults() Limits {
 	defaults := DefaultLimits()
 	l.MaxMessageBytes = orDefault(l.MaxMessageBytes, defaults.MaxMessageBytes)
+	l.MaxRequestBytes = orDefault(l.MaxRequestBytes, defaults.MaxRequestBytes)
+	l.WriteTimeout = orDefault(l.WriteTimeout, defaults.WriteTimeout)
 	l.MaxDecodedDataBytes = orDefault(l.MaxDecodedDataBytes, defaults.MaxDecodedDataBytes)
 	l.MaxDataFiles = orDefault(l.MaxDataFiles, defaults.MaxDataFiles)
 	l.MaxStreams = orDefault(l.MaxStreams, defaults.MaxStreams)
@@ -231,6 +244,10 @@ func (l Limits) Validate() error {
 func (l *Limits) AddFlags(fs *flag.FlagSet) {
 	fs.IntVar(&l.MaxMessageBytes, "xds-max-message-bytes", DefaultMaxMessageBytes,
 		fmt.Sprintf("Maximum gRPC message size in bytes for the ECDS server; at least %d, room for the plugin's 8 MiB configuration cap", minMaxMessageBytes))
+	fs.IntVar(&l.MaxRequestBytes, "xds-max-request-bytes", DefaultMaxRequestBytes,
+		"Maximum size in bytes of one ECDS request from a Gateway; Envoy node metadata dominates the first request on a stream and grows with Gateway pod labels and annotations")
+	fs.DurationVar(&l.WriteTimeout, "xds-write-timeout", DefaultWriteTimeout,
+		"Maximum time each 256 KiB of a response to an ECDS or WASM asset client may take to write, and the base of each ECDS response's total write time (plus its size at 64 KiB/s), before the stream is reset; a connection whose writes make no progress for this long is closed with all its streams")
 	fs.IntVar(&l.MaxDecodedDataBytes, "xds-max-decoded-data-bytes", DefaultMaxDecodedDataBytes,
 		"Maximum decoded RuleData bytes carried by one Engine (envoy-coraza accepts at most 8 MiB in the whole plugin configuration)")
 	fs.IntVar(&l.MaxDataFiles, "xds-max-data-files", DefaultMaxDataFiles,

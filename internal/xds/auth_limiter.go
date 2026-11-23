@@ -97,11 +97,10 @@ func authFailurePeerAddress(ctx context.Context) string {
 	if addr, ok := p.Addr.(*net.TCPAddr); ok && addr.IP != nil {
 		return addr.IP.String()
 	}
-	// grpc.Server.ServeHTTP — the production path, since the operator muxes
-	// gRPC through one http.Server — supplies a string-backed "host:port"
-	// address, so the TCPAddr assertion above never matches there. Without
-	// this fallback every peer lands in one shared bucket and a single
-	// attacker throttles the whole fleet.
+	// Other addresses, such as the string-backed "host:port" one
+	// grpc.Server.ServeHTTP supplies, are grouped by host. Without this
+	// fallback every such peer lands in one shared bucket and a single peer
+	// throttles the whole fleet.
 	if host, _, err := net.SplitHostPort(p.Addr.String()); err == nil {
 		if ip := net.ParseIP(host); ip != nil {
 			return ip.String()

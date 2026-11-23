@@ -55,6 +55,12 @@ for counters by Prometheus convention).
 | `coraza_ruleset_validation_duration_seconds` | histogram | `namespace`, `outcome` | 2 × 13 per namespace | PMFromFile, rule text checks and aggregate parse; excludes status patches and cache writes |
 | `coraza_cache_set_duration_seconds` | histogram | `namespace` | 1 × 10 per namespace | Recorded once per cache transition; excludes resync and unchanged content |
 
+### xDS Serving Plane (`internal/xds/metrics.go`)
+
+| Metric | Type | Labels | Worst-case series/cluster | Notes |
+|--------|------|--------|--------------------------|-------|
+| `coraza_xds_refusals_total` | counter | `reason` | 4 per replica | ECDS requests and streams the listener refused or reset. `reason` ∈ {`method` (a gRPC method other than the ECDS stream), `request_size` (a request above `--xds-max-request-bytes`), `slow_request` (a request that did not arrive in time), `write_timeout` (a client that stopped reading, including WASM asset downloads)} |
+
 ### Controller-Runtime Built-ins (not `coraza_` prefixed)
 
 These metrics are emitted automatically by controller-runtime and are not configurable

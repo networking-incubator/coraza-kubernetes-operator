@@ -395,6 +395,9 @@ func httpFilterValue(resourceName, advertiseAddress, bootstrapPolicy, caPEM stri
 						ApiConfigSource: &corev3.ApiConfigSource{
 							ApiType:             corev3.ApiConfigSource_GRPC,
 							TransportApiVersion: corev3.ApiVersion_V3,
+							// Envoy's node metadata is almost all of every request;
+							// the operator keeps the first one per stream.
+							SetNodeOnFirstMessageOnly: true,
 							GrpcServices: []*corev3.GrpcService{{
 								TargetSpecifier: &corev3.GrpcService_GoogleGrpc_{
 									GoogleGrpc: ecdsGoogleGrpc(advertiseAddress, caPEM, tokenCredential),

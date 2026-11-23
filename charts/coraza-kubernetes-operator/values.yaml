@@ -128,6 +128,18 @@ xds:
   # authentication does not consume the bucket.
   authFailureRate: 10
   authFailureBurst: 1024
+  # Maximum size in bytes of one ECDS request from a Gateway. Envoy's node
+  # metadata dominates the first request on a stream (about 47 KB for an Istio
+  # Gateway) and grows with the Gateway pod's labels and annotations. A
+  # Gateway whose requests exceed the limit stays on its bootstrap policy.
+  maxRequestBytes: 262144
+  # Each 256 KiB of a response to an ECDS or WASM asset client must be written
+  # within this time, and a whole ECDS response within it plus its size at
+  # 64 KiB/s, or the stream is reset. A connection whose writes make no
+  # progress for this long is closed with all its streams. Idle ECDS streams
+  # between updates are not affected; a connection idle for a minute is
+  # pinged and closed if it does not answer within 15s.
+  writeTimeout: 30s
 
 # Cluster rule policy. It narrows what tenant rule text (RuleSource rules and
 # the RuleData files they Include) may use below what envoy-coraza supports and
