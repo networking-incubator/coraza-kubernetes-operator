@@ -121,6 +121,11 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.namespace
+            # The operator sets its Go memory limit to 90% of this value.
+            - name: MEMORY_LIMIT_BYTES
+              valueFrom:
+                resourceFieldRef:
+                  resource: limits.memory
           securityContext:
             runAsNonRoot: true
             privileged: false

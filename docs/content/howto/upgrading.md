@@ -135,6 +135,10 @@ The operator now refuses to start when `--xds-max-message-bytes` is set below 83
 
 The CRDs also bound the API: a RuleSet lists at most 256 `spec.sources` (was 2048) and 64 `spec.data` (was 256), and a RuleData holds at most 1024 files of at most 1048576 characters each (a RuleSet still refuses a file above 1048576 bytes). The RuleSet generated from the OWASP CRS uses 28 sources and one RuleData of 21 files. Objects already stored above the new bounds keep working; an edit that changes an over-limit field must bring it within the bound.
 
+## Operator Memory Defaults
+
+This release raises the chart's default operator memory to a `512Mi` request and a `1Gi` limit (from `128Mi` and `256Mi`): a maximal CRS-shaped RuleSet compile peaked at 492 to 556 MiB of container memory on a kind cluster. The operator now sets its Go memory limit to 90% of the container limit when it starts, and the chart restarts the container on an in-place memory resize so the limit follows. If you override `resources`, check the new sizing guidance in [Helm Chart Values]({{< relref "../reference/helm-values#sizing-the-operator" >}}).
+
 ## Rolling Back
 
 To roll back a Helm upgrade to the previous version:

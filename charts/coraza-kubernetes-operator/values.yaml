@@ -13,13 +13,17 @@ cache:
   # no garbage collection runs.
   gcInterval: "5m"
 
+# Memory covers one maximal RuleSet compile on top of the cached rule objects;
+# compile cost depends on the shape of the rules. See the sizing section of the
+# Helm values reference. The operator sets its Go memory limit to 90% of
+# limits.memory.
 resources:
   limits:
     cpu: 500m
-    memory: 256Mi
+    memory: 1Gi
   requests:
     cpu: 10m
-    memory: 128Mi
+    memory: 512Mi
 
 
 metrics:
@@ -224,8 +228,10 @@ affinity: {}
 topologySpreadConstraints: []
 imagePullSecrets: []
 
+# The Go memory limit is read from limits.memory at container start, so an
+# in-place memory resize restarts the container to apply it.
 resizePolicy:
   - resourceName: cpu
     restartPolicy: NotRequired
   - resourceName: memory
-    restartPolicy: NotRequired
+    restartPolicy: RestartContainer
