@@ -28,14 +28,13 @@ import (
 )
 
 // handlerAddr mimics the string-backed "host:port" address grpc-go's
-// ServeHTTP transport puts in the peer context, which the operator's muxed
-// listener uses in production.
+// ServeHTTP transport puts in the peer context.
 type handlerAddr string
 
 func (h handlerAddr) Network() string { return "http" }
 func (h handlerAddr) String() string  { return string(h) }
 
-// Without the string-address fallback every production peer maps to
+// Without the string-address fallback every such peer maps to
 // "unknown", so one attacker's failed tokens throttle the whole fleet.
 func TestAuthFailurePeerAddressParsesServeHTTPPeer(t *testing.T) {
 	ctx := peer.NewContext(context.Background(), &peer.Peer{Addr: handlerAddr("10.1.2.3:51234")})

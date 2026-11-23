@@ -51,8 +51,8 @@ import (
 )
 
 type listenerFixture struct {
+	*serverStack
 	listener *Listener
-	server   *Server
 	cancel   context.CancelFunc
 	pool     *x509.CertPool
 	manifest *assets.Manifest
@@ -94,17 +94,8 @@ func newListenerFixtureWithConfig(t *testing.T, config ListenerConfig, limits Li
 	if err != nil {
 		t.Fatal(err)
 	}
-	metrics, err := NewMetrics(prometheus.NewRegistry())
-	if err != nil {
-		t.Fatal(err)
-	}
-	store := NewSnapshotStore()
-	authz := NewAuthzIndex(nil, nil, time.Hour, nil)
-	auth := NewAuthenticator(nil, "", time.Minute, time.Minute, time.Second, 0)
-	streams := NewStreamRegistry(auth, authz, limits, metrics)
-	server := NewServer(store, auth, authz, streams, limits, metrics)
-
-	listener, err := NewListener(config, server, NewAssetHandler(manifest, data, metrics), limits, logr.Discard())
+	stack := newServerStack(t, limits)
+	listener, err := NewListener(config, stack.server, NewAssetHandler(manifest, data, stack.metrics, limits.WithDefaults().WriteTimeout), limits, logr.Discard())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,7 +130,7 @@ func newListenerFixtureWithConfig(t *testing.T, config ListenerConfig, limits Li
 		t.Fatal("failed to load test CA")
 	}
 
-	return &listenerFixture{listener: listener, server: server, cancel: cancel, pool: pool, manifest: manifest}
+	return &listenerFixture{serverStack: stack, listener: listener, cancel: cancel, pool: pool, manifest: manifest}
 }
 
 func TestListenerALPNDispatch(t *testing.T) {
@@ -158,9 +149,7 @@ func TestListenerALPNDispatch(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := stream.Send(&discoveryv3.DiscoveryRequest{ResourceNames: []string{ResourceName("shop", "checkout", "uid")}}); err != nil {
-			t.Fatal(err)
-		}
+		send(t, stream, &discoveryv3.DiscoveryRequest{ResourceNames: []string{ResourceName("shop", "checkout", "uid")}})
 		_, err = stream.Recv()
 		if status.Code(err) != codes.Unauthenticated {
 			t.Fatalf("Recv() code = %v, want Unauthenticated (h2 must reach gRPC)", status.Code(err))
@@ -554,7 +543,7 @@ func newAssetHandler(t *testing.T) (*AssetHandler, *assets.Manifest, []byte) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return NewAssetHandler(manifest, data, metrics), manifest, data
+	return NewAssetHandler(manifest, data, metrics, DefaultWriteTimeout), manifest, data
 }
 
 func TestAssetHandlerServesManifestEntry(t *testing.T) {

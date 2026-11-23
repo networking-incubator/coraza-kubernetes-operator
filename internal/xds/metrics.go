@@ -35,6 +35,7 @@ type Metrics struct {
 	authFailures            *prometheus.CounterVec
 	authSuccesses           prometheus.Counter
 	authThrottled           prometheus.Counter
+	refusals                *prometheus.CounterVec
 	publicationLag          prometheus.GaugeFunc
 	lagMu                   sync.RWMutex
 	lagSource               func() float64
@@ -82,6 +83,10 @@ func NewMetrics(reg prometheus.Registerer) (*Metrics, error) {
 			Name: "coraza_xds_auth_throttled_total",
 			Help: "Total ECDS authentication attempts rejected by the per-peer failure rate limit.",
 		}),
+		refusals: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "coraza_xds_refusals_total",
+			Help: "Total ECDS requests and streams refused or reset by the listener, by bounded reason.",
+		}, []string{"reason"}),
 		hashMismatch: prometheus.NewCounter(prometheus.CounterOpts{
 			Name: "coraza_xds_hash_mismatch_total",
 			Help: "Total accepted configurations whose local reconstruction did not match.",
@@ -122,7 +127,7 @@ func NewMetrics(reg prometheus.Registerer) (*Metrics, error) {
 	for _, collector := range []prometheus.Collector{
 		m.streamsActive, m.streamReconnects, m.streamLimitRejections, m.acks,
 		m.nacks, m.authFailures, m.authSuccesses,
-		m.authThrottled,
+		m.authThrottled, m.refusals,
 		m.publicationLag, m.hashMismatch, m.coldReconstruction,
 		m.snapshotVersionInfo, m.wasmAssetRequests, m.bundledManifestVerified,
 		m.servingCertNotAfter, m.caNotAfter,
@@ -200,6 +205,27 @@ func (m *Metrics) AuthThrottled() {
 		return
 	}
 	m.authThrottled.Inc()
+}
+
+// Refusal reasons. The set is fixed so the label stays bounded.
+const (
+	// RefusalMethod is a gRPC method other than the ECDS stream.
+	RefusalMethod = "method"
+	// RefusalRequestSize is a request message above the request-size limit.
+	RefusalRequestSize = "request_size"
+	// RefusalSlowRequest is a request message that did not arrive in time.
+	RefusalSlowRequest = "slow_request"
+	// RefusalWriteTimeout is a peer that stopped reading responses.
+	RefusalWriteTimeout = "write_timeout"
+)
+
+// Refused records a refused request or a reset stream. reason must be one of
+// the Refusal constants.
+func (m *Metrics) Refused(reason string) {
+	if m == nil {
+		return
+	}
+	m.refusals.WithLabelValues(reason).Inc()
 }
 
 // SetPublicationLagSource installs the function that reports the age of the

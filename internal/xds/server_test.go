@@ -18,7 +18,9 @@ package xds
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
+	"io"
 	"net"
 	"sync"
 	"testing"
@@ -41,11 +43,10 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
-	"google.golang.org/grpc/test/bufconn"
 
 	"github.com/envoyproxy/go-control-plane/pkg/resource/v3"
 )
@@ -56,30 +57,22 @@ const (
 	streamEngine = "checkout"
 )
 
-type streamFixture struct {
+// serverStack is the xDS server with a fake TokenReview backend that accepts
+// validToken for identity and an authorization entry for resourceName.
+type serverStack struct {
 	server        *Server
 	store         *SnapshotStore
 	authz         *AuthzIndex
 	streams       *StreamRegistry
 	metrics       *Metrics
 	fakeClient    *k8sfake.Clientset
-	conn          *grpc.ClientConn
-	client        extensionv3.ExtensionConfigDiscoveryServiceClient
 	resourceName  string
 	identity      Identity
-	proxyID       string
 	setTokenValid func(bool)
 	setTokenDelay func(time.Duration)
 }
 
-func newStreamFixture(t *testing.T) *streamFixture {
-	t.Helper()
-	limits := DefaultLimits()
-	limits.StreamMaxLifetime = time.Hour
-	return newStreamFixtureWithLimits(t, limits)
-}
-
-func newStreamFixtureWithLimits(t *testing.T, limits Limits) *streamFixture {
+func newServerStack(t *testing.T, limits Limits) *serverStack {
 	t.Helper()
 
 	identity := Identity{Namespace: testNamespace, Name: "gateway", UID: "sa-uid"}
@@ -130,37 +123,15 @@ func newStreamFixtureWithLimits(t *testing.T, limits Limits) *streamFixture {
 	auth := authzTokenReviewer(fakeClient)
 	streams = NewStreamRegistry(auth, authz, limits, metrics)
 
-	server := NewServer(store, auth, authz, streams, limits, metrics)
-
-	listener := bufconn.Listen(1 << 20)
-	grpcServer := grpc.NewServer(grpc.StreamInterceptor(server.StreamInterceptor()))
-	server.Register(grpcServer)
-	go func() { _ = grpcServer.Serve(listener) }()
-	t.Cleanup(grpcServer.Stop)
-
-	conn, err := grpc.NewClient("passthrough:///bufnet",
-		grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) {
-			return listener.DialContext(ctx)
-		}),
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = conn.Close() })
-
-	return &streamFixture{
-		server:       server,
+	return &serverStack{
+		server:       NewServer(store, auth, authz, streams, limits, metrics),
 		store:        store,
 		authz:        authz,
 		streams:      streams,
 		metrics:      metrics,
 		fakeClient:   fakeClient,
-		conn:         conn,
-		client:       extensionv3.NewExtensionConfigDiscoveryServiceClient(conn),
 		resourceName: resourceName,
 		identity:     identity,
-		proxyID:      "test-proxy",
 		setTokenValid: func(valid bool) {
 			tokenMu.Lock()
 			tokenValid = valid
@@ -171,6 +142,39 @@ func newStreamFixtureWithLimits(t *testing.T, limits Limits) *streamFixture {
 			tokenDelay = delay
 			tokenMu.Unlock()
 		},
+	}
+}
+
+// streamFixture is a gRPC client of the production TLS listener.
+type streamFixture struct {
+	*listenerFixture
+	conn    *grpc.ClientConn
+	client  extensionv3.ExtensionConfigDiscoveryServiceClient
+	proxyID string
+}
+
+func newStreamFixture(t *testing.T) *streamFixture {
+	t.Helper()
+	limits := DefaultLimits()
+	limits.StreamMaxLifetime = time.Hour
+	return newStreamFixtureWithLimits(t, limits)
+}
+
+func newStreamFixtureWithLimits(t *testing.T, limits Limits) *streamFixture {
+	t.Helper()
+	listener := newListenerFixtureWithLimits(t, limits)
+	conn, err := grpc.NewClient(listener.listener.Addr().String(),
+		grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{RootCAs: listener.pool, ServerName: "localhost"})))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+
+	return &streamFixture{
+		listenerFixture: listener,
+		conn:            conn,
+		client:          extensionv3.NewExtensionConfigDiscoveryServiceClient(conn),
+		proxyID:         "test-proxy",
 	}
 }
 
@@ -185,10 +189,17 @@ func (f *streamFixture) open(t *testing.T, token string, names ...string) extens
 	if err != nil {
 		t.Fatalf("StreamExtensionConfigs() error = %v", err)
 	}
-	if err := stream.Send(&discoveryv3.DiscoveryRequest{Node: &corev3.Node{Id: f.proxyID}, ResourceNames: names}); err != nil {
+	send(t, stream, &discoveryv3.DiscoveryRequest{Node: &corev3.Node{Id: f.proxyID}, ResourceNames: names})
+	return stream
+}
+
+// send sends req. A refused stream may already be closed; io.EOF then defers
+// the status to the next Recv, as gRPC specifies.
+func send(t *testing.T, stream extensionv3.ExtensionConfigDiscoveryService_StreamExtensionConfigsClient, req *discoveryv3.DiscoveryRequest) {
+	t.Helper()
+	if err := stream.Send(req); err != nil && !errors.Is(err, io.EOF) {
 		t.Fatalf("Send() error = %v", err)
 	}
-	return stream
 }
 
 func (f *streamFixture) openAs(t *testing.T, proxyID string, names ...string) extensionv3.ExtensionConfigDiscoveryService_StreamExtensionConfigsClient {
@@ -435,6 +446,7 @@ func TestStreamNackRetryIsScopedToRejectingProxy(t *testing.T) {
 	rejected := recv(t, rejecting)
 	acking := fixture.openAs(t, "proxy-acking", fixture.resourceName)
 	accepted := recv(t, acking)
+	fixture.awaitWritten(t)
 	require.Equal(t, "sha256:v1", accepted.GetVersionInfo())
 	require.Equal(t, "coraza-engine-uid", responseVMID(t, accepted))
 
@@ -501,6 +513,7 @@ func TestStreamNackRetryContinuesAfterManyRejections(t *testing.T) {
 	require.NoError(t, fixture.store.Replace(fixture.snapshot(t, "v1")))
 	stream := fixture.open(t, validToken, fixture.resourceName)
 	first := recv(t, stream)
+	fixture.awaitWritten(t)
 	// A stream that already rejected this configuration many times must keep
 	// retrying: giving up strands a fail-closed proxy.
 	fixture.seedNackBudget(t, 100)
@@ -560,6 +573,7 @@ func TestStreamAckResetsNackBudget(t *testing.T) {
 	// The stream has already rejected this configuration many times.
 	stream := fixture.open(t, validToken, fixture.resourceName)
 	first := recv(t, stream)
+	fixture.awaitWritten(t)
 	key := fixture.seedNackBudget(t, 20)
 
 	if err := stream.Send(&discoveryv3.DiscoveryRequest{
@@ -676,9 +690,7 @@ func TestStreamRequiresAuthenticationAndAuthorization(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := stream.Send(&discoveryv3.DiscoveryRequest{ResourceNames: []string{fixture.resourceName}}); err != nil {
-			t.Fatal(err)
-		}
+		send(t, stream, &discoveryv3.DiscoveryRequest{ResourceNames: []string{fixture.resourceName}})
 		if code := recvCode(t, stream); code != codes.Unauthenticated {
 			t.Fatalf("code = %v, want Unauthenticated", code)
 		}
@@ -855,6 +867,7 @@ func TestNackBudgetIsPerStream(t *testing.T) {
 	// block B's retry.
 	streamB := fixture.openAs(t, "proxy-b", fixture.resourceName)
 	second := recv(t, streamB)
+	fixture.awaitWritten(t)
 	if err := streamB.Send(&discoveryv3.DiscoveryRequest{
 		ResourceNames: []string{fixture.resourceName},
 		VersionInfo:   second.GetVersionInfo(),
@@ -903,6 +916,7 @@ func TestStreamRevokedWhenAuthorizationIsRemoved(t *testing.T) {
 
 	stream := fixture.open(t, validToken, fixture.resourceName)
 	_ = recv(t, stream)
+	fixture.awaitWritten(t)
 
 	fixture.authz.RevokeAndNotify(fixture.resourceName)
 	if code := recvCode(t, stream); code != codes.PermissionDenied {
@@ -916,6 +930,7 @@ func TestStreamUnavailableWhenServerShutsDown(t *testing.T) {
 
 	stream := fixture.open(t, validToken, fixture.resourceName)
 	_ = recv(t, stream)
+	fixture.awaitWritten(t)
 
 	fixture.streams.CloseAll()
 	if code := recvCode(t, stream); code != codes.Unavailable {
@@ -929,6 +944,7 @@ func TestStreamUnauthenticatedWhenRevalidationFails(t *testing.T) {
 
 	stream := fixture.open(t, validToken, fixture.resourceName)
 	_ = recv(t, stream)
+	fixture.awaitWritten(t)
 
 	fixture.setTokenValid(false)
 	for range revalidationRejectionsToClose {
@@ -1244,7 +1260,6 @@ func TestRejectedRetryDoesNotRunAfterClose(t *testing.T) {
 	fixture.server.RetryDelay = time.Hour
 	entry := &serverStream{streamID: 42, session: &StreamSession{ID: 42}}
 	fixture.server.streams.Store(int64(42), entry)
-	fixture.server.openStreams.Add(1)
 	fixture.server.resubscribeRejected(entry, fixture.resourceName, "")
 
 	fixture.server.onStreamClosed(42, nil)
@@ -1266,7 +1281,6 @@ func TestRejectedRetryBumpsWhenActive(t *testing.T) {
 	require.NoError(t, fixture.store.Replace(fixture.snapshot(t, "v1")))
 	entry := &serverStream{streamID: 43, session: &StreamSession{ID: 43}}
 	fixture.server.streams.Store(int64(43), entry)
-	fixture.server.openStreams.Add(1)
 	entry.mu.Lock()
 	entry.retryPending = true
 	entry.mu.Unlock()

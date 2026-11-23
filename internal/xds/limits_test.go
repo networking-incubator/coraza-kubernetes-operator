@@ -41,6 +41,8 @@ func TestLimitsWithDefaultsKeepsPartiallySetLimits(t *testing.T) {
 	assert.Equal(t, DefaultStreamMaxLifetime, filled.StreamMaxLifetime)
 	assert.Equal(t, DefaultAuthFailureRate, filled.AuthFailureRate)
 	assert.Equal(t, DefaultAuthFailureBurst, filled.AuthFailureBurst)
+	assert.Equal(t, DefaultMaxRequestBytes, filled.MaxRequestBytes)
+	assert.Equal(t, DefaultWriteTimeout, filled.WriteTimeout)
 
 	assert.Equal(t, DefaultLimits().MaxDataFiles, Limits{}.WithDefaults().MaxDataFiles, "zero limits must default")
 }

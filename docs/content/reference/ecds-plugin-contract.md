@@ -207,6 +207,13 @@ previous working configuration, or its bootstrap policy if it never had one. Wit
 fail-open bootstrap it may allow traffic without WAF; with fail-closed it denies. Persistent
 NACKs can be diagnosed from the operator retry logs and Gateway Envoy logs.
 
+## Revocation
+
+When a token or its authorization is revoked, the operator ends the stream with
+`PermissionDenied`, or `Unauthenticated` for a token that no longer validates. A stream
+revoked while a response is being written ends with an HTTP/2 `RST_STREAM` instead, so the
+rest of that response is not sent; Envoy retries the stream and admission then refuses it.
+
 ## ECDS resource shape
 
 One `TypedExtensionConfig` per Engine, named

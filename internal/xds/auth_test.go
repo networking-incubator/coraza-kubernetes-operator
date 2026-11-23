@@ -29,7 +29,6 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
-	"google.golang.org/grpc/metadata"
 	authv1 "k8s.io/api/authentication/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -309,8 +308,7 @@ func TestAuthenticationCacheKeyDoesNotContainToken(t *testing.T) {
 
 func TestBearerTokenRejectsOversizedToken(t *testing.T) {
 	token := strings.Repeat("a", maxBearerTokenLen+1)
-	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs("authorization", "Bearer "+token))
-	if _, err := bearerToken(ctx); err == nil {
+	if _, err := bearerToken([]string{"Bearer " + token}); err == nil {
 		t.Fatal("bearerToken() error = nil, want length rejection")
 	}
 }
