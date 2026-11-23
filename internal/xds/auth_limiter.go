@@ -94,14 +94,19 @@ func authFailurePeerAddress(ctx context.Context) string {
 	if !ok || p == nil || p.Addr == nil {
 		return unknownAuthPeer
 	}
-	if addr, ok := p.Addr.(*net.TCPAddr); ok && addr.IP != nil {
-		return addr.IP.String()
+	return sourceHost(p.Addr)
+}
+
+// sourceHost keys per-source limits by host, so a new source port is the
+// same source.
+func sourceHost(addr net.Addr) string {
+	if tcp, ok := addr.(*net.TCPAddr); ok && tcp.IP != nil {
+		return tcp.IP.String()
 	}
 	// Other addresses, such as the string-backed "host:port" one
-	// grpc.Server.ServeHTTP supplies, are grouped by host. Without this
-	// fallback every such peer lands in one shared bucket and a single peer
-	// throttles the whole fleet.
-	if host, _, err := net.SplitHostPort(p.Addr.String()); err == nil {
+	// grpc.Server.ServeHTTP supplies, are grouped by host too, so they do not
+	// all share one key.
+	if host, _, err := net.SplitHostPort(addr.String()); err == nil {
 		if ip := net.ParseIP(host); ip != nil {
 			return ip.String()
 		}
@@ -110,12 +115,33 @@ func authFailurePeerAddress(ctx context.Context) string {
 	return unknownAuthPeer
 }
 
+// allows reports whether the source of ctx has a failure permit left, taking
+// none.
+func (l *authFailureLimiter) allows(ctx context.Context) bool {
+	now := l.now()
+	key := authFailurePeerAddress(ctx)
+
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.bucketLocked(key, now).free(now)
+}
+
 func (l *authFailureLimiter) reserve(ctx context.Context) (*authFailureReservation, bool) {
 	now := l.now()
 	key := authFailurePeerAddress(ctx)
 
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	bucket := l.bucketLocked(key, now)
+	if !bucket.free(now) {
+		return nil, false
+	}
+	bucket.pending++
+	return &authFailureReservation{limiter: l, bucket: bucket}, true
+}
+
+// bucketLocked returns the bucket for key, creating it. l.mu must be held.
+func (l *authFailureLimiter) bucketLocked(key string, now time.Time) *authFailureBucket {
 	l.sweepIdleLocked(now)
 
 	bucket := l.buckets[key]
@@ -130,11 +156,12 @@ func (l *authFailureLimiter) reserve(ctx context.Context) (*authFailureReservati
 	}
 	bucket.lastSeen = now
 	l.buckets[key] = bucket
-	if bucket.limiter.TokensAt(now)-float64(bucket.pending) < 1 {
-		return nil, false
-	}
-	bucket.pending++
-	return &authFailureReservation{limiter: l, bucket: bucket}, true
+	return bucket
+}
+
+// free reports whether a permit is left once the pending reviews are counted.
+func (b *authFailureBucket) free(now time.Time) bool {
+	return b.limiter.TokensAt(now)-float64(b.pending) >= 1
 }
 
 func (l *authFailureLimiter) sweepIdle() {

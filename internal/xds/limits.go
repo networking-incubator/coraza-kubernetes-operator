@@ -55,9 +55,6 @@ const (
 	DefaultMaxDataFiles = 1024
 	// DefaultMaxStreams bounds concurrent ECDS streams per replica.
 	DefaultMaxStreams = 512
-	// DefaultMaxStreamsPerIdentity bounds concurrent ECDS streams per
-	// authenticated ServiceAccount; operators may lower it independently.
-	DefaultMaxStreamsPerIdentity = DefaultMaxStreams
 	// DefaultMaxPendingWatches is the number of pending snapshot watches per
 	// stream. Updates coalesce to the latest snapshot.
 	DefaultMaxPendingWatches = 1
@@ -131,6 +128,7 @@ type Limits struct {
 	MaxDataFiles              int
 	MaxStreams                int
 	MaxStreamsPerIdentity     int
+	MaxConnectionsPerSource   int
 	MaxPendingWatches         int
 	MaxQueuedUpdates          int
 	StreamMaxLifetime         time.Duration
@@ -151,7 +149,6 @@ func DefaultLimits() Limits {
 		MaxDecodedDataBytes:       DefaultMaxDecodedDataBytes,
 		MaxDataFiles:              DefaultMaxDataFiles,
 		MaxStreams:                DefaultMaxStreams,
-		MaxStreamsPerIdentity:     DefaultMaxStreamsPerIdentity,
 		MaxPendingWatches:         DefaultMaxPendingWatches,
 		MaxQueuedUpdates:          DefaultMaxQueuedUpdates,
 		StreamMaxLifetime:         DefaultStreamMaxLifetime,
@@ -186,7 +183,13 @@ func (l Limits) WithDefaults() Limits {
 	l.MaxDecodedDataBytes = orDefault(l.MaxDecodedDataBytes, defaults.MaxDecodedDataBytes)
 	l.MaxDataFiles = orDefault(l.MaxDataFiles, defaults.MaxDataFiles)
 	l.MaxStreams = orDefault(l.MaxStreams, defaults.MaxStreams)
-	l.MaxStreamsPerIdentity = orDefault(l.MaxStreamsPerIdentity, defaults.MaxStreamsPerIdentity)
+	// The per-identity bound is an optional ceiling over the cap derived from
+	// a ServiceAccount's authorized pods.
+	l.MaxStreamsPerIdentity = orDefault(l.MaxStreamsPerIdentity, l.MaxStreams)
+	// One source address may hold a 16th of the connections without an
+	// admitted ECDS stream unless set; host-network Gateway pods on one node
+	// share the node's address.
+	l.MaxConnectionsPerSource = orDefault(l.MaxConnectionsPerSource, max(1, l.MaxStreams/perSourceShare))
 	l.MaxPendingWatches = orDefault(l.MaxPendingWatches, defaults.MaxPendingWatches)
 	l.MaxQueuedUpdates = orDefault(l.MaxQueuedUpdates, defaults.MaxQueuedUpdates)
 	l.StreamMaxLifetime = orDefault(l.StreamMaxLifetime, defaults.StreamMaxLifetime)
@@ -253,9 +256,11 @@ func (l *Limits) AddFlags(fs *flag.FlagSet) {
 	fs.IntVar(&l.MaxDataFiles, "xds-max-data-files", DefaultMaxDataFiles,
 		"Maximum number of RuleData files carried by one Engine (envoy-coraza accepts at most 1024)")
 	fs.IntVar(&l.MaxStreams, "xds-max-streams", DefaultMaxStreams,
-		"Maximum concurrent ECDS streams per replica")
-	fs.IntVar(&l.MaxStreamsPerIdentity, "xds-max-streams-per-identity", DefaultMaxStreamsPerIdentity,
-		"Maximum concurrent ECDS streams per authenticated ServiceAccount")
+		"Maximum concurrent ECDS streams per replica. Authentication slots and review permits, a quarter of this each, are shared by all sources, so one source sending many invalid tokens can delay other Gateways' token reviews until its failure budget is spent")
+	fs.IntVar(&l.MaxStreamsPerIdentity, "xds-max-streams-per-identity", 0,
+		"Upper bound on concurrent ECDS streams per authenticated ServiceAccount (0 means --xds-max-streams); within it a ServiceAccount may hold four streams per authorized Gateway pod running as it, plus 16. Separately, and not bounded by this flag, all ServiceAccounts of a namespace together may hold four streams per Gateway pod counted there, plus 16. Pods are counted when they carry the Gateway's label, are Running and not being deleted, are controlled by a ReplicaSet or Deployment, and name an existing ServiceAccount, so many namespaces with Gateways and Engines, or many running pods, can still use most of the streams; bound that with ResourceQuota and by who may create Engines. A scale-up to more than about three times the counted pods before they are recounted can see brief refusals, which Envoy retries")
+	fs.IntVar(&l.MaxConnectionsPerSource, "xds-max-connections-per-source", 0,
+		"Maximum connections from one source address that carry no admitted ECDS stream, such as module downloads; over it one of them is closed for the newest, one without a request first (0 means a 16th of --xds-max-streams). Over --xds-max-streams such connections in all, one of the source holding the most is closed; connections with an admitted ECDS stream never are. How fair this is depends on how many source addresses hold such connections, Gateways included: when sources tie, a newcomer from another source closes the oldest one without a request, which can be a Gateway's still in its handshake or before its first stream, and one with a request in progress, under token review or downloading the module only after idle ones. Host-network Gateway pods on one node share the node's address")
 	fs.DurationVar(&l.StreamMaxLifetime, "xds-stream-max-lifetime", DefaultStreamMaxLifetime,
 		"Maximum ECDS stream lifetime before a forced reconnect (with jitter)")
 	fs.DurationVar(&l.TokenReviewRevalidate, "xds-token-review-revalidate", DefaultTokenReviewRevalidate,
@@ -265,5 +270,8 @@ func (l *Limits) AddFlags(fs *flag.FlagSet) {
 	fs.Float64Var(&l.AuthFailureRate, "xds-auth-failure-rate", DefaultAuthFailureRate,
 		"Maximum failed ECDS authentication attempts per second per peer IP")
 	fs.IntVar(&l.AuthFailureBurst, "xds-auth-failure-burst", DefaultAuthFailureBurst,
-		"Maximum burst of failed ECDS authentication attempts per peer IP")
+		"Maximum burst of failed ECDS authentication attempts per peer IP. It also bounds how many new streams from one peer IP "+
+			"can be in token review at once. The budget is per source address, so Gateways that share an address (host-network "+
+			"pods on one node, or pods behind NAT) share it, and a client on that address that sends many invalid tokens can delay "+
+			"those Gateways' reconnects until the budget refills; Gateways whose tokens are already cached are not affected")
 }

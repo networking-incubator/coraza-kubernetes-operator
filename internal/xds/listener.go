@@ -18,6 +18,7 @@ package xds
 
 import (
 	"bytes"
+	"container/list"
 	"context"
 	"crypto/tls"
 	"encoding/base64"
@@ -27,17 +28,19 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-logr/logr"
 	"golang.org/x/net/http2"
-	"golang.org/x/net/netutil"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -64,13 +67,22 @@ const (
 	// creation while the certificate files are missing.
 	certificateRetryInterval = 5 * time.Second
 
-	// h2MaxConcurrentStreams bounds HTTP/2 streams per connection: ECDS uses
-	// one long-lived stream per proxy and asset fetches are short.
-	h2MaxConcurrentStreams = 64
+	// h2MaxConcurrentStreams bounds HTTP/2 streams per connection: Envoy
+	// keeps one long-lived ECDS stream per pod and asset fetches are short.
+	h2MaxConcurrentStreams = 8
 	// h2MaxReadFrameSize bounds one HTTP/2 frame from the peer; 16 KiB is the
 	// protocol default, kept explicit as a DoS bound.
 	h2MaxReadFrameSize = 1 << 14
 
+	// perSourceShare sizes the default per-source share of the pool of
+	// connections without an admitted ECDS stream as a share (1/n) of
+	// MaxStreams, which is the pool's size.
+	perSourceShare = 16
+	// h2IdleTimeout closes an HTTP/2 connection that carries no stream for
+	// this long, including one that never starts a request.
+	h2IdleTimeout = 15 * time.Second
+	// h2UploadBuffer is the receive window per connection and per stream.
+	h2UploadBuffer = 64 << 10
 	// h2ReadIdleTimeout and h2PingTimeout close a connection whose peer stops
 	// answering: after a minute without frames it is pinged.
 	h2ReadIdleTimeout = time.Minute
@@ -112,7 +124,7 @@ type ListenerConfig struct {
 // configuration is untouched.
 type Listener struct {
 	config  ListenerConfig
-	handler http.Handler
+	handler *AssetHandler
 	server  *Server
 	h2      *http2.Server
 	grpc    *grpc.Server
@@ -138,7 +150,7 @@ type Listener struct {
 
 // NewListener loads the serving certificate and CA, prepares the gRPC and HTTP
 // servers, and returns a listener that binds when started.
-func NewListener(config ListenerConfig, server *Server, handler http.Handler, limits Limits, logger logr.Logger) (*Listener, error) {
+func NewListener(config ListenerConfig, server *Server, handler *AssetHandler, limits Limits, logger logr.Logger) (*Listener, error) {
 	config = config.withDefaults()
 	limits = limits.WithDefaults()
 
@@ -161,12 +173,12 @@ func NewListener(config ListenerConfig, server *Server, handler http.Handler, li
 	)
 	server.Register(grpcServer)
 
-	return &Listener{
+	l := &Listener{
 		config:  config,
 		handler: handler,
 		server:  server,
 		h2: &http2.Server{
-			IdleTimeout:          assetIdleTimeout,
+			IdleTimeout:          h2IdleTimeout,
 			MaxConcurrentStreams: h2MaxConcurrentStreams,
 			MaxReadFrameSize:     h2MaxReadFrameSize,
 			// A peer that stops reading at the TCP level blocks the
@@ -176,10 +188,17 @@ func NewListener(config ListenerConfig, server *Server, handler http.Handler, li
 			WriteByteTimeout: limits.WriteTimeout,
 			ReadIdleTimeout:  h2ReadIdleTimeout,
 			PingTimeout:      h2PingTimeout,
+			// Bound what a peer may send before a handler reads it, such as a
+			// request body while its token is reviewed. Envoy's largest
+			// request, the first on a stream, is about 47 KB.
+			MaxUploadBufferPerConnection: h2UploadBuffer,
+			MaxUploadBufferPerStream:     h2UploadBuffer,
 		},
 		grpc: grpcServer,
 		http: &http.Server{
-			Handler:           handler,
+			ConnContext: func(ctx context.Context, c net.Conn) context.Context {
+				return context.WithValue(ctx, connKey{}, c.(*tls.Conn).NetConn())
+			},
 			ReadHeaderTimeout: assetReadHeaderTimeout,
 			ReadTimeout:       assetReadTimeout,
 			WriteTimeout:      assetWriteTimeout,
@@ -194,7 +213,24 @@ func NewListener(config ListenerConfig, server *Server, handler http.Handler, li
 		requestTimeout: requestReadTimeout,
 		minWriteRate:   minResponseWriteRate,
 		started:        make(chan struct{}),
-	}, nil
+	}
+	l.http.Handler = http.HandlerFunc(l.serveHTTP1)
+	return l, nil
+}
+
+// connKey carries an HTTP/1.1 request's trackedConn in its context.
+type connKey struct{}
+
+// serveHTTP1 serves the asset route on an HTTP/1.1 connection.
+func (l *Listener) serveHTTP1(w http.ResponseWriter, r *http.Request) {
+	l.serveAsset(r.Context().Value(connKey{}).(*trackedConn), w, r)
+}
+
+// serveAsset serves the asset route; a module download is protected from
+// being closed for room, see trackedConn.rankLocked.
+func (l *Listener) serveAsset(conn *trackedConn, w http.ResponseWriter, r *http.Request) {
+	defer conn.request(r.Method == http.MethodGet && l.handler.serves(r.URL.Path))()
+	l.handler.ServeHTTP(w, r)
 }
 
 func (c ListenerConfig) withDefaults() ListenerConfig {
@@ -224,10 +260,13 @@ func (l *Listener) Start(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("bind xDS listener on %s: %w", l.config.BindAddress, err)
 	}
-	// Cap accepted connections above the stream limit: every ECDS stream needs
-	// a connection, and the headroom keeps short-lived asset fetches from
-	// being starved by long-lived stream connections.
-	base = netutil.LimitListener(base, 2*l.limits.MaxStreams)
+	base = &connectionPool{
+		Listener:      base,
+		maxUnadmitted: l.limits.MaxStreams,
+		maxPerSource:  l.limits.MaxConnectionsPerSource,
+		metrics:       l.server.Metrics,
+		perSource:     map[string]int{},
+	}
 	tlsListener := tls.NewListener(base, l.tlsConfig())
 	http1 := newConnListener(tlsListener.Addr())
 
@@ -377,9 +416,10 @@ func (l *Listener) dispatch(ctx context.Context, connection net.Conn, http1 *con
 	case "h2":
 		// Serve gRPC and the asset route on the same HTTP/2 connection: Envoy
 		// speaks gRPC, while tools such as curl default to HTTP/2 for both.
+		conn := tlsConnection.NetConn().(*trackedConn)
 		l.track(tlsConnection)
 		l.h2.ServeConn(tlsConnection, &http2.ServeConnOpts{
-			Handler: http.HandlerFunc(l.serveH2),
+			Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { l.serveH2(conn, w, r) }),
 			// BaseConfig carries the header limit to HTTP/2. The HTTP/1
 			// write and read timeouts are deliberately dropped: x/net/http2
 			// applies them as per-stream deadlines, which would reset
@@ -402,13 +442,16 @@ func (l *Listener) dispatch(ctx context.Context, connection net.Conn, http1 *con
 // serveH2 routes a gRPC request to the xDS server and everything else to the
 // asset handler, so /wasm/<digest>.wasm is reachable over HTTP/2 too. A gRPC
 // request is authenticated from its headers first; a refused request is
-// answered with a gRPC status and its body is never read.
-func (l *Listener) serveH2(w http.ResponseWriter, r *http.Request) {
+// answered with a gRPC status and its body is never read. While the request
+// holds an admitted stream, conn is out of the pools of connections without
+// one; before that, conn records the request for the pools' eviction order.
+func (l *Listener) serveH2(conn *trackedConn, w http.ResponseWriter, r *http.Request) {
 	contentType := r.Header.Get("Content-Type")
 	if !strings.HasPrefix(contentType, grpcContentType) {
-		l.handler.ServeHTTP(w, r)
+		l.serveAsset(conn, w, r)
 		return
 	}
+	defer conn.request(false)()
 	// Refuse a request grpc-go would refuse for its method, media type,
 	// timeout or binary metadata before any TokenReview.
 	if r.Method != http.MethodPost || !validGRPCContentType(contentType) || r.URL.Path != ecdsStreamMethod ||
@@ -417,12 +460,14 @@ func (l *Listener) serveH2(w http.ResponseWriter, r *http.Request) {
 		writeGRPCStatus(w, status.Error(codes.Unimplemented, "unknown method"))
 		return
 	}
-	admission, err := l.server.admit(r)
+	admission, err := l.server.admit(r, conn.review)
 	if err != nil {
 		writeGRPCStatus(w, err)
 		return
 	}
 	defer l.server.release(admission)
+	conn.admit()
+	defer conn.unadmit()
 
 	// Build the controller on the original writer; the wrappers below do not
 	// unwrap to it.
@@ -847,6 +892,231 @@ func (r *certWatcher) Start(ctx context.Context) error {
 }
 
 // -----------------------------------------------------------------------------
+// Connection pools
+// -----------------------------------------------------------------------------
+
+// connectionPool holds every connection that carries no admitted ECDS stream
+// (one in its handshake, a module download, or one before its first stream)
+// in a global pool, at most maxPerSource of them per source address. A
+// newcomer over the pool displaces a connection of the source holding the
+// most, so a source flooding connections displaces its own, never one of a
+// source holding fewer; a newcomer over its source's share displaces one of
+// that source. This is fair while a flood comes from fewer source addresses
+// than the pool holds connections. Within those sources the oldest connection without a request
+// goes first, then the oldest with one, and a protected one, which serves a
+// module download or a request whose token is under review, only when nothing
+// else is left. Connections that carry admitted streams are bounded by the
+// stream limits and never closed for room. Under pressure a module download
+// can still be closed this way, and Envoy retries it.
+type connectionPool struct {
+	net.Listener
+	maxUnadmitted int
+	maxPerSource  int
+	metrics       *Metrics
+
+	mu         sync.Mutex
+	unadmitted list.List      // *trackedConn, oldest first
+	perSource  map[string]int // unadmitted connections per source
+}
+
+// Accept returns the next connection that is not itself closed for room.
+func (p *connectionPool) Accept() (net.Conn, error) {
+	for {
+		connection, err := p.Listener.Accept()
+		if err != nil {
+			return nil, err
+		}
+		c := &trackedConn{Conn: connection, pool: p, source: connectionSource(connection.RemoteAddr())}
+		evicted := p.add(c)
+		p.closeEvicted(evicted)
+		if !slices.Contains(evicted, c) {
+			return c, nil
+		}
+	}
+}
+
+// add joins c to the pools and returns the connections closed for room,
+// which can include c.
+func (p *connectionPool) add(c *trackedConn) []*trackedConn {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.joinPoolsLocked(c)
+}
+
+// joinPoolsLocked adds c to the pools as their newest member and takes
+// connections out for room, which can include c; closeEvicted closes them.
+func (p *connectionPool) joinPoolsLocked(c *trackedConn) []*trackedConn {
+	c.inPool = p.unadmitted.PushBack(c)
+	p.perSource[c.source]++
+	var evicted []*trackedConn
+	for p.perSource[c.source] > p.maxPerSource {
+		evicted = append(evicted, p.removeLocked(p.victimLocked(func(o *trackedConn) bool { return o.source == c.source })))
+	}
+	for p.unadmitted.Len() > p.maxUnadmitted {
+		most := 0
+		for _, n := range p.perSource {
+			most = max(most, n)
+		}
+		evicted = append(evicted, p.removeLocked(p.victimLocked(func(o *trackedConn) bool { return p.perSource[o.source] == most })))
+	}
+	return evicted
+}
+
+// closeEvicted closes connections taken out for room. It runs without p.mu,
+// which Close takes.
+func (p *connectionPool) closeEvicted(evicted []*trackedConn) {
+	for _, old := range evicted {
+		p.metrics.Refused(RefusalConnectionEvicted)
+		_ = old.Close()
+	}
+}
+
+// victimLocked returns the connection in scope to close for room: the oldest
+// of the lowest rank.
+func (p *connectionPool) victimLocked(inScope func(*trackedConn) bool) *trackedConn {
+	var victim *trackedConn
+	rank := 0
+	for e := p.unadmitted.Front(); e != nil; e = e.Next() {
+		c := e.Value.(*trackedConn)
+		if !inScope(c) {
+			continue
+		}
+		if r := c.rankLocked(); victim == nil || r < rank {
+			victim, rank = c, r
+			if rank == 0 {
+				break
+			}
+		}
+	}
+	return victim
+}
+
+func (p *connectionPool) removeLocked(c *trackedConn) *trackedConn {
+	c.closed = true
+	p.leavePoolsLocked(c)
+	return c
+}
+
+func (p *connectionPool) leavePoolsLocked(c *trackedConn) {
+	if c.inPool == nil {
+		return
+	}
+	p.unadmitted.Remove(c.inPool)
+	c.inPool = nil
+	decrement(p.perSource, c.source)
+}
+
+// connectionSource keys the connection pools by source host, and an IPv6 host
+// by its /64, which one host or pod network usually holds whole.
+func connectionSource(addr net.Addr) string {
+	host := sourceHost(addr)
+	if ip, err := netip.ParseAddr(host); err == nil && !ip.Unmap().Is4() {
+		prefix, _ := ip.WithZone("").Prefix(64)
+		return prefix.String()
+	}
+	return host
+}
+
+// trackedConn is one connection in a connectionPool.
+type trackedConn struct {
+	net.Conn
+	pool    *connectionPool
+	source  string
+	stalled atomic.Bool
+
+	// Guarded by pool.mu.
+	admitted  int
+	closed    bool
+	inPool    *list.Element // nil while admitted or closed
+	requests  int           // requests in progress
+	protected int           // module downloads being written and tokens under review
+}
+
+// rankLocked orders connections for closing: 0 in a handshake or without a
+// request, 1 with a request in progress, 2 protected. A token review is
+// protected while it runs, bounded by the review timeout and in number by the
+// authentication slots; a GET of the published module while its response is
+// written, bounded by the asset write timeout.
+func (c *trackedConn) rankLocked() int {
+	switch {
+	case c.protected > 0:
+		return 2
+	case c.requests > 0:
+		return 1
+	}
+	return 0
+}
+
+// request records a request in progress, protected when it downloads the
+// module, and returns the function that ends it.
+func (c *trackedConn) request(download bool) (end func()) {
+	protected := 0
+	if download {
+		protected = 1
+	}
+	c.track(1, protected)
+	return func() { c.track(-1, -protected) }
+}
+
+// review records a request whose token is under review, which is protected,
+// and returns the function that ends it.
+func (c *trackedConn) review() (end func()) {
+	c.track(0, 1)
+	return func() { c.track(0, -1) }
+}
+
+func (c *trackedConn) track(requests, protected int) {
+	c.pool.mu.Lock()
+	defer c.pool.mu.Unlock()
+	c.requests += requests
+	c.protected += protected
+}
+
+// admit takes the connection out of the pools while it carries an admitted
+// ECDS stream.
+func (c *trackedConn) admit() {
+	c.pool.mu.Lock()
+	defer c.pool.mu.Unlock()
+	c.admitted++
+	c.pool.leavePoolsLocked(c)
+}
+
+// unadmit returns the connection to the pools, as their newest member, when
+// its last admitted stream ends, under the same caps as a newcomer.
+func (c *trackedConn) unadmit() {
+	var evicted []*trackedConn
+	c.pool.mu.Lock()
+	c.admitted--
+	if c.admitted == 0 && !c.closed {
+		evicted = c.pool.joinPoolsLocked(c)
+	}
+	c.pool.mu.Unlock()
+	c.pool.closeEvicted(evicted)
+}
+
+// Write fails at once after a write has timed out. TLS gives its close alert
+// a 5s write deadline, which would otherwise keep a connection whose peer
+// stopped reading, and its streams' slots, that much longer.
+func (c *trackedConn) Write(p []byte) (int, error) {
+	if c.stalled.Load() {
+		return 0, os.ErrDeadlineExceeded
+	}
+	n, err := c.Conn.Write(p)
+	if errors.Is(err, os.ErrDeadlineExceeded) {
+		c.stalled.Store(true)
+	}
+	return n, err
+}
+
+// Close takes the connection out of the pools.
+func (c *trackedConn) Close() error {
+	c.pool.mu.Lock()
+	c.pool.removeLocked(c)
+	c.pool.mu.Unlock()
+	return c.Conn.Close()
+}
+
+// -----------------------------------------------------------------------------
 // Channel-backed listener
 // -----------------------------------------------------------------------------
 
@@ -920,6 +1190,12 @@ func NewAssetHandler(manifest *assets.Manifest, data []byte, metrics *Metrics, w
 	return &AssetHandler{manifest: manifest, data: data, metrics: metrics, writeTimeout: writeTimeout}
 }
 
+// serves reports whether path names the published module.
+func (h *AssetHandler) serves(path string) bool {
+	name, ok := assetNameFromPath(path)
+	return ok && h.manifest != nil && name == h.manifest.SHA256+assetPathSuffix
+}
+
 // ServeHTTP implements http.Handler.
 func (h *AssetHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	code := http.StatusNotFound
@@ -932,11 +1208,11 @@ func (h *AssetHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	name, ok := assetNameFromPath(r.URL.Path)
-	if !ok || h.manifest == nil || name != h.manifest.SHA256+assetPathSuffix {
+	if !h.serves(r.URL.Path) {
 		w.WriteHeader(code)
 		return
 	}
+	name := h.manifest.SHA256 + assetPathSuffix
 
 	code = http.StatusOK
 	w.Header().Set("Content-Type", wasmContentType)

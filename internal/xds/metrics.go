@@ -223,6 +223,14 @@ const (
 	// RefusalResponseBudget is an identity asking for full responses faster
 	// than its budget allows.
 	RefusalResponseBudget = "response_budget"
+	// RefusalConnectionEvicted is a connection without an admitted ECDS
+	// stream closed to make room for a newer one.
+	RefusalConnectionEvicted = "connection_evicted"
+	// RefusalAuthenticationQueue is a stream that waited too long for an
+	// authentication slot and a review permit.
+	RefusalAuthenticationQueue = "authentication_queue"
+	// RefusalUnauthorized is a stream whose identity no Engine grants.
+	RefusalUnauthorized = "unauthorized"
 )
 
 // Refused records a refused request or a reset stream. reason must be one of

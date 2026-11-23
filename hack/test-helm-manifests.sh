@@ -355,6 +355,13 @@ out=$(render --set xds.maxRequestBytes=1048576 --set xds.writeTimeout=45s)
 grep -qxE -- " *- --xds-max-request-bytes=1048576" <<<"$out" && pass "request size limit override rendered as an integer" || fail "--xds-max-request-bytes override missing"
 grep -qxE -- " *- --xds-write-timeout=45s" <<<"$out" && pass "write timeout override passed" || fail "--xds-write-timeout override missing"
 
+# ── Test 29: xDS per-source connection cap ───────────────────────────────────
+section "xDS per-source connection cap"
+out=$(render)
+grep -qxE -- " *- --xds-max-connections-per-source=0" <<<"$out" && pass "default per-source connection share passed" || fail "default --xds-max-connections-per-source missing"
+out=$(render --set xds.maxConnectionsPerSource=4096)
+grep -qxE -- " *- --xds-max-connections-per-source=4096" <<<"$out" && pass "per-source connection cap override passed" || fail "--xds-max-connections-per-source override missing"
+
 # ── Summary ───────────────────────────────────────────────────────────────────
 echo
 echo "Results: $PASS passed, $FAIL failed"

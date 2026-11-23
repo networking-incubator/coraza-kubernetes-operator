@@ -71,7 +71,8 @@ func TestLimitsWithDefaultsRejectsNegativeLimits(t *testing.T) {
 func TestLimitsValidateRejectsPluginCapViolations(t *testing.T) {
 	assert.NoError(t, DefaultLimits().Validate())
 	assert.NoError(t, Limits{}.Validate(), "unset limits must not fail validation")
-	assert.Equal(t, DefaultMaxStreams, DefaultLimits().MaxStreamsPerIdentity)
+	assert.Equal(t, DefaultMaxStreams, DefaultLimits().WithDefaults().MaxStreamsPerIdentity)
+	assert.Equal(t, 1024, Limits{MaxStreams: 1024}.WithDefaults().MaxStreamsPerIdentity, "the per-identity bound follows MaxStreams unless set")
 
 	err := Limits{MaxMessageBytes: DefaultMaxMessageBytes + 1}.Validate()
 	require.Error(t, err)

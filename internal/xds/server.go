@@ -59,6 +59,16 @@ const (
 	// authenticationDeadline bounds a stream that never sends its first
 	// request, so idle clients cannot occupy every stream slot.
 	authenticationDeadline = 10 * time.Second
+	// podStreamCap bounds concurrent streams per Gateway pod. Envoy keeps one
+	// ECDS stream per pod; the rest covers reconnect overlap. A ServiceAccount
+	// may hold podStreamCap streams per authorized pod running as it, plus
+	// identityStreamSlack for pods the authorization index has not counted yet.
+	podStreamCap        = 4
+	identityStreamSlack = 16
+	// authenticationShare sizes, as a share of MaxStreams, the pool of
+	// requests waiting for their token review and the cap on token reviews
+	// for new streams in flight.
+	authenticationShare = 4
 )
 
 // nackState tracks retries for one stream's current version.
@@ -205,10 +215,23 @@ type Server struct {
 
 	srv xdsserver.Server
 
-	streams     sync.Map // int64 -> *serverStream
-	nacks       sync.Map // nackKey(resource, session) -> nackState
-	openStreams atomic.Int64
-	responses   *responseBudget
+	streams   sync.Map // int64 -> *serverStream
+	nacks     sync.Map // nackKey(resource, session) -> nackState
+	responses *responseBudget
+	// authSlots holds one token per request waiting for its token review.
+	authSlots chan struct{}
+	// permits holds one token per token review for a new stream in
+	// flight, also after its request ended. Revalidation has its own bounded
+	// workers and takes none.
+	permits chan struct{}
+
+	// openStreams counts admitted streams; perIdentity, perNamespace and
+	// perPod partition them. The maps are guarded by countsMu.
+	openStreams  atomic.Int64
+	countsMu     sync.Mutex
+	perIdentity  map[string]int
+	perNamespace map[string]int
+	perPod       map[string]int
 }
 
 // NewServer wires the go-control-plane server around the snapshot cache.
@@ -228,6 +251,11 @@ func NewServer(store *SnapshotStore, auth *Authenticator, authz *AuthzIndex, str
 		RetryDelay:   2 * time.Second,
 		authDeadline: authenticationDeadline,
 		responses:    newResponseBudget(),
+		authSlots:    make(chan struct{}, max(1, limits.MaxStreams/authenticationShare)),
+		permits:      make(chan struct{}, max(1, limits.MaxStreams/authenticationShare)),
+		perIdentity:  make(map[string]int),
+		perNamespace: make(map[string]int),
+		perPod:       make(map[string]int),
 	}
 	s.srv = xdsserver.NewServer(context.Background(), store.cache, xdsserver.CallbackFuncs{
 		StreamOpenFunc:     s.onStreamOpen,
@@ -266,30 +294,138 @@ func (s *Server) Register(registrar grpc.ServiceRegistrar) {
 }
 
 // admit authenticates an ECDS request from its headers, before any of its
-// body is read, and reserves an open-stream slot. A non-nil admission must be
-// released; see release.
-func (s *Server) admit(r *http.Request) (_ *streamAdmission, err error) {
-	if s.openStreams.Add(1) > int64(s.Limits.MaxStreams) {
-		s.openStreams.Add(-1)
-		s.Metrics.StreamLimitRejected()
-		return nil, status.Error(codes.ResourceExhausted, "stream limit exceeded")
-	}
-	defer func() {
-		if err != nil {
-			s.openStreams.Add(-1)
-		}
-	}()
+// body is read, and reserves its stream slots. A non-nil admission must be
+// released; see release. review marks the request's connection while its
+// token is under review and returns the function that unmarks it.
+func (s *Server) admit(r *http.Request, review func() (end func())) (*streamAdmission, error) {
 	token, err := bearerToken(r.Header.Values(authorizationHeader))
 	if err != nil {
 		s.Metrics.AuthFailure("error")
 		return nil, status.Error(codes.Unauthenticated, "authentication failed")
 	}
-	identity, err := s.Auth.Authenticate(requestPeerContext(r), token)
+	identity, err := s.authenticate(r, token, review)
 	if err != nil {
-		return nil, s.authenticationFailure(err)
+		return nil, err
+	}
+	if err := s.reserve(*identity); err != nil {
+		return nil, err
 	}
 	s.Metrics.AuthSuccess()
 	return &streamAdmission{identity: *identity, token: token}, nil
+}
+
+// authenticate validates token. A token without a cached result is refused
+// at once when its source's failure budget is spent; otherwise it waits, for
+// at most the review timeout in all, first for one of a fixed number of
+// authentication slots and then for a review permit, so a reconnect burst
+// queues instead of being refused; a cached token waits for neither. A
+// request that ends frees its slot at once, while its review finishes on its
+// own within the review timeout, keeps its permit until then and still
+// charges a rejected token to its source, so token reviews in flight stay
+// capped even when requests are reset. A slot also marks the request with
+// review, which protects its connection from being closed for room.
+func (s *Server) authenticate(r *http.Request, token string, review func() (end func())) (*Identity, error) {
+	ctx := requestPeerContext(r)
+	// A cached identity is used as found: a second lookup could miss and
+	// review without a slot or permit.
+	if identity, ok := s.Auth.cached(token); ok {
+		return identity, nil
+	}
+	// Only a peek: a permit taken here would count as a review in flight for
+	// the whole wait, and refuse valid tokens queued behind it.
+	if !s.Auth.failureLimiter.allows(ctx) {
+		return nil, s.authenticationFailure(ErrAuthRateLimited)
+	}
+	wait := time.NewTimer(s.Limits.TokenReviewTimeout)
+	defer wait.Stop()
+	if err := s.acquire(s.authSlots, wait.C, r); err != nil {
+		return nil, err
+	}
+	defer func() { <-s.authSlots }()
+	defer review()()
+	if err := s.acquire(s.permits, wait.C, r); err != nil {
+		return nil, err
+	}
+	done := make(chan tokenReviewResult, 1)
+	go func() {
+		defer func() { <-s.permits }()
+		identity, err := s.Auth.Authenticate(ctx, token)
+		done <- tokenReviewResult{identity: identity, err: err}
+	}()
+	select {
+	case result := <-done:
+		if result.err != nil {
+			return nil, s.authenticationFailure(result.err)
+		}
+		return result.identity, nil
+	case <-r.Context().Done():
+		return nil, status.Error(codes.Canceled, "request canceled")
+	}
+}
+
+// acquire takes a token from pool, waiting until wait fires or the request
+// ends.
+func (s *Server) acquire(pool chan struct{}, wait <-chan time.Time, r *http.Request) error {
+	select {
+	case pool <- struct{}{}:
+		return nil
+	case <-wait:
+		s.Metrics.Refused(RefusalAuthenticationQueue)
+		return status.Error(codes.ResourceExhausted, "authentication is busy")
+	case <-r.Context().Done():
+		return status.Error(codes.Canceled, "request canceled")
+	}
+}
+
+// reserve takes a stream slot for id: one of MaxStreams, at most podStreamCap
+// for its pod, for its ServiceAccount at most podStreamCap per authorized pod
+// plus identityStreamSlack, never more than MaxStreamsPerIdentity, and for all
+// identities of its namespace together podStreamCap per pod counted there plus
+// identityStreamSlack, so the slack does not multiply across ServiceAccounts.
+// An identity no Engine grants is refused, so it cannot hold slots a Gateway
+// needs.
+func (s *Server) reserve(id Identity) error {
+	share, namespacePods, granted := s.Authz.podShare(id)
+	if !granted {
+		s.Metrics.Refused(RefusalUnauthorized)
+		return status.Error(codes.Unavailable, "authorization is not ready")
+	}
+	key := id.Key()
+	identityCap := min(s.Limits.MaxStreamsPerIdentity, podStreamCap*share+identityStreamSlack)
+	namespaceCap := podStreamCap*namespacePods + identityStreamSlack
+	s.countsMu.Lock()
+	defer s.countsMu.Unlock()
+	if s.openStreams.Load() >= int64(s.Limits.MaxStreams) || s.perIdentity[key] >= identityCap ||
+		s.perNamespace[id.Namespace] >= namespaceCap || (id.PodUID != "" && s.perPod[id.PodUID] >= podStreamCap) {
+		s.Metrics.StreamLimitRejected()
+		return status.Error(codes.ResourceExhausted, "stream limit exceeded")
+	}
+	s.openStreams.Add(1)
+	s.perIdentity[key]++
+	s.perNamespace[id.Namespace]++
+	if id.PodUID != "" {
+		s.perPod[id.PodUID]++
+	}
+	return nil
+}
+
+func (s *Server) unreserve(id Identity) {
+	s.countsMu.Lock()
+	defer s.countsMu.Unlock()
+	s.openStreams.Add(-1)
+	decrement(s.perIdentity, id.Key())
+	decrement(s.perNamespace, id.Namespace)
+	if id.PodUID != "" {
+		decrement(s.perPod, id.PodUID)
+	}
+}
+
+func decrement(counts map[string]int, key string) {
+	if counts[key] > 1 {
+		counts[key]--
+	} else {
+		delete(counts, key)
+	}
 }
 
 // release frees the slots an admitted request holds when its HTTP handler
@@ -301,7 +437,7 @@ func (s *Server) release(admission *streamAdmission) {
 	admission.released = true
 	sessionID := admission.sessionID
 	admission.mu.Unlock()
-	s.openStreams.Add(-1)
+	s.unreserve(admission.identity)
 	if sessionID != 0 {
 		s.Streams.Unregister(sessionID)
 	}
@@ -602,9 +738,9 @@ func truncateUTF8(s string, n int) string {
 }
 
 // authorizeStream authorizes resourceName for the stream's identity on every
-// request. The stream's registry slot is taken only once a subscription is
-// authorized; the check is repeated after the slot is visible to
-// RevokeResource, so a revocation in between is not missed.
+// request. The stream is registered only once a subscription is authorized;
+// the check is repeated after it is visible to RevokeResource, so a
+// revocation in between is not missed.
 func (s *Server) authorizeStream(entry *serverStream, resourceName string) error {
 	if !s.authorized(entry, resourceName) {
 		return status.Error(codes.Unavailable, "authorization is not ready")
@@ -614,11 +750,7 @@ func (s *Server) authorizeStream(entry *serverStream, resourceName string) error
 	}
 	if entry.session == nil {
 		cancel, _ := entry.ctx.Value(lifecycleKey{}).(context.CancelCauseFunc)
-		session, err := s.Streams.RegisterWithCancel(entry.ctx, cancel, resourceName, entry.identity, entry.admission.token)
-		if err != nil {
-			s.Metrics.StreamLimitRejected()
-			return status.Error(codes.ResourceExhausted, "stream limit exceeded")
-		}
+		session := s.Streams.RegisterWithCancel(entry.ctx, cancel, resourceName, entry.identity, entry.admission.token)
 		if !entry.admission.bind(session.ID) {
 			s.Streams.Unregister(session.ID)
 			return status.Error(codes.Unavailable, "stream must be re-established")
@@ -653,7 +785,7 @@ func (s *Server) spendResponse(entry *serverStream) error {
 	if entry.identity.PodUID == "" {
 		// Pods sharing a token's ServiceAccount share its budget.
 		key = "sa/" + entry.identity.Key()
-		share = s.Authz.podShare(entry.identity)
+		share, _, _ = s.Authz.podShare(entry.identity)
 	}
 	if s.responses.allow(key, share) {
 		return nil

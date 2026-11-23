@@ -93,7 +93,14 @@ type rawH2 struct {
 // never send response DATA.
 func dialRawH2(t *testing.T, fixture *listenerFixture, initialWindow uint32) *rawH2 {
 	t.Helper()
-	conn, err := tls.Dial("tcp", fixture.listener.Addr().String(), &tls.Config{
+	return dialRawH2From(t, fixture, "", initialWindow)
+}
+
+// newRawH2 dials the listener over TLS with dialer, sends the client preface
+// and advertises initialWindow; the caller reads the server's frames.
+func newRawH2(t *testing.T, fixture *listenerFixture, dialer *net.Dialer, initialWindow uint32) *rawH2 {
+	t.Helper()
+	conn, err := tls.DialWithDialer(dialer, "tcp", fixture.listener.Addr().String(), &tls.Config{
 		RootCAs: fixture.pool, ServerName: "localhost", NextProtos: []string{"h2"}, MinVersion: tls.VersionTLS13,
 	})
 	require.NoError(t, err)
@@ -106,7 +113,17 @@ func dialRawH2(t *testing.T, fixture *listenerFixture, initialWindow uint32) *ra
 	c.encoder = hpack.NewEncoder(&c.block)
 	c.framer.ReadMetaHeaders = hpack.NewDecoder(4096, nil)
 	require.NoError(t, c.framer.WriteSettings(http2.Setting{ID: http2.SettingInitialWindowSize, Val: initialWindow}))
+	return c
+}
 
+// dialRawH2From is dialRawH2 from the local address source; empty means any.
+func dialRawH2From(t *testing.T, fixture *listenerFixture, source string, initialWindow uint32) *rawH2 {
+	t.Helper()
+	dialer := &net.Dialer{Timeout: 5 * time.Second}
+	if source != "" {
+		dialer.LocalAddr = &net.TCPAddr{IP: net.ParseIP(source)}
+	}
+	c := newRawH2(t, fixture, dialer, initialWindow)
 	settled := make(chan struct{})
 	go c.readLoop(settled)
 	select {
@@ -315,44 +332,43 @@ func (f *listenerFixture) requireNoStreams(t *testing.T) {
 	}, 5*time.Second, 10*time.Millisecond, "open streams = %d, registered = %d", f.server.openStreams.Load(), f.registeredStreams())
 }
 
-// Refused requests are answered from their headers: neither an unauthenticated
-// stream nor a unary request has its body read, so partial uploads hold no
-// memory once answered, and little while authentication is pending.
+// Refused requests are answered from their headers, without reading their
+// bodies, and leave no stream behind.
 func TestListenerRefusesRequestsBeforeReadingBodies(t *testing.T) {
 	fixture := newListenerFixture(t)
 	fixture.setTokenDelay(50 * time.Millisecond)
-	client := dialRawH2(t, fixture, 65535)
-
-	// Each request announces a 1 MiB message and sends 16 KiB of it; 32 of
-	// them stay inside the server's 1 MiB connection window.
+	// Each request announces a 1 MiB message and sends 4 KiB of it, spread
+	// over connections that each carry the most concurrent streams allowed
+	// and stay inside the connection's receive window.
 	const requests = 32
-	partial := append(grpcHeader(1<<20), make([]byte, 16<<10)...)
-	before := heapBytes()
+	clients := make([]*rawH2, requests/h2MaxConcurrentStreams)
+	for i := range clients {
+		clients[i] = dialRawH2(t, fixture, 65535)
+	}
+	partial := append(grpcHeader(1<<20), make([]byte, 4<<10)...)
+	type request struct {
+		client *rawH2
+		id     uint32
+		want   string
+	}
+	sent := make([]request, 0, requests)
 	started := time.Now()
-	streamIDs := map[uint32]string{}
 	for i := range requests {
-		var id uint32
+		r := request{client: clients[i%len(clients)]}
 		if i%2 == 0 {
-			id = client.openGRPC(ecdsStreamMethod, fmt.Sprintf("invalid-%d", i))
-			streamIDs[id] = strconv.Itoa(int(codes.Unauthenticated))
+			r.id = r.client.openGRPC(ecdsStreamMethod, fmt.Sprintf("invalid-%d", i))
+			r.want = strconv.Itoa(int(codes.Unauthenticated))
 		} else {
-			id = client.openGRPC(unaryECDSMethod, validToken)
-			streamIDs[id] = strconv.Itoa(int(codes.Unimplemented))
+			r.id = r.client.openGRPC(unaryECDSMethod, validToken)
+			r.want = strconv.Itoa(int(codes.Unimplemented))
 		}
-		client.data(id, partial, h2MaxReadFrameSize)
+		r.client.data(r.id, partial, h2MaxReadFrameSize)
+		sent = append(sent, r)
 	}
-	pending := heapBytes()
-	for id, want := range streamIDs {
-		result := client.wait(id, 10*time.Second)
-		require.Equal(t, want, result.grpcStatus, "stream %d", id)
+	for _, r := range sent {
+		require.Equal(t, r.want, r.client.wait(r.id, 10*time.Second).grpcStatus)
 	}
-	elapsed := time.Since(started)
-	after := heapBytes()
-	t.Logf("%d partial uploads: heap growth %d KiB while pending, %d KiB after; all answered in %v",
-		requests, heapGrowth(before, pending)>>10, heapGrowth(before, after)>>10, elapsed)
-
-	require.Less(t, heapGrowth(before, pending), uint64(4<<20))
-	require.Less(t, heapGrowth(before, after), uint64(2<<20))
+	t.Logf("%d partial uploads answered in %v", requests, time.Since(started))
 	fixture.requireNoStreams(t)
 	require.Equal(t, float64(requests/2), testutil.ToFloat64(fixture.metrics.refusals.WithLabelValues(RefusalMethod)))
 }
@@ -504,18 +520,7 @@ func dialStalledH2(t *testing.T, fixture *listenerFixture) *rawH2 {
 		}
 		return err
 	}}
-	tcp, err := dialer.Dial("tcp", fixture.listener.Addr().String())
-	require.NoError(t, err)
-	conn := tls.Client(tcp, &tls.Config{RootCAs: fixture.pool, ServerName: "localhost", NextProtos: []string{"h2"}, MinVersion: tls.VersionTLS13})
-	require.NoError(t, conn.Handshake())
-	t.Cleanup(func() { _ = conn.Close() })
-	_, err = conn.Write([]byte(http2.ClientPreface))
-	require.NoError(t, err)
-
-	c := &rawH2{t: t, framer: http2.NewFramer(conn, conn), nextID: 1, ended: map[uint32]chan rawResult{}, status: map[uint32]string{}}
-	c.encoder = hpack.NewEncoder(&c.block)
-	c.framer.ReadMetaHeaders = hpack.NewDecoder(4096, nil)
-	require.NoError(t, c.framer.WriteSettings(http2.Setting{ID: http2.SettingInitialWindowSize, Val: 1<<31 - 1}))
+	c := newRawH2(t, fixture, dialer, 1<<31-1)
 	require.NoError(t, c.framer.WriteWindowUpdate(0, 1<<31-1-65535))
 	for {
 		frame, err := c.framer.ReadFrame()
@@ -559,7 +564,7 @@ func TestListenerClosesConnectionThatStopsReading(t *testing.T) {
 
 	// The module download fills the socket buffers of a peer that never reads.
 	// The connection closes once a write makes no progress for the write
-	// timeout; closing TLS then waits up to 5s to send its close alert.
+	// timeout.
 	stalled.open("GET", asset, "", true)
 	started := time.Now()
 	require.Eventually(t, func() bool {
@@ -705,9 +710,13 @@ func TestListenerChargesStreamsResetDuringReview(t *testing.T) {
 		})
 	}
 	wg.Wait()
-	// Reviews still running after their request ended finish before the
-	// sample.
+	// Reviews still running after their request ended finish, and every
+	// request gives back its authentication slot and review permit, before
+	// the sample.
 	fixture.settledFailureTokens(t)
+	require.Eventually(t, func() bool {
+		return len(fixture.server.authSlots) == 0 && len(fixture.server.permits) == 0
+	}, 5*time.Second, time.Millisecond)
 	elapsed := time.Since(started)
 	allowed := int64(limits.AuthFailureBurst) + int64(limits.AuthFailureRate*elapsed.Seconds()) + 1
 	t.Logf("%d garbage-token streams reset mid-review in %v: %d TokenReviews (allowed at most %d), %v throttled",
@@ -1096,4 +1105,37 @@ func TestListenerRevocationEndsFlushInFlight(t *testing.T) {
 	require.NoError(t, client.windowUpdate(id, 1<<20))
 	time.Sleep(100 * time.Millisecond)
 	require.Zero(t, client.received.Load(), "the revoked response must not be sent")
+}
+
+// Without a token a peer can only make the server buffer its receive window:
+// two sources holding 128 connections each, every one with a partial upload
+// the server never reads, stay under a fixed heap budget.
+func TestListenerBoundsUnreadUploadsAcrossSources(t *testing.T) {
+	sources := []string{"127.0.0.2", "127.0.0.3"}
+	for _, source := range sources {
+		requireLocalAddress(t, source)
+	}
+	limits := DefaultLimits()
+	limits.MaxConnectionsPerSource = 128
+	fixture := newListenerFixtureWithLimits(t, limits)
+	asset := assetPathPrefix + fixture.manifest.SHA256 + assetPathSuffix
+	// The window is shared by the connection; leave room for frame overhead.
+	upload := make([]byte, h2UploadBuffer-(1<<10))
+
+	before := heapBytes()
+	for _, source := range sources {
+		for range limits.MaxConnectionsPerSource {
+			// A zero response window keeps the module response, and with it
+			// the unread upload, pending.
+			client := dialRawH2From(t, fixture, source, 0)
+			client.data(client.open("GET", asset, "", false), upload, h2MaxReadFrameSize)
+		}
+	}
+	time.Sleep(time.Second)
+	held := heapGrowth(before, heapBytes())
+	connections := len(sources) * limits.MaxConnectionsPerSource
+	t.Logf("%d connections from %d sources with unread uploads: heap growth %d MiB", connections, len(sources), held>>20)
+	// Each connection buffers at most its 64 KiB window (16 MiB here); a 1 MiB
+	// window would allow 256 MiB.
+	require.Less(t, held, uint64(64<<20))
 }

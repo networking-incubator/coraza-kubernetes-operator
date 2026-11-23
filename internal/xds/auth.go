@@ -122,41 +122,42 @@ func NewAuthenticator(client authclient.TokenReviewInterface, audience string, c
 // Authenticate validates token, reusing a successful cached result when it is
 // still fresh. Failures are never cached.
 func (a *Authenticator) Authenticate(ctx context.Context, token string) (*Identity, error) {
-	key := authenticationCacheKey(token, a.audience)
-	if cached, ok := a.cache.Load(key); ok {
-		entry := cached.(cachedIdentity)
-		if a.now().Before(entry.expiresAt) {
-			if a.failureLimiter != nil {
-				a.failureLimiter.sweepIdle()
-			}
-			identity := entry.identity
-			return &identity, nil
-		}
-		a.cache.Delete(key)
+	if identity, ok := a.cached(token); ok {
+		a.failureLimiter.sweepIdle()
+		return identity, nil
 	}
 
-	var reservation *authFailureReservation
-	if a.failureLimiter != nil {
-		var allowed bool
-		reservation, allowed = a.failureLimiter.reserve(ctx)
-		if !allowed {
-			return nil, ErrAuthRateLimited
-		}
+	reservation, allowed := a.failureLimiter.reserve(ctx)
+	if !allowed {
+		return nil, ErrAuthRateLimited
 	}
-
 	identity, err := a.review(ctx, token)
-	if reservation != nil {
-		// Only a rejected token is a peer failure: an internal review error
-		// must not consume the peer's bucket, and a wrapped
-		// ErrUnauthenticated still is one.
-		reservation.finish(!errors.Is(err, ErrUnauthenticated))
-	}
+	// Only a rejected token is a peer failure: an internal review error must
+	// not consume the peer's bucket, and a wrapped ErrUnauthenticated still
+	// is one.
+	reservation.finish(!errors.Is(err, ErrUnauthenticated))
 	if err != nil {
 		return nil, err
 	}
 
-	a.storeCachedIdentity(key, token, identity)
+	a.storeCachedIdentity(authenticationCacheKey(token, a.audience), token, identity)
 	return identity, nil
+}
+
+// cached returns the fresh cached identity for token, if any.
+func (a *Authenticator) cached(token string) (*Identity, bool) {
+	key := authenticationCacheKey(token, a.audience)
+	raw, ok := a.cache.Load(key)
+	if !ok {
+		return nil, false
+	}
+	entry := raw.(cachedIdentity)
+	if !a.now().Before(entry.expiresAt) {
+		a.cache.Delete(key)
+		return nil, false
+	}
+	identity := entry.identity
+	return &identity, true
 }
 
 // storeCachedIdentity stores a successful review and opportunistically drops
@@ -353,18 +354,6 @@ var (
 	ErrServerShutdown = errors.New("server shutting down")
 )
 
-// StreamLimitError is returned when a stream cap is exceeded.
-type StreamLimitError struct {
-	Identity bool
-}
-
-func (e *StreamLimitError) Error() string {
-	if e.Identity {
-		return "too many streams for this identity"
-	}
-	return "too many streams"
-}
-
 // StreamSession is one registered ECDS stream.
 type StreamSession struct {
 	ID           uint64
@@ -387,7 +376,8 @@ func (s *StreamSession) Context() context.Context {
 	return s.ctx
 }
 
-// StreamRegistry holds active streams, enforces caps, and revalidates them.
+// StreamRegistry holds subscribed streams so they can be revoked and
+// revalidated. Stream caps are enforced when a request is admitted.
 type StreamRegistry struct {
 	auth    *Authenticator
 	authz   *AuthzIndex
@@ -395,42 +385,33 @@ type StreamRegistry struct {
 	metrics *Metrics
 	now     func() time.Time
 
-	mu          sync.Mutex
-	nextID      uint64
-	streams     map[uint64]*StreamSession
-	perIdentity map[string]int
+	mu      sync.Mutex
+	nextID  uint64
+	streams map[uint64]*StreamSession
 }
 
 // NewStreamRegistry returns an empty registry.
 func NewStreamRegistry(auth *Authenticator, authz *AuthzIndex, limits Limits, metrics *Metrics) *StreamRegistry {
 	return &StreamRegistry{
-		auth:        auth,
-		authz:       authz,
-		limits:      limits.WithDefaults(),
-		metrics:     metrics,
-		now:         time.Now,
-		streams:     make(map[uint64]*StreamSession),
-		perIdentity: make(map[string]int),
+		auth:    auth,
+		authz:   authz,
+		limits:  limits.WithDefaults(),
+		metrics: metrics,
+		now:     time.Now,
+		streams: make(map[uint64]*StreamSession),
 	}
 }
 
-// Register reserves a stream slot and returns its session.
-func (r *StreamRegistry) Register(parent context.Context, resourceName string, id Identity, token string) (*StreamSession, error) {
+// Register records a stream and returns its session.
+func (r *StreamRegistry) Register(parent context.Context, resourceName string, id Identity, token string) *StreamSession {
 	return r.RegisterWithCancel(parent, nil, resourceName, id, token)
 }
 
-// RegisterWithCancel reserves a stream slot using cancel as the stream's
-// lifecycle cancel. A nil cancel creates a child context owned by the registry.
-func (r *StreamRegistry) RegisterWithCancel(parent context.Context, cancel context.CancelCauseFunc, resourceName string, id Identity, token string) (*StreamSession, error) {
+// RegisterWithCancel records a stream using cancel as the stream's lifecycle
+// cancel. A nil cancel creates a child context owned by the registry.
+func (r *StreamRegistry) RegisterWithCancel(parent context.Context, cancel context.CancelCauseFunc, resourceName string, id Identity, token string) *StreamSession {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-
-	if len(r.streams) >= r.limits.MaxStreams {
-		return nil, &StreamLimitError{}
-	}
-	if r.perIdentity[id.Key()] >= r.limits.MaxStreamsPerIdentity {
-		return nil, &StreamLimitError{Identity: true}
-	}
 
 	now := r.now()
 	ctx := parent
@@ -449,25 +430,18 @@ func (r *StreamRegistry) RegisterWithCancel(parent context.Context, cancel conte
 		cancel:       cancel,
 	}
 	r.streams[session.ID] = session
-	r.perIdentity[id.Key()]++
 	r.metrics.StreamOpened()
-	return session, nil
+	return session
 }
 
-// Unregister releases a stream slot.
+// Unregister forgets a stream.
 func (r *StreamRegistry) Unregister(id uint64) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	session, ok := r.streams[id]
-	if !ok {
+	if _, ok := r.streams[id]; !ok {
 		return
 	}
 	delete(r.streams, id)
-	if count := r.perIdentity[session.Identity.Key()]; count > 1 {
-		r.perIdentity[session.Identity.Key()] = count - 1
-	} else {
-		delete(r.perIdentity, session.Identity.Key())
-	}
 	r.metrics.StreamClosed()
 }
 

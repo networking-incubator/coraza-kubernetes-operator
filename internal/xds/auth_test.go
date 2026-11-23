@@ -108,16 +108,14 @@ func TestAuthenticateSurvivesPanickingReview(t *testing.T) {
 // A cancelled revalidation pass, such as one running at shutdown, starts no
 // TokenReview.
 func TestRevalidationWithCancelledContextIssuesNoReviews(t *testing.T) {
-	registry, _, resourceName, identity, _ := newRegistryFixture(t, DefaultLimits())
+	registry, _, resourceName, identity, _ := newRegistryFixture(t)
 	var reviews atomic.Int32
 	registry.auth.tokenReviews = reviewFunc(func(context.Context, *authv1.TokenReview) (*authv1.TokenReview, error) {
 		reviews.Add(1)
 		return rejectedReview(), nil
 	})
 	for i := range 3 {
-		if _, err := registry.Register(context.Background(), resourceName, identity, fmt.Sprintf("token-%d", i)); err != nil {
-			t.Fatal(err)
-		}
+		registry.Register(context.Background(), resourceName, identity, fmt.Sprintf("token-%d", i))
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -335,7 +333,7 @@ func TestAuthenticatorDoesNotCacheExpiredEntry(t *testing.T) {
 	}
 }
 
-func newRegistryFixture(t *testing.T, limits Limits) (*StreamRegistry, *AuthzIndex, string, Identity, func(bool)) {
+func newRegistryFixture(t *testing.T) (*StreamRegistry, *AuthzIndex, string, Identity, func(bool)) {
 	t.Helper()
 
 	identity := Identity{Namespace: testNamespace, Name: "gateway", UID: "sa-uid"}
@@ -348,13 +346,7 @@ func newRegistryFixture(t *testing.T, limits Limits) (*StreamRegistry, *AuthzInd
 		mu.Lock()
 		ok := valid
 		mu.Unlock()
-		if !ok {
-			return true, rejectedReview(), nil
-		}
-		return true, &authv1.TokenReview{Status: authv1.TokenReviewStatus{
-			Authenticated: true,
-			User:          authv1.UserInfo{Username: "system:serviceaccount:" + identity.Namespace + ":" + identity.Name, UID: identity.UID},
-		}}, nil
+		return true, reviewFor(identity, validToken, ok), nil
 	})
 
 	metrics, err := NewMetrics(prometheus.NewRegistry())
@@ -372,7 +364,7 @@ func newRegistryFixture(t *testing.T, limits Limits) (*StreamRegistry, *AuthzInd
 	}
 
 	auth := NewAuthenticator(fakeClient.AuthenticationV1().TokenReviews(), "", time.Minute, time.Hour, time.Second, 0)
-	registry := NewStreamRegistry(auth, authz, limits, metrics)
+	registry := NewStreamRegistry(auth, authz, DefaultLimits(), metrics)
 	setValid := func(value bool) {
 		mu.Lock()
 		valid = value
@@ -381,45 +373,16 @@ func newRegistryFixture(t *testing.T, limits Limits) (*StreamRegistry, *AuthzInd
 	return registry, authz, resourceName, identity, setValid
 }
 
-func TestStreamRegistryEnforcesCaps(t *testing.T) {
-	limits := DefaultLimits()
-	limits.MaxStreams = 2
-	limits.MaxStreamsPerIdentity = 1
-	registry, _, resourceName, identity, _ := newRegistryFixture(t, limits)
-	ctx := context.Background()
-
-	if _, err := registry.Register(ctx, resourceName, identity, validToken); err != nil {
-		t.Fatalf("Register() error = %v", err)
-	}
-	_, err := registry.Register(ctx, resourceName, identity, validToken)
-	var limitErr *StreamLimitError
-	if !errors.As(err, &limitErr) || !limitErr.Identity {
-		t.Fatalf("Register() error = %v, want identity limit", err)
-	}
-
-	other := Identity{Namespace: testNamespace, Name: "other", UID: "sa-2"}
-	if _, err := registry.Register(ctx, resourceName, other, validToken); err != nil {
-		t.Fatalf("Register(other identity) error = %v", err)
-	}
-	third := Identity{Namespace: testNamespace, Name: "third", UID: "sa-3"}
-	if _, err := registry.Register(ctx, resourceName, third, validToken); err == nil {
-		t.Fatal("Register() error = nil, want global stream limit")
-	}
-}
-
 // A stream closes only after two consecutive revalidation rejections of its
 // token: the API server reports its own authenticator failures in the same
 // shape, so a single rejection followed by a success keeps the stream.
 func TestStreamRegistryRevalidationFailuresCloseStream(t *testing.T) {
-	registry, _, resourceName, identity, setValid := newRegistryFixture(t, DefaultLimits())
+	registry, _, resourceName, identity, setValid := newRegistryFixture(t)
 	ctx := context.Background()
 	if _, err := registry.auth.Authenticate(ctx, validToken); err != nil {
 		t.Fatal(err)
 	}
-	session, err := registry.Register(ctx, resourceName, identity, validToken)
-	if err != nil {
-		t.Fatal(err)
-	}
+	session := registry.Register(ctx, resourceName, identity, validToken)
 
 	setValid(false)
 	registry.revalidateAll(ctx)
@@ -472,11 +435,8 @@ func TestAuthenticatorCarriesPodUID(t *testing.T) {
 // outage: a token that cannot be reviewed is not a rejected token, so the
 // stream stays open until the next tick or its lifetime bound.
 func TestStreamRegistryKeepsStreamOnTransientRevalidationError(t *testing.T) {
-	registry, _, resourceName, identity, _ := newRegistryFixture(t, DefaultLimits())
-	session, err := registry.Register(context.Background(), resourceName, identity, validToken)
-	if err != nil {
-		t.Fatal(err)
-	}
+	registry, _, resourceName, identity, _ := newRegistryFixture(t)
+	session := registry.Register(context.Background(), resourceName, identity, validToken)
 
 	unavailable := k8sfake.NewSimpleClientset()
 	unavailable.PrependReactor("create", "tokenreviews", func(k8stesting.Action) (bool, runtime.Object, error) {
@@ -492,11 +452,8 @@ func TestStreamRegistryKeepsStreamOnTransientRevalidationError(t *testing.T) {
 }
 
 func TestStreamRegistryRevokesWhenAuthorizationIsGone(t *testing.T) {
-	registry, authz, resourceName, identity, _ := newRegistryFixture(t, DefaultLimits())
-	session, err := registry.Register(context.Background(), resourceName, identity, validToken)
-	if err != nil {
-		t.Fatal(err)
-	}
+	registry, authz, resourceName, identity, _ := newRegistryFixture(t)
+	session := registry.Register(context.Background(), resourceName, identity, validToken)
 
 	authz.mu.Lock()
 	delete(authz.entries, resourceName)
@@ -509,11 +466,8 @@ func TestStreamRegistryRevokesWhenAuthorizationIsGone(t *testing.T) {
 }
 
 func TestStreamRegistryExpiresStreamLifetime(t *testing.T) {
-	registry, _, resourceName, identity, _ := newRegistryFixture(t, DefaultLimits())
-	session, err := registry.Register(context.Background(), resourceName, identity, validToken)
-	if err != nil {
-		t.Fatal(err)
-	}
+	registry, _, resourceName, identity, _ := newRegistryFixture(t)
+	session := registry.Register(context.Background(), resourceName, identity, validToken)
 
 	registry.mu.Lock()
 	session.expiresAt = time.Now().Add(-time.Second)
@@ -522,23 +476,6 @@ func TestStreamRegistryExpiresStreamLifetime(t *testing.T) {
 
 	if cause := context.Cause(session.Context()); !errors.Is(cause, ErrLifetimeExpired) {
 		t.Fatalf("context cause = %v, want ErrLifetimeExpired", cause)
-	}
-}
-
-func TestStreamRegistryUnregisterReleasesSlots(t *testing.T) {
-	limits := DefaultLimits()
-	limits.MaxStreams = 1
-	limits.MaxStreamsPerIdentity = 8
-	registry, _, resourceName, identity, _ := newRegistryFixture(t, limits)
-
-	session, err := registry.Register(context.Background(), resourceName, identity, validToken)
-	if err != nil {
-		t.Fatal(err)
-	}
-	registry.Unregister(session.ID)
-
-	if _, err := registry.Register(context.Background(), resourceName, identity, validToken); err != nil {
-		t.Fatalf("Register() after Unregister error = %v", err)
 	}
 }
 
@@ -575,9 +512,7 @@ func TestRevalidationReviewsEachDistinctTokenOnce(t *testing.T) {
 	registry := NewStreamRegistry(auth, authz, DefaultLimits(), metrics)
 
 	for range 3 {
-		if _, err := registry.Register(context.Background(), resourceName, identity, testToken); err != nil {
-			t.Fatal(err)
-		}
+		registry.Register(context.Background(), resourceName, identity, testToken)
 	}
 	registry.revalidateAll(context.Background())
 
@@ -658,10 +593,7 @@ func TestRevalidationRefreshesExpiryClockAfterSlowPass(t *testing.T) {
 	}
 	registry := NewStreamRegistry(auth, authz, DefaultLimits(), metrics)
 
-	session, err := registry.Register(context.Background(), resourceName, identity, testToken)
-	if err != nil {
-		t.Fatal(err)
-	}
+	session := registry.Register(context.Background(), resourceName, identity, testToken)
 	// The stream expires while the pass is parked in the TokenReview: it is
 	// live when the pass snapshots the targets, expired by the time the
 	// reviews return, so only a post-pass clock check can see it.

@@ -38,7 +38,12 @@ import (
 
 func (f *streamFixture) openRequest(t *testing.T, req *discoveryv3.DiscoveryRequest) (context.CancelFunc, func() (*discoveryv3.DiscoveryResponse, error)) {
 	t.Helper()
-	ctx, cancel := context.WithCancel(metadata.AppendToOutgoingContext(context.Background(), "authorization", "Bearer "+validToken))
+	return f.openRequestAs(t, validToken, req)
+}
+
+func (f *streamFixture) openRequestAs(t *testing.T, token string, req *discoveryv3.DiscoveryRequest) (context.CancelFunc, func() (*discoveryv3.DiscoveryResponse, error)) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(metadata.AppendToOutgoingContext(context.Background(), "authorization", "Bearer "+token))
 	stream, err := f.client.StreamExtensionConfigs(ctx)
 	require.NoError(t, err)
 	send(t, stream, req)
@@ -115,8 +120,8 @@ func TestStreamUnauthorizedIdentityHoldsNoSlots(t *testing.T) {
 	fixture.requireNoStreams(t)
 }
 
-// Fresh streams of one identity get a bounded number of full responses; the
-// rest are refused with a retryable status.
+// Fresh streams of one pod get a bounded number of full responses; the rest
+// are refused with a retryable status.
 func TestStreamResponseBudgetBoundsFreshStreams(t *testing.T) {
 	fixture := newStreamFixture(t)
 	require.NoError(t, fixture.store.Replace(fixture.snapshot(t, "v1")))
@@ -125,13 +130,15 @@ func TestStreamResponseBudgetBoundsFreshStreams(t *testing.T) {
 	responses := 0
 	started := time.Now()
 	for i := range streams {
-		cancel, recvNext := fixture.openRequest(t, &discoveryv3.DiscoveryRequest{ResourceNames: []string{fixture.resourceName}})
+		cancel, recvNext := fixture.openRequestAs(t, podToken("pod-a"), &discoveryv3.DiscoveryRequest{ResourceNames: []string{fixture.resourceName}})
 		if _, err := recvNext(); err == nil {
 			responses++
 		} else {
 			require.Equal(t, codes.ResourceExhausted, status.Code(err), "stream %d", i)
 		}
 		cancel()
+		// Keep the pod under its stream cap so only the budget refuses.
+		fixture.requireNoStreams(t)
 	}
 	elapsed := time.Since(started)
 	allowed := responseBudgetBurst + int(float64(responseBudgetRate)*elapsed.Seconds()) + 1
@@ -221,7 +228,7 @@ func TestStreamKeepsOnlyPinnedNode(t *testing.T) {
 func TestStreamResponseBudgetChargesForeignVersions(t *testing.T) {
 	fixture := newStreamFixture(t)
 	require.NoError(t, fixture.store.Replace(fixture.snapshot(t, "v1")))
-	share := fixture.authz.podShare(fixture.identity)
+	share, _, _ := fixture.authz.podShare(fixture.identity)
 	started := time.Now()
 	stream := fixture.open(t, validToken, fixture.resourceName)
 	response := recv(t, stream)

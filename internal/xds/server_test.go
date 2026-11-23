@@ -22,6 +22,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -58,7 +59,8 @@ const (
 )
 
 // serverStack is the xDS server with a fake TokenReview backend that accepts
-// validToken for identity and an authorization entry for resourceName.
+// validToken for identity, and podToken(uid) for identity bound to pod uid,
+// and an authorization entry for resourceName backed by testGatewayPods pods.
 type serverStack struct {
 	server        *Server
 	store         *SnapshotStore
@@ -91,13 +93,7 @@ func newServerStack(t *testing.T, limits Limits) *serverStack {
 		if delay > 0 {
 			time.Sleep(delay)
 		}
-		if !valid || request.Spec.Token != validToken {
-			return true, rejectedReview(), nil
-		}
-		return true, &authv1.TokenReview{Status: authv1.TokenReviewStatus{
-			Authenticated: true,
-			User:          authv1.UserInfo{Username: "system:serviceaccount:" + identity.Namespace + ":" + identity.Name, UID: identity.UID},
-		}}, nil
+		return true, reviewFor(identity, request.Spec.Token, valid), nil
 	})
 
 	metrics, err := NewMetrics(prometheus.NewRegistry())
@@ -117,6 +113,7 @@ func newServerStack(t *testing.T, limits Limits) *serverStack {
 		EngineName:   streamEngine,
 		GatewayName:  testGatewayName,
 		Identities:   map[string]string{identity.Key(): identity.UID},
+		Pods:         map[string]int{identity.Key(): testGatewayPods},
 		RefreshedAt:  time.Now(),
 	}
 
@@ -145,10 +142,32 @@ func newServerStack(t *testing.T, limits Limits) *serverStack {
 	}
 }
 
+// testGatewayPods is how many authorized pods run as the fixture identity.
+const testGatewayPods = 16
+
+// podToken is a test token the fake TokenReview binds to pod uid.
+func podToken(uid string) string { return "pod:" + uid }
+
+// reviewFor answers a TokenReview the way the API server does for the
+// fixture's tokens.
+func reviewFor(identity Identity, token string, valid bool) *authv1.TokenReview {
+	podUID, podBound := strings.CutPrefix(token, "pod:")
+	if !valid || (token != validToken && !podBound) {
+		return rejectedReview()
+	}
+	review := &authv1.TokenReview{Status: authv1.TokenReviewStatus{
+		Authenticated: true,
+		User:          authv1.UserInfo{Username: "system:serviceaccount:" + identity.Namespace + ":" + identity.Name, UID: identity.UID},
+	}}
+	if podBound {
+		review.Status.User.Extra = map[string]authv1.ExtraValue{podUIDExtraKey: {podUID}}
+	}
+	return review
+}
+
 // streamFixture is a gRPC client of the production TLS listener.
 type streamFixture struct {
 	*listenerFixture
-	conn    *grpc.ClientConn
 	client  extensionv3.ExtensionConfigDiscoveryServiceClient
 	proxyID string
 }
@@ -163,19 +182,17 @@ func newStreamFixture(t *testing.T) *streamFixture {
 func newStreamFixtureWithLimits(t *testing.T, limits Limits) *streamFixture {
 	t.Helper()
 	listener := newListenerFixtureWithLimits(t, limits)
-	conn, err := grpc.NewClient(listener.listener.Addr().String(),
-		grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{RootCAs: listener.pool, ServerName: "localhost"})))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = conn.Close() })
+	return &streamFixture{listenerFixture: listener, client: listener.newECDSClient(t), proxyID: "test-proxy"}
+}
 
-	return &streamFixture{
-		listenerFixture: listener,
-		conn:            conn,
-		client:          extensionv3.NewExtensionConfigDiscoveryServiceClient(conn),
-		proxyID:         "test-proxy",
-	}
+// newECDSClient opens a separate connection, the way each Gateway pod has its own.
+func (f *listenerFixture) newECDSClient(t *testing.T) extensionv3.ExtensionConfigDiscoveryServiceClient {
+	t.Helper()
+	conn, err := grpc.NewClient(f.listener.Addr().String(),
+		grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{RootCAs: f.pool, ServerName: "localhost"})))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = conn.Close() })
+	return extensionv3.NewExtensionConfigDiscoveryServiceClient(conn)
 }
 
 func authzTokenReviewer(client *k8sfake.Clientset) *Authenticator {
