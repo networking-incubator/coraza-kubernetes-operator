@@ -116,6 +116,15 @@ Counters and histograms are emitted during Coraza validation in the RuleSource a
 |--------|------|-------------|
 | `coraza_cache_set_duration_seconds` | Histogram | Time to store a compiled RuleSet in the in-memory cache. Labels: `namespace`. |
 
+### xDS serving certificate
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `coraza_xds_serving_cert_not_after_seconds` | Gauge | Unix time at which the loaded xDS serving certificate expires; `0` until one is loaded. Updated when the certificate is reloaded. |
+| `coraza_xds_ca_not_after_seconds` | Gauge | Unix time at which the CA chain that verifies the serving certificate expires: the earliest of its intermediates (from `tls.crt`) and root (from the CA bundle). A bundle may keep an expired CA next to the one in use. When no chain verifies the certificate, the earliest certificate in the bundle. `0` until both are loaded. |
+
+With `metrics.prometheusRule.enabled=true`, the chart alerts on the sooner of the two per pod: `CorazaXDSCertificateExpiringSoon` (warning, less than 30 days left) and `CorazaXDSCertificateExpired` (critical). The operator also logs a warning from 30 days before expiry, repeated daily, and an error once a certificate has expired. A certificate issued for less than 30 days, such as a short-lived certificate from a certificate manager, keeps the warning alert firing and the daily warning logged; silence that alert for such issuers and rely on `CorazaXDSCertificateExpired`. Expiry never affects operator readiness. To rotate, see [Serving certificate and GitOps]({{< relref "../reference/helm-values#serving-certificate-and-gitops" >}}).
+
 For controller resource gauges, condition metrics, and cardinality guidance, see [Metrics cardinality reference]({{< relref "../reference/metrics-cardinality" >}}).
 
 ## Data-plane WAF metrics (Gateway / WASM)

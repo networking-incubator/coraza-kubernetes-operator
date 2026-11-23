@@ -165,6 +165,36 @@ spec:
             summary: "One or more RuleSources are degraded"
             description: '{{ "{{" }} $value {{ "}}" }} RuleSource(s) have been in Degraded state for more than 5 minutes.'
 
+        # xDS serving certificate or CA chain expires within 30 days; $value is
+        # the soonest of the two per pod. Both gauges are 0 until loaded, and
+        # the trailing "> 0" leaves expired ones to CorazaXDSCertificateExpired.
+        # A certificate issued for less than 30 days keeps this alert firing.
+        - alert: CorazaXDSCertificateExpiringSoon
+          expr: >-
+            min by (namespace, pod) (
+              {__name__=~"coraza_xds_serving_cert_not_after_seconds|coraza_xds_ca_not_after_seconds"} > 0
+            ) - time() < 30 * 86400 > 0
+          for: 1h
+          labels:
+            severity: warning
+          annotations:
+            summary: "Coraza xDS certificate expires soon"
+            description: 'An xDS serving certificate or CA of pod {{ "{{" }} $labels.pod {{ "}}" }} expires in {{ "{{" }} $value | humanizeDuration {{ "}}" }}. Rotate it before Gateways stop trusting the operator.'
+
+        # xDS serving certificate or CA chain has expired: Gateways can no
+        # longer verify the operator, so ECDS and WASM fetches fail.
+        - alert: CorazaXDSCertificateExpired
+          expr: >-
+            min by (namespace, pod) (
+              {__name__=~"coraza_xds_serving_cert_not_after_seconds|coraza_xds_ca_not_after_seconds"} > 0
+            ) - time() <= 0
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Coraza xDS certificate has expired"
+            description: 'An xDS serving certificate or CA of pod {{ "{{" }} $labels.pod {{ "}}" }} has expired. Gateways cannot receive WAF configuration until it is rotated.'
+
         {{- with .Values.metrics.prometheusRule.rules }}
         {{- toYaml . | nindent 8 }}
         {{- end }}

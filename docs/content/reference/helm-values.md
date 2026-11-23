@@ -71,6 +71,8 @@ The chart's default `tls.generate=true` mints a self-signed CA and leaf (365-day
 
 For GitOps and static-manifest installs, set `tls.generate=false` and provide the serving Secret out-of-band — via `tls.existingSecret`, platform tooling, or a certificate manager such as cert-manager (the chart itself adds no cert-manager dependency). Rotate a helm-managed certificate by deleting the generated Secret and re-running `helm upgrade`. Changing `tls.sans` does not update a reused Secret; rotate the certificate and restart the chart-rendered Deployment before using a newly added hostname. A new CA requires this restart so EnvoyFilters receive the new trust bundle; a leaf-only renewal does not.
 
+Rotate before expiry: Gateways reject an expired certificate. The operator reports upcoming expiry through metrics, logs and alerts (see [xDS serving certificate]({{< relref "../howto/monitoring-prometheus#xds-serving-certificate" >}})); expiry does not affect operator readiness.
+
 ## Restricting operator egress
 
 The operator only opens outbound connections to the Kubernetes API server (including TokenReview); the ECDS listener, metrics and probes are inbound. `networkPolicy.egress.enabled=true` adds `Egress` to the operator's NetworkPolicy with a single rule: the API server endpoint addresses in `apiServer.cidrs`, on `apiServer.ports`. Everything else, including DNS, is denied. It is off by default because the right addresses depend on where the cluster's API server runs.
