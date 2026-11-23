@@ -113,6 +113,8 @@ GitOps and static-manifest installs must instead:
 
 #### Rotation
 
+Gateways reject an expired certificate, so rotate before it expires. The operator reports upcoming expiry through the `coraza_xds_serving_cert_not_after_seconds` and `coraza_xds_ca_not_after_seconds` metrics, its logs, and the `CorazaXDSCertificateExpiringSoon` and `CorazaXDSCertificateExpired` alerts (see the monitoring guide in the documentation); expiry does not affect operator readiness.
+
 The generated certificate is reused until the Secret is deleted, so it expires after 365 days even across upgrades. Changing `tls.sans` does not update the reused certificate: to use a newly added hostname, rotate the certificate first. For a Helm-generated certificate, delete `<chart-fullname>-serving-cert` and re-run `helm upgrade`. For `tls.existingSecret`, replace the Secret with a certificate containing the new SAN. Then restart the operator before using the hostname:
 
 ```bash

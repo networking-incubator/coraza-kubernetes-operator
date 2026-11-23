@@ -85,6 +85,7 @@ type Listener struct {
 	http    *http.Server
 	certs   *certWatcher
 	ca      *CASource
+	expiry  *certificateExpiry
 	logger  logr.Logger
 	limits  Limits
 
@@ -102,12 +103,14 @@ func NewListener(config ListenerConfig, server *Server, handler http.Handler, li
 	config = config.withDefaults()
 	limits = limits.WithDefaults()
 
-	certs := newCertWatcher(config.CertDir, config.CertName, config.KeyName, logger)
+	expiry := newCertificateExpiry(server.Metrics, logger)
+	certs := newCertWatcher(config.CertDir, config.CertName, config.KeyName, expiry.observeServingCert, logger)
 
 	// The CA is loaded on demand and cached by CASource. Ready retries a
 	// missing or unparsable bundle so a late-mounted Secret recovers, and the
 	// Engine reconciler shares the same source so new EnvoyFilters carry it.
 	ca := NewCASource(config.CAPath, logger)
+	ca.onLoad = expiry.observeCA
 	if ca.PEM() == nil {
 		logger.Error(errors.New("no certificate found"), "Failed to read the xDS CA bundle", "path", config.CAPath)
 	}
@@ -138,6 +141,7 @@ func NewListener(config ListenerConfig, server *Server, handler http.Handler, li
 		},
 		certs:   certs,
 		ca:      ca,
+		expiry:  expiry,
 		logger:  logger,
 		limits:  limits,
 		started: make(chan struct{}),
@@ -188,6 +192,7 @@ func (l *Listener) Start(ctx context.Context) error {
 	serveErrors := make(chan error, 2)
 	go func() { serveErrors <- l.http.Serve(http1) }()
 	go func() { serveErrors <- l.accept(ctx, tlsListener, http1) }()
+	go l.expiry.run(ctx)
 	// Certificate watching is best-effort: an fsnotify failure must not take
 	// down the serving plane. Retry it until the process context is canceled.
 	go func() {
@@ -418,15 +423,19 @@ func (l *Listener) shutdown() {
 type certWatcher struct {
 	certPath string
 	keyPath  string
+	// onLoad runs after every certificate load, including reloads, with a
+	// function that returns the current certificate.
+	onLoad func(current func(*tls.ClientHelloInfo) (*tls.Certificate, error))
 
 	mu      sync.Mutex
 	watcher *certwatcher.CertWatcher
 }
 
-func newCertWatcher(dir, certName, keyName string, logger logr.Logger) *certWatcher {
+func newCertWatcher(dir, certName, keyName string, onLoad func(func(*tls.ClientHelloInfo) (*tls.Certificate, error)), logger logr.Logger) *certWatcher {
 	w := &certWatcher{
 		certPath: filepath.Join(dir, certName),
 		keyPath:  filepath.Join(dir, keyName),
+		onLoad:   onLoad,
 	}
 	if _, err := w.getOrCreate(); err != nil {
 		// Readiness stays false until a certificate is loaded; the rest of the
@@ -446,6 +455,9 @@ func (r *certWatcher) getOrCreate() (*certwatcher.CertWatcher, error) {
 		if err != nil {
 			return nil, err
 		}
+		// The watcher calls back under its own lock on registration, so the
+		// current certificate is read from another goroutine.
+		watcher.RegisterCallback(func(tls.Certificate) { go r.onLoad(r.GetCertificate) })
 		r.watcher = watcher
 	}
 	return r.watcher, nil

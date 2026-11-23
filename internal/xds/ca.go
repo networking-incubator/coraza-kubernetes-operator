@@ -32,6 +32,8 @@ import (
 type CASource struct {
 	path   string
 	logger logr.Logger
+	// onLoad, when set, runs with the bundle once it is loaded.
+	onLoad func([]byte)
 
 	mu  sync.Mutex
 	pem []byte
@@ -63,6 +65,9 @@ func (c *CASource) PEM() []byte {
 	}
 	c.pem = caPEM
 	c.logger.Info("Loaded the xDS CA bundle", "path", c.path)
+	if c.onLoad != nil {
+		c.onLoad(caPEM)
+	}
 	return c.pem
 }
 

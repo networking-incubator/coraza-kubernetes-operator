@@ -19,6 +19,7 @@ package xds
 import (
 	"strconv"
 	"sync"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 )
@@ -42,6 +43,8 @@ type Metrics struct {
 	snapshotVersionInfo     *prometheus.GaugeVec
 	wasmAssetRequests       *prometheus.CounterVec
 	bundledManifestVerified prometheus.Gauge
+	servingCertNotAfter     prometheus.Gauge
+	caNotAfter              prometheus.Gauge
 }
 
 // NewMetrics registers the serving-plane metrics with reg.
@@ -99,6 +102,14 @@ func NewMetrics(reg prometheus.Registerer) (*Metrics, error) {
 			Name: "coraza_bundled_manifest_verified",
 			Help: "Whether every bundled WASM manifest entry exists and matches its digest (1=yes, 0=no).",
 		}),
+		servingCertNotAfter: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "coraza_xds_serving_cert_not_after_seconds",
+			Help: "Unix time at which the loaded xDS serving certificate expires (0 until one is loaded).",
+		}),
+		caNotAfter: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "coraza_xds_ca_not_after_seconds",
+			Help: "Unix time at which the CA chain that verifies the xDS serving certificate expires (0 until both are loaded).",
+		}),
 	}
 
 	// The gauge must age between reconciles: a stuck Engine returns without a
@@ -114,6 +125,7 @@ func NewMetrics(reg prometheus.Registerer) (*Metrics, error) {
 		m.authThrottled,
 		m.publicationLag, m.hashMismatch, m.coldReconstruction,
 		m.snapshotVersionInfo, m.wasmAssetRequests, m.bundledManifestVerified,
+		m.servingCertNotAfter, m.caNotAfter,
 	} {
 		if err := reg.Register(collector); err != nil {
 			return nil, err
@@ -261,4 +273,20 @@ func (m *Metrics) SetManifestVerified(verified bool) {
 		value = 1
 	}
 	m.bundledManifestVerified.Set(value)
+}
+
+// SetServingCertNotAfter records when the loaded serving certificate expires.
+func (m *Metrics) SetServingCertNotAfter(notAfter time.Time) {
+	if m == nil {
+		return
+	}
+	m.servingCertNotAfter.Set(float64(notAfter.Unix()))
+}
+
+// SetCANotAfter records when the CA chain of the serving certificate expires.
+func (m *Metrics) SetCANotAfter(notAfter time.Time) {
+	if m == nil {
+		return
+	}
+	m.caNotAfter.Set(float64(notAfter.Unix()))
 }

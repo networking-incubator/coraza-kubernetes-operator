@@ -60,6 +60,11 @@ out=$(render --set metrics.enabled=true --set metrics.prometheusRule.enabled=tru
 echo "$out" | grep -q "kind: PrometheusRule" && pass "PrometheusRule rendered" || fail "PrometheusRule missing"
 echo "$out" | grep -q "CorazaEngineNotReady" && pass "CorazaEngineNotReady alert present" || fail "CorazaEngineNotReady alert missing"
 echo "$out" | grep -q "coraza:engines_not_ready:count" && pass "Recording rule present" || fail "Recording rule missing"
+for alert in CorazaXDSCertificateExpiringSoon CorazaXDSCertificateExpired; do
+  echo "$out" | grep -q "alert: $alert$" && pass "$alert alert present" || fail "$alert alert missing"
+done
+echo "$out" | grep -q "coraza_xds_serving_cert_not_after_seconds" && echo "$out" | grep -q "coraza_xds_ca_not_after_seconds" &&
+  pass "certificate expiry alerts read both gauges" || fail "certificate expiry alerts do not read both gauges"
 
 # ── Test 4: PrometheusRule disabled when metrics.enabled=false ───────────────
 section "PrometheusRule respects metrics.enabled gate"
