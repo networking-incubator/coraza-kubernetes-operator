@@ -186,17 +186,20 @@ out=$(render)
 echo "$out" | grep -q -- "--rule-max-request-body-limit=16777216" && pass "default request body ceiling passed" || fail "default request body ceiling missing"
 echo "$out" | grep -q -- "--rule-response-body-access=Allowed" && pass "default response body access passed" || fail "default response body access missing"
 echo "$out" | grep -q -- "--rule-denied-" && fail "no denied lists should be passed by default" || pass "no denied lists by default"
+echo "$out" | grep -qF -- '- "--rule-max-rules=20000"' && pass "default rule limit passed" || fail "default rule limit missing"
 
 # ── Rule policy: lists and limits render as manager flags ────────────────────
 section "Rule policy values"
 out=$(render --set 'rulePolicy.deniedOperators={pmFromFile,rx}' \
   --set 'rulePolicy.deniedDirectives={SecRuleEngine,Include}' \
   --set rulePolicy.maxRequestBodyLimit=1048576 \
-  --set rulePolicy.responseBodyAccess=Denied)
+  --set rulePolicy.responseBodyAccess=Denied \
+  --set rulePolicy.maxRules=500)
 echo "$out" | grep -qF -- '- "--rule-denied-operators=pmFromFile,rx"' && pass "denied operators joined and quoted" || fail "denied operators missing"
 echo "$out" | grep -qF -- '- "--rule-denied-directives=SecRuleEngine,Include"' && pass "denied directives joined and quoted" || fail "denied directives missing"
 echo "$out" | grep -qF -- '- "--rule-max-request-body-limit=1048576"' && pass "request body ceiling rendered as a quoted integer" || fail "request body ceiling not rendered as a quoted integer"
 echo "$out" | grep -qF -- '- "--rule-response-body-access=Denied"' && pass "response body access quoted" || fail "response body access missing"
+echo "$out" | grep -qF -- '- "--rule-max-rules=500"' && pass "rule limit rendered as a quoted integer" || fail "rule limit not rendered as a quoted integer"
 
 # ── Rule policy: list entries with spaces or '#' stay one quoted argument ────
 section "Rule policy entries are quoted"
@@ -208,7 +211,8 @@ section "Rule policy values are validated"
 for value in "--set rulePolicy.maxRequestBodyLimit=1.5" "--set-string rulePolicy.maxRequestBodyLimit=16Mi" \
   "--set rulePolicy.maxRequestBodyLimit=0" "--set rulePolicy.maxRequestBodyLimit=16777217" \
   "--set rulePolicy.responseBodyAccess=null" "--set rulePolicy.responseBodyAccess=denied" \
-  "--set rulePolicy.deniedOperators=pm" "--set rulePolicy.deniedDirectives=SecRuleEngine"; do
+  "--set rulePolicy.deniedOperators=pm" "--set rulePolicy.deniedDirectives=SecRuleEngine" \
+  "--set rulePolicy.maxRules=0" "--set rulePolicy.maxRules=1.5" "--set-string rulePolicy.maxRules=many"; do
   key=${value#* rulePolicy.}
   key=${key%%=*}
   # shellcheck disable=SC2086

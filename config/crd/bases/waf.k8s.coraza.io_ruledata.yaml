@@ -51,10 +51,17 @@ spec:
               files:
                 additionalProperties:
                   type: string
-                description: files maps filenames to file content, used for @pmFromFile
-                  data.
+                description: |-
+                  files maps filenames to file content, used for @pmFromFile data. It holds
+                  at most 1024 files of at most 1048576 characters each. The WAF plugin
+                  accepts at most 1048576 bytes per file, which a RuleSet using the file
+                  checks.
+                maxProperties: 1024
                 minProperties: 1
                 type: object
+                x-kubernetes-validations:
+                - message: each file must be at most 1048576 characters (1 MiB)
+                  rule: self.all(k, size(self[k]) <= 1048576)
             required:
             - files
             type: object

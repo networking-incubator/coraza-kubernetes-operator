@@ -91,8 +91,12 @@ spec:
             {{- if not (has .responseBodyAccess (list "Allowed" "Denied")) }}
             {{- fail (printf "rulePolicy.responseBodyAccess must be Allowed or Denied, got %v" .responseBodyAccess) }}
             {{- end }}
+            {{- if or (not (include "coraza-operator.isInt" .maxRules)) (le (int64 .maxRules) 0) }}
+            {{- fail (printf "rulePolicy.maxRules must be a positive integer, got %v" .maxRules) }}
+            {{- end }}
             - {{ printf "--rule-max-request-body-limit=%d" (int64 $limit) | quote }}
             - {{ printf "--rule-response-body-access=%s" .responseBodyAccess | quote }}
+            - {{ printf "--rule-max-rules=%d" (int64 .maxRules) | quote }}
             {{- end }}
             {{- if .Values.defaultWasmImage }}
             - --default-wasm-image={{ .Values.defaultWasmImage }}

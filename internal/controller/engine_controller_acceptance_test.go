@@ -442,10 +442,10 @@ func TestEngineReconciler_RejectsPayloadOverMessageLimit(t *testing.T) {
 	assert.Contains(t, degraded.Message, "message limit of 128")
 }
 
-// TestEngineReconciler_ClearsAcceptedConfigurationOverLimits covers a tenant
-// growing RuleData past the delivery limits after acceptance: the stale accepted
-// record must be cleared so readiness and the publisher stop tracking it.
-func TestEngineReconciler_ClearsAcceptedConfigurationOverLimits(t *testing.T) {
+// TestEngineReconciler_KeepsAcceptedConfigurationOverLimits covers content past
+// the Engine's delivery limits after acceptance, as when the limits are lowered:
+// the Engine reports it and keeps serving its accepted configuration.
+func TestEngineReconciler_KeepsAcceptedConfigurationOverLimits(t *testing.T) {
 	ctx := context.Background()
 	ns := setupTestNamespace(t, ctx)
 	engine := newDeliveryLimitEngineFixture(t, ctx, ns, "grown")
@@ -487,7 +487,7 @@ func TestEngineReconciler_ClearsAcceptedConfigurationOverLimits(t *testing.T) {
 	var updated wafv1alpha1.Engine
 	require.NoError(t, k8sClient.Get(ctx, request.NamespacedName, &updated))
 	require.NotNil(t, updated.Status)
-	assert.Nil(t, updated.Status.AcceptedConfiguration, "the stale accepted record must be cleared")
+	assert.Equal(t, accepted.Status.AcceptedConfiguration, updated.Status.AcceptedConfiguration, "the accepted record must keep serving")
 
 	degraded := apimeta.FindStatusCondition(updated.Status.Conditions, conditionDegraded)
 	require.NotNil(t, degraded)
@@ -500,11 +500,7 @@ func TestEngineReconciler_ClearsAcceptedConfigurationOverLimits(t *testing.T) {
 	_, err = publisher.Reconcile(ctx, request)
 	require.NoError(t, err)
 	_, ok = publisher.Store.Get(engineKey)
-	assert.False(t, ok, "a cleared accepted record must delete the published snapshot")
-
-	readiness := xds.NewPublicationReadiness()
-	readiness.Initialize([]*wafv1alpha1.Engine{&updated})
-	assert.NoError(t, readiness.Check(), "a cleared record must not gate readiness")
+	assert.True(t, ok, "the published snapshot must keep serving")
 }
 
 // TestEngineReconciler_ClearsAcceptedConfigurationWhenRuleSetDeleted covers the

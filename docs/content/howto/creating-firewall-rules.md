@@ -118,4 +118,13 @@ spec:
 
 ## Maximum references
 
-A RuleSet supports up to **2048** entries in `spec.sources` and up to **256** in `spec.data` (for RuleData objects; see [Using data files]({{< relref "/howto/using-data-files" >}})).
+A RuleSet supports up to **256** entries in `spec.sources` and up to **64** in `spec.data` (for RuleData objects; see [Using data files]({{< relref "/howto/using-data-files" >}})).
+
+A RuleSet's content must also fit what an Engine can deliver:
+
+- The rule text of all referenced RuleSources and the merged RuleData files (only the last-listed file of each name counts) must fit the WAF plugin's 8 MiB configuration limit as the configuration encodes them: quotes, backslashes, newlines, tabs, `<`, `>` and `&` each take two or six bytes there.
+- The merged RuleData must stay within the Engine limits: `--xds-max-decoded-data-bytes` (6 MiB by default), `--xds-max-data-files` (1024 by default) and 1 MiB per file.
+- Compressed for delivery, the configuration must still fit 8 MiB: text with little repetition, such as random tokens, compresses poorly.
+- The RuleSet may hold at most `--rule-max-rules` rules (20000 by default, Helm `rulePolicy.maxRules`): `SecRule` (each rule of a chain), `SecAction` and `SecMarker` directives, counted once for every `Include` of a RuleData file that holds them.
+
+A RuleSet past any of these reports `Degraded` with reason `ContentTooLarge` and a message naming the limit, and keeps the content it accepted before; Engines keep serving that content. The RuleSet generated from the OWASP CRS v4.28 (`kubectl coraza generate coreruleset`) encodes to about 0.9 MiB and holds about 700 rules.

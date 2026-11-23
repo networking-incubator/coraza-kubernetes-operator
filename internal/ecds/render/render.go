@@ -29,6 +29,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/url"
 	"regexp"
 	"sort"
@@ -272,43 +273,16 @@ func Render(in EngineInput) (Artifact, error) {
 	runtime, vmID, codeTimeout := resolveVMSettings(in.VMSettings, in.UID)
 	resourceName := ResourceName(in.Namespace, in.Name, in.UID)
 
-	// The payload carries the RuleData files so the plugin can rebuild a WAF
-	// whose @pmFromFile references resolve.
-	dataFiles := make(map[string][]byte, len(in.Content.DataFiles))
-	for name, data := range in.Content.DataFiles {
-		if data == nil {
-			data = []byte{}
-		}
-		dataFiles[name] = data
-	}
-	// envoy-coraza reads rule_data as a map of file name to file bytes
-	// encoded as JSON strings. RuleData is string-valued in the API, so this
-	// round-trips its UTF-8 bytes without loss.
-	ruleData := make(map[string]string, len(dataFiles))
-	for name, data := range dataFiles {
-		ruleData[name] = string(data)
-	}
 	// json.Marshal is deterministic for these types — struct fields keep
 	// their declaration order and encoding/json sorts map keys — so every
 	// replica renders identical payload bytes.
-	payload, err := json.Marshal(runtimeConfig{
-		SchemaVersion:         SchemaVersion,
-		Engine:                in.Name,
-		Namespace:             in.Namespace,
-		EngineUID:             string(in.UID),
-		DriverType:            driverType,
-		EmptyRulesPolicy:      emptyRulesPolicy,
-		FailurePolicy:         failurePolicy,
-		EnableFilterStateLogs: in.EnableFilterStateLogs,
-		DirectivesMap:         map[string][]string{defaultPolicyName: {in.Content.Rules}},
-		DefaultDirectives:     defaultPolicyName,
-		RuleData:              ruleData,
-	})
+	payload, err := json.Marshal(runtimeDocument(in.Content, in.Name, in.Namespace, string(in.UID),
+		driverType, emptyRulesPolicy, failurePolicy, in.EnableFilterStateLogs))
 	if err != nil {
 		return Artifact{}, fmt.Errorf("render runtime configuration: %w", err)
 	}
-	// The plugin's cap bounds the decompressed document the envelope carries,
-	// not the compressed bytes on the wire, so it is checked before wrapping.
+	// The plugin caps both the decompressed document and the envelope that
+	// carries it: the document is checked here, the envelope by the caller.
 	if len(payload) > MaxConfigurationBytes {
 		return Artifact{}, fmt.Errorf("runtime configuration %d exceeds the plugin configuration limit of %d", len(payload), MaxConfigurationBytes)
 	}
@@ -386,19 +360,52 @@ func Matches(accepted AcceptedEngine, a Artifact) error {
 // the same document.
 func gzipB64Envelope(plain []byte) ([]byte, error) {
 	var compressed bytes.Buffer
-	writer, err := gzip.NewWriterLevel(&compressed, gzip.BestCompression)
-	if err != nil {
-		return nil, fmt.Errorf("compress runtime configuration: %w", err)
-	}
-	if _, err := writer.Write(plain); err != nil {
-		return nil, fmt.Errorf("compress runtime configuration: %w", err)
-	}
-	if err := writer.Close(); err != nil {
-		return nil, fmt.Errorf("compress runtime configuration: %w", err)
+	if err := gzipTo(&compressed, plain); err != nil {
+		return nil, err
 	}
 	return json.Marshal(struct {
 		ConfigGzipB64 string `json:"config_gzip_b64"`
 	}{base64.StdEncoding.EncodeToString(compressed.Bytes())})
+}
+
+// gzipTo writes plain to w as the one gzip member of the envelope.
+func gzipTo(w io.Writer, plain []byte) error {
+	writer, err := gzip.NewWriterLevel(w, gzip.BestCompression)
+	if err != nil {
+		return fmt.Errorf("compress runtime configuration: %w", err)
+	}
+	if _, err := writer.Write(plain); err != nil {
+		return fmt.Errorf("compress runtime configuration: %w", err)
+	}
+	if err := writer.Close(); err != nil {
+		return fmt.Errorf("compress runtime configuration: %w", err)
+	}
+	return nil
+}
+
+// runtimeDocument is the runtime configuration of content for one Engine. It
+// carries the RuleData files so the plugin can rebuild a WAF whose
+// @pmFromFile references resolve; envoy-coraza reads rule_data as a map of
+// file name to file bytes encoded as JSON strings, and RuleData is
+// string-valued in the API, so this round-trips its UTF-8 bytes without loss.
+func runtimeDocument(content assemble.Content, engine, namespace, uid, driverType, emptyRulesPolicy, failurePolicy string, filterStateLogs bool) runtimeConfig {
+	ruleData := make(map[string]string, len(content.DataFiles))
+	for name, data := range content.DataFiles {
+		ruleData[name] = string(data)
+	}
+	return runtimeConfig{
+		SchemaVersion:         SchemaVersion,
+		Engine:                engine,
+		Namespace:             namespace,
+		EngineUID:             uid,
+		DriverType:            driverType,
+		EmptyRulesPolicy:      emptyRulesPolicy,
+		FailurePolicy:         failurePolicy,
+		EnableFilterStateLogs: filterStateLogs,
+		DirectivesMap:         map[string][]string{defaultPolicyName: {content.Rules}},
+		DefaultDirectives:     defaultPolicyName,
+		RuleData:              ruleData,
+	}
 }
 
 // runtimeConfig is the schema_version 2 JSON wrapped by the config_gzip_b64

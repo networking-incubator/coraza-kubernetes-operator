@@ -18,11 +18,17 @@ package xds
 
 import (
 	"math"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/proto"
+	"k8s.io/apimachinery/pkg/types"
+
+	"github.com/networking-incubator/coraza-kubernetes-operator/internal/ecds/render"
+	"github.com/networking-incubator/coraza-kubernetes-operator/internal/rulesets/assemble"
 )
 
 // TestLimitsWithDefaultsKeepsPartiallySetLimits checks that a caller that sets
@@ -100,8 +106,8 @@ func TestLimitsValidateRequiresRevalidationBeforeStaleness(t *testing.T) {
 // the decoded rule_data plus the maximum key overhead must fit one message
 // after the envelope, or accepted Engines would never be delivered.
 func TestLimitsValidateRejectsUndeliverableCombination(t *testing.T) {
-	for _, files := range []int{1, 3, 1024} {
-		decoded := files
+	for _, files := range []int{64, 1024} {
+		decoded := pluginMaxDecodedDataBytes
 		maxMessage := decoded + files*(DataFileNameBytes+dataFileKeyOverheadBytes) + MessageEnvelopeBytes
 
 		assert.NoError(t, Limits{
@@ -118,4 +124,31 @@ func TestLimitsValidateRejectsUndeliverableCombination(t *testing.T) {
 		require.Error(t, err, "the keyed rule_data must count against the message limit")
 		assert.Contains(t, err.Error(), "xds-max-message-bytes")
 	}
+}
+
+// TestLimitsValidateRequiresRoomForTheLargestConfiguration checks that a
+// lowered message limit still carries the plugin's largest configuration, and
+// that the reserved framing covers a resource with the longest names and URL.
+func TestLimitsValidateRequiresRoomForTheLargestConfiguration(t *testing.T) {
+	assert.NoError(t, Limits{MaxMessageBytes: minMaxMessageBytes}.Validate())
+	err := Limits{MaxMessageBytes: minMaxMessageBytes - 1}.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cannot carry the largest plugin configuration")
+
+	content := assemble.Content{Rules: "SecRuleEngine On"}
+	contentHash, err := render.RuleSetContentHash(content)
+	require.NoError(t, err)
+	sha := strings.Repeat("c", 64)
+	artifact, err := render.Render(render.EngineInput{
+		Namespace:        strings.Repeat("n", 63),
+		Name:             strings.Repeat("e", 253),
+		UID:              types.UID(strings.Repeat("u", 36)),
+		RuleSet:          render.RuleSetAccepted{UID: "ruleset", ContentHash: contentHash},
+		Content:          content,
+		EmptyRulesPolicy: "Reject",
+		FailurePolicy:    "allow",
+		Binary:           render.BinaryRef{URL: "https://example.com/" + strings.Repeat("p", 2048-len("https://example.com/")-len(".wasm")) + ".wasm", SHA256: sha},
+	})
+	require.NoError(t, err)
+	assert.LessOrEqual(t, proto.Size(artifact.Resource)-len(artifact.Payload), resourceFramingBytes)
 }

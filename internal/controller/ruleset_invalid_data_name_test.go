@@ -175,12 +175,21 @@ func TestHostWritingDirectiveInIncludedRuleDataBlocksAcceptance(t *testing.T) {
 // published.
 func TestLegacyAcceptedContentIsRevalidatedOnUpgrade(t *testing.T) {
 	tests := []struct {
-		name  string
-		rules string
-		want  string
+		name     string
+		rules    string
+		maxRules int
+		want     string
 	}{
 		{name: "host writing directive", rules: "SecRuleEngine On\nSecDebugLog /dev/stdout", want: "SecDebugLog"},
 		{name: "parent-relative include", rules: "SecRuleEngine On\nInclude ../../etc/passwd", want: "parent-relative"},
+		{
+			// The content is also past the rule limit: it must still be
+			// withdrawn rather than kept as content over a limit.
+			name:     "host writing directive past the rule limit",
+			rules:    "SecRuleEngine On\nSecDebugLog /dev/stdout\nSecAction \"id:1,phase:1,pass\"\nSecAction \"id:2,phase:1,pass\"",
+			maxRules: 1,
+			want:     "SecDebugLog",
+		},
 	}
 
 	for _, tc := range tests {
@@ -276,6 +285,7 @@ func TestLegacyAcceptedContentIsRevalidatedOnUpgrade(t *testing.T) {
 				Scheme:   scheme,
 				Recorder: utils.NewTestRecorder(),
 				Metrics:  metrics,
+				MaxRules: tc.maxRules,
 			}
 
 			req := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(ruleset)}

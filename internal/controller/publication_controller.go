@@ -210,6 +210,9 @@ func (r *PublicationReconciler) reconstruct(ctx context.Context, key types.Names
 	if r.coalesced(key, fingerprint, accepted.Version) {
 		return nil
 	}
+	if err := checkInputsSize(inputs); err != nil {
+		return err
+	}
 
 	content, err := assemble.Assemble(inputs)
 	if err != nil {
@@ -455,11 +458,10 @@ func validateRenderedPayload(artifact render.Artifact, limits xds.Limits) error 
 	if size := proto.Size(artifact.Resource) + messageEnvelopeBytes; size > limits.MaxMessageBytes {
 		return fmt.Errorf("ECDS response size %d exceeds the message limit of %d", size, limits.MaxMessageBytes)
 	}
-	// envoy-coraza rejects a decompressed configuration above its own cap, so
-	// a payload that only fits the gRPC message would still be NACKed. The
-	// decompressed cap is enforced at render time; the compressed envelope on
-	// the wire can only be smaller than the document it carries, so this
-	// bounds it too.
+	// envoy-coraza rejects a configuration above its own cap, so a payload
+	// that only fits the gRPC message would still be NACKed. The decompressed
+	// document is capped at render time; the envelope is checked here, since a
+	// document that compresses poorly wraps to more than it carries.
 	if len(artifact.Payload) > render.MaxConfigurationBytes {
 		return fmt.Errorf("ECDS payload %d exceeds the plugin configuration limit of %d", len(artifact.Payload), render.MaxConfigurationBytes)
 	}

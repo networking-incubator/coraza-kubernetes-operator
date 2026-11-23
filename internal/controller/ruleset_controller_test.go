@@ -297,7 +297,7 @@ func TestRuleSetReconciler_ValidationRejection(t *testing.T) {
 			name:        "too many sources",
 			ruleSetName: "too-many-sources-ruleset",
 			sources: func() []wafv1alpha1.SourceReference {
-				sources := make([]wafv1alpha1.SourceReference, 2049)
+				sources := make([]wafv1alpha1.SourceReference, 257)
 				for i := range sources {
 					sources[i] = wafv1alpha1.SourceReference{Name: "test"}
 				}

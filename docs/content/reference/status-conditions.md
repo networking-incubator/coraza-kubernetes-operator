@@ -56,23 +56,23 @@ The Engine could not reach its desired state. Common reasons:
 | `RuleSetNotFound` | The referenced RuleSet does not exist. | Verify the RuleSet name and namespace in the Engine spec. |
 | `RuleSetDegraded` | The referenced RuleSet is in a Degraded state. | Check the RuleSet status: `kubectl describe ruleset <name>`. |
 | `RuleSetInputsUnavailable` | A RuleSource or RuleData the accepted RuleSet references could not be loaded (for example it was deleted). The Engine keeps its last accepted configuration while the input is missing. | Recreate the missing object or fix the reference; the RuleSet must re-accept its content. |
-| `InvalidRuleSet` | The accepted RuleSet content cannot be assembled, or it exceeds the operator's delivery limits (`xds-max-decoded-data-bytes`, `xds-max-data-files`, rule text size). | Reduce the RuleData size or file count, or raise the limit if it stays below the plugin caps. |
-| `RenderFailed` | The rendered ECDS payload cannot be delivered (it exceeds `xds-max-message-bytes` or the plugin's 8 MiB configuration cap) or rendering failed. | Reduce RuleData or rule text, or raise `xds-max-message-bytes`. |
+| `InvalidRuleSet` | The accepted RuleSet content cannot be assembled, or it exceeds the operator's delivery limits (`xds-max-decoded-data-bytes`, `xds-max-data-files`, rule text size). The RuleSet refuses such content first, so this shows when the limits or the content changed after the RuleSet checked it. The Engine keeps its last accepted configuration. | Reduce the RuleData size or file count, or raise the limit if it stays below the plugin caps. |
+| `RenderFailed` | The rendered ECDS payload cannot be delivered (it exceeds `xds-max-message-bytes` or the plugin's 8 MiB configuration cap) or rendering failed. The Engine keeps its last accepted configuration. | Reduce RuleData or rule text, or raise `xds-max-message-bytes`. |
 | `InvalidConfiguration` | The Engine spec contains an invalid configuration. | Check the condition message for details and fix the Engine spec. |
 | `ProvisioningFailed` | Failed to create or update the EnvoyFilter resource. | Check operator logs and RBAC permissions. |
 | `NetworkPolicyFailed` | Failed to apply the NetworkPolicy that restricts access to the operator's xDS listener. | Check operator logs and RBAC permissions. |
 | `TLSNotConfigured` | The operator has no verified CA chain for its xDS serving certificate. | Set `--xds-ca-path` to the CA bundle Gateways use to verify the operator certificate. |
 
 The operator clears `status.acceptedConfiguration` when the Engine reports
-`RenderFailed` for an oversized payload, `InvalidRuleSet` for content over the
-delivery limits, `RuleSetNotFound`, or a `RuleSetDegraded` state the record cannot
-be reconstructed from (a recreated RuleSet or `RejectedContent`). That removes the
+`RuleSetNotFound`, or a `RuleSetDegraded` state the record cannot be
+reconstructed from (a recreated RuleSet or `RejectedContent`). That removes the
 accepted configuration from the ECDS serving plane, so an already-running proxy
 keeps the snapshot it already received but no longer gets updates, and a new or
 restarted proxy gets no WAF coverage until the Engine accepts a configuration
 again. A RuleSet aggregate-validation failure (RuleSet reason `InvalidRuleSet`,
-reported on the Engine as `RuleSetDegraded`), an Engine-side assembly failure
-(`InvalidRuleSet`), and wait states (a degraded RuleSet that is only missing
+reported on the Engine as `RuleSetDegraded`), content past a delivery limit or
+the rule limit (RuleSet reason `ContentTooLarge`), an Engine-side assembly
+failure or delivery limit (`InvalidRuleSet`, `RenderFailed`), and wait states (a degraded RuleSet that is only missing
 RuleData, a `RuleSetInputsUnavailable` input, or a RuleSet that has not accepted
 the current generation) keep the last good accepted configuration and snapshot
 instead, so an already-running proxy stays protected by the previous rules. A
@@ -127,7 +127,7 @@ The RuleData has been loaded by a RuleSet reconciliation.
 
 The rules have been compiled, validated, and accepted for delivery over ECDS. When the `Ready` condition is `True`, the **reason** is typically `RulesAccepted`.
 
-`Ready` only means the RuleSet content is accepted. Delivery limits are enforced when an **Engine** accepts and publishes the configuration, so a RuleSet whose content exceeds those limits is still accepted while every Engine referencing it reports `Degraded`.
+`Ready` only means the RuleSet content is accepted. The RuleSet refuses content past the delivery limits an **Engine** enforces and past the rule limit (`ContentTooLarge`), checking the compressed size for an Engine with the longest name and namespace, with about 2 KiB of headroom for how another Engine's name and namespace compress. An Engine can still refuse accepted content when the limits or the content changed after the RuleSet checked it.
 
 ### Progressing
 
@@ -141,6 +141,7 @@ The RuleSet could not be compiled or accepted. Common reasons:
 |--------|-------------|------------|
 | `UnsupportedRules` | The RuleSet contains rules not supported in the current execution environment. | Remove the unsupported rules, or add the annotation `waf.k8s.coraza.io/skip-unsupported-rules-check: "true"` to the RuleSet. |
 | `InvalidRuleSet` | Aggregate validation failed (including `@pmFromFile` references that are not backed by a key in merged **RuleData**), or the content uses something `envoy-coraza` does not support or reads differently from Coraza (see the ECDS plugin contract), or new or changed content uses something the cluster rule policy denies. The Engine keeps its last accepted configuration. | Add or fix `spec.data` so every `@pmFromFile` basename exists in the referenced RuleData objects; fix other SecLang issues in the message, or remove what the cluster rule policy denies. |
+| `ContentTooLarge` | The content is past a limit: the rule text and merged RuleData encode to more than one plugin configuration (8 MiB) can carry, the merged RuleData exceeds the Engine limits (`--xds-max-decoded-data-bytes`, `--xds-max-data-files`, 1 MiB per file), the configuration compresses past 8 MiB, or the RuleSet holds more rules than `--rule-max-rules`. The message names the limit; for the configuration size, also the RuleSource or RuleData that crossed it. The content is refused before it is compiled; the RuleSet keeps `status.acceptedContent` and the Engine keeps its last accepted configuration. | Reduce the rule text, RuleData or rules, split the rules across RuleSets attached to different Gateways, or raise the limit. |
 | `RejectedContent` | The content violates the delivery contract: a host-file directive, an unsupported `Include` target, or a request-body limit `envoy-coraza` would reject. The Engine clears its accepted configuration. | Remove the directive or include, or set `SecRequestBodyLimit` at or below 16 MiB; see the ECDS plugin contract. |
 | `ReferencedRuleSourceInvalid` | A referenced **RuleSource** is in `Degraded` with `InvalidRules` for its current spec generation. | Fix the **RuleSource** `spec.rules` (see that object’s status message). |
 | `RuleSourceNotFound` | A RuleSource named in `spec.sources` does not exist. | Create the RuleSource or correct the name; it must be in the same namespace as the RuleSet. |

@@ -156,6 +156,7 @@ func main() {
 		AssetBaseURL:      assetBaseURL,
 		XDS:               xdsDeps,
 		RulePolicy:        rulePolicy,
+		MaxRules:          cfg.ruleMaxRules,
 	}); err != nil {
 		setupLog.Error(err, "unable to setup controllers")
 		os.Exit(1)
@@ -227,6 +228,7 @@ type config struct {
 	ruleDeniedDirectives    string
 	ruleMaxRequestBodyLimit int64
 	ruleResponseBodyAccess  string
+	ruleMaxRules            int
 }
 
 func parseFlags() config {
@@ -297,10 +299,15 @@ func addRulePolicyFlags(fs *flag.FlagSet, cfg *config) {
 		"Highest SecRequestBodyLimit accepted in new or changed rules, in bytes; at most the envoy-coraza ceiling of 16777216")
 	fs.StringVar(&cfg.ruleResponseBodyAccess, "rule-response-body-access", validation.ResponseBodyAccessAllowed,
 		"Allowed or Denied; Denied rejects SecResponseBodyAccess On in new or changed rules")
+	fs.IntVar(&cfg.ruleMaxRules, "rule-max-rules", controller.DefaultMaxRules,
+		"Most rules one RuleSet may hold: SecRule (each rule of a chain), SecAction and SecMarker, once per Include of a file; the OWASP CRS holds about 700")
 }
 
 // rulePolicy builds the cluster rule policy from the flags.
 func (cfg config) rulePolicy() (validation.RulePolicy, error) {
+	if cfg.ruleMaxRules < 1 {
+		return validation.RulePolicy{}, fmt.Errorf("rule-max-rules %d must be positive", cfg.ruleMaxRules)
+	}
 	return validation.ParseRulePolicy(cfg.ruleDeniedOperators, cfg.ruleDeniedDirectives,
 		cfg.ruleMaxRequestBodyLimit, cfg.ruleResponseBodyAccess)
 }

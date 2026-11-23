@@ -144,6 +144,10 @@ const (
 	// the plugin would NACK. Unlike an ordinary invalid edit, an accepted
 	// configuration of this content must not keep serving.
 	ruleSetDegradedReasonRejectedContent = "RejectedContent"
+	// ruleSetDegradedReasonContentTooLarge marks rule text and RuleData that
+	// together exceed the plugin's configuration limit. Like an ordinary
+	// invalid edit, it keeps the content accepted before.
+	ruleSetDegradedReasonContentTooLarge = "ContentTooLarge"
 	ruleSetReadyReasonRulesAccepted      = "RulesAccepted"
 )
 
@@ -177,12 +181,30 @@ func (r *RuleSetReconciler) validateAggregatedRules(
 			return time.Since(start), r.markRulesInvalid(ctx, log, req, ruleset, ruleSetDegradedReasonInvalidRuleSet, rejectedContentHash, err)
 		}
 	}
-	waf, err := coraza.NewWAF(validation.BuildWAFConfig(content.Rules, content.DataFiles))
-	if err != nil {
+	if err := r.compile(req.NamespacedName, rejectedContentHash, content); err != nil {
 		return time.Since(start), r.markRulesInvalid(ctx, log, req, ruleset, ruleSetDegradedReasonInvalidRuleSet, rejectedContentHash, err)
 	}
-	validation.CloseWAF(waf)
 	return time.Since(start), nil
+}
+
+// compile compiles content with Coraza, once per content: the result only
+// depends on the content, and compiling costs time and memory that grow with
+// it.
+func (r *RuleSetReconciler) compile(key types.NamespacedName, contentHash string, content assemble.Content) error {
+	results := r.contentResults(key, contentHash)
+	if !results.compiled {
+		results.compiled = true
+		if waf, err := coraza.NewWAF(validation.BuildWAFConfig(content.Rules, content.DataFiles)); err != nil {
+			results.compileErr = truncateMessage(validation.SanitizeErrorMessage(err).Error(), maxResultMessageBytes)
+		} else {
+			validation.CloseWAF(waf)
+		}
+		r.storeContentResults(key, results)
+	}
+	if results.compileErr != "" {
+		return errors.New(results.compileErr)
+	}
+	return nil
 }
 
 // markRulesInvalid patches Degraded (unless the condition is already current)
@@ -196,11 +218,6 @@ func (r *RuleSetReconciler) markRulesInvalid(
 	rejectedContentHash string,
 	cause error,
 ) error {
-	msg := invalidRuleSetMessage(cause)
-	if isConditionCurrent(ruleset.Status.Conditions, conditionDegraded, reason, ruleset.Generation) &&
-		degradedConditionMessage(ruleset, reason) == msg {
-		return errRuleSetRulesInvalid
-	}
 	// Only drop an accepted record for the exact content this build rejects:
 	// legacy accepted content that now fails validation. A different record is
 	// the last accepted RuleSet content and is kept for status/audit. The Engine
@@ -211,8 +228,8 @@ func (r *RuleSetReconciler) markRulesInvalid(
 			ruleset.Status.AcceptedContent = nil
 		}
 	}
-	if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "RuleSet", ruleset, &ruleset.Status.Conditions, ruleset.Generation, reason, msg, clearAccepted); patchErr != nil {
-		return patchErr
+	if err := r.markDegraded(ctx, log, req, ruleset, reason, invalidRuleSetMessage(cause), clearAccepted); err != nil {
+		return err
 	}
 	return errRuleSetRulesInvalid
 }
@@ -227,15 +244,21 @@ func (r *RuleSetReconciler) markParityInvalid(
 	ruleset *wafv1alpha1.RuleSet,
 	cause error,
 ) error {
-	msg := invalidRuleSetMessage(cause)
-	if isConditionCurrent(ruleset.Status.Conditions, conditionDegraded, ruleSetDegradedReasonInvalidRuleSet, ruleset.Generation) &&
-		degradedConditionMessage(ruleset, ruleSetDegradedReasonInvalidRuleSet) == msg {
-		return errRuleSetRulesInvalid
-	}
-	if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "RuleSet", ruleset, &ruleset.Status.Conditions, ruleset.Generation, ruleSetDegradedReasonInvalidRuleSet, msg); patchErr != nil {
-		return patchErr
+	if err := r.markDegraded(ctx, log, req, ruleset, ruleSetDegradedReasonInvalidRuleSet, invalidRuleSetMessage(cause)); err != nil {
+		return err
 	}
 	return errRuleSetRulesInvalid
+}
+
+// markDegraded patches Degraded unless the same reason and message are already
+// current. It keeps status.acceptedContent unless mutate drops it in the patch.
+func (r *RuleSetReconciler) markDegraded(ctx context.Context, log logr.Logger, req ctrl.Request, ruleset *wafv1alpha1.RuleSet, reason, msg string, mutate ...func()) error {
+	msg = truncateMessage(msg, maxConditionMessageBytes)
+	if isConditionCurrent(ruleset.Status.Conditions, conditionDegraded, reason, ruleset.Generation) &&
+		degradedConditionMessage(ruleset, reason) == msg {
+		return nil
+	}
+	return patchDegraded(ctx, r.Status(), r.Recorder, log, req, "RuleSet", ruleset, &ruleset.Status.Conditions, ruleset.Generation, reason, msg, mutate...)
 }
 
 // invalidRuleSetMessage is the Degraded message of a RuleSet whose content

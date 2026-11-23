@@ -325,6 +325,16 @@ func directiveLines(rules string) []string {
 // dangling is a continuation left open at the end of the text, which neither
 // engine evaluates.
 func scanDirectives(rules string) (lines []string, dangling string, blockErr error) {
+	dangling, blockErr = walkDirectives(rules, func(line string) bool {
+		lines = append(lines, line)
+		return true
+	})
+	return lines, dangling, blockErr
+}
+
+// walkDirectives calls yield with each directive of rule text, as
+// scanDirectives returns them, until yield returns false.
+func walkDirectives(rules string, yield func(line string) bool) (dangling string, blockErr error) {
 	var directive strings.Builder
 	inBlock := false
 	for line := range strings.SplitSeq(rules, "\n") {
@@ -351,20 +361,25 @@ func scanDirectives(rules string) (lines []string, dangling string, blockErr err
 		case strings.HasSuffix(line, `\`):
 			directive.WriteString(strings.TrimSuffix(line, `\`))
 		case directive.Len() == 0:
-			lines = append(lines, line)
+			if !yield(line) {
+				return "", blockErr
+			}
 		default:
 			directive.WriteString(line)
 			first, _, _ := strings.Cut(directive.String(), "\n")
-			lines = append(lines, first)
 			directive.Reset()
+			if !yield(first) {
+				return "", blockErr
+			}
 		}
 	}
 	if inBlock {
 		// Both engines refuse a block left open; its directive is still read.
 		first, _, _ := strings.Cut(directive.String(), "\n")
-		return append(lines, first), "", errBacktickClose
+		yield(first)
+		return "", errBacktickClose
 	}
-	return lines, directive.String(), blockErr
+	return directive.String(), blockErr
 }
 
 // checkOperatorSpacing returns errLeadingSpaceOperator for a SecRule line whose

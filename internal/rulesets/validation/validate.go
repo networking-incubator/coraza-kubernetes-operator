@@ -62,10 +62,16 @@ func BuildWAFConfig(rules string, dataFiles map[string][]byte) coraza.WAFConfig 
 			mfs.WriteFile(target, nil)
 		}
 	}
+	return coraza.NewWAFConfig().WithDirectives(compiledDirectives(rules, dataFiles)).WithRootFS(mfs)
+}
+
+// compiledDirectives is the rule text BuildWAFConfig compiles: the CRS tuning
+// stand-in rules, the rules and the validation trailer.
+func compiledDirectives(rules string, dataFiles map[string][]byte) string {
 	if standIns := crsTuningStandInRules(rules, dataFiles); standIns != "" {
 		rules = standIns + rules
 	}
-	return coraza.NewWAFConfig().WithDirectives(rules + validationTrailer).WithRootFS(mfs)
+	return rules + validationTrailer
 }
 
 // CloseWAF releases a validation WAF. Coraza registers the WAF's compiled-pattern
@@ -143,21 +149,29 @@ func includeTarget(arg string) string {
 func ruleDataIncludeNames(rules string) []string {
 	var names []string
 	for line := range strings.SplitSeq(joinActiveRuleLines(rules), "\n") {
-		match := includePattern.FindStringSubmatch(line)
-		if match == nil {
-			continue
+		if name, ok := ruleDataIncludeName(line); ok {
+			names = append(names, name)
 		}
-		target := includeTarget(match[1])
-		if isGlob(target) {
-			continue
-		}
-		target = strings.TrimSpace(target)
-		if isOSPath(target) || strings.HasPrefix(target, "@") || strings.HasPrefix(target, "crs/") {
-			continue
-		}
-		names = append(names, path.Clean(target))
 	}
 	return names
+}
+
+// ruleDataIncludeName returns the RuleData file name a directive Includes, as
+// ruleDataIncludeNames reads it.
+func ruleDataIncludeName(line string) (string, bool) {
+	match := includePattern.FindStringSubmatch(line)
+	if match == nil {
+		return "", false
+	}
+	target := includeTarget(match[1])
+	if isGlob(target) {
+		return "", false
+	}
+	target = strings.TrimSpace(target)
+	if isOSPath(target) || strings.HasPrefix(target, "@") || strings.HasPrefix(target, "crs/") {
+		return "", false
+	}
+	return path.Clean(target), true
 }
 
 // crsIncludeTargets returns the embedded CRS Include targets resolved by the

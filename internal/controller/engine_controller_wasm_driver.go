@@ -125,7 +125,9 @@ func (r *EngineReconciler) provisionWasmDriver(ctx context.Context, log logr.Log
 		return ctrl.Result{}, err
 	}
 	if err := validateRenderedPayload(artifact, limits); err != nil {
-		if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "Engine", engine, &engine.Status.Conditions, engine.Generation, "RenderFailed", fmt.Sprintf("Rendered Engine configuration exceeds delivery limits: %v", err), func() { clearAcceptedConfiguration(engine) }); patchErr != nil {
+		// Keep the accepted configuration: content past a limit never replaces
+		// what the Engine already serves.
+		if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "Engine", engine, &engine.Status.Conditions, engine.Generation, "RenderFailed", fmt.Sprintf("Rendered Engine configuration exceeds delivery limits: %v", err)); patchErr != nil {
 			return ctrl.Result{}, patchErr
 		}
 		return ctrl.Result{}, err
@@ -239,6 +241,12 @@ func (r *EngineReconciler) acceptedRuleSetContent(ctx context.Context, log logr.
 		}
 		return nil, ctrl.Result{}, err
 	}
+	if err := checkInputsSize(inputs); err != nil {
+		// Content past the limit was never accepted: an input grew after the
+		// RuleSet accepted its content. Wait as for any other unaccepted edit.
+		result, err := r.awaitRuleSetAcceptance(ctx, log, req, engine, err.Error(), acceptedRecordUnjustified(engine, &ruleSet))
+		return nil, result, err
+	}
 	content, err := assemble.Assemble(inputs)
 	if err != nil {
 		if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "Engine", engine, &engine.Status.Conditions, engine.Generation, "InvalidRuleSet", fmt.Sprintf("Failed to assemble RuleSet content: %v", err)); patchErr != nil {
@@ -258,9 +266,11 @@ func (r *EngineReconciler) acceptedRuleSetContent(ctx context.Context, log logr.
 
 	// Accept only content the ECDS serving plane can deliver. Checking here
 	// keeps readiness honest: the publication reconciler refuses oversized
-	// payloads silently.
+	// payloads silently. The RuleSet refuses such content too, so this is
+	// reached when the limits changed or the content changed after the RuleSet
+	// checked it; the accepted configuration keeps serving.
 	if err := validateContentLimits(content, r.Limits.WithDefaults()); err != nil {
-		if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "Engine", engine, &engine.Status.Conditions, engine.Generation, "InvalidRuleSet", fmt.Sprintf("RuleSet %s content exceeds delivery limits: %v", ruleSet.Name, err), func() { clearAcceptedConfiguration(engine) }); patchErr != nil {
+		if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "Engine", engine, &engine.Status.Conditions, engine.Generation, "InvalidRuleSet", fmt.Sprintf("RuleSet %s content exceeds delivery limits: %v", ruleSet.Name, err)); patchErr != nil {
 			return nil, ctrl.Result{}, patchErr
 		}
 		return nil, ctrl.Result{}, err
@@ -403,8 +413,8 @@ func (r *EngineReconciler) applyEnvoyFilter(
 	return applied, nil
 }
 
-// clearAcceptedConfiguration drops the accepted record of a delivery-limit
-// failure. The publisher then deletes the Engine's snapshot and readiness stops
+// clearAcceptedConfiguration drops an accepted record the RuleSet can no longer
+// justify. The publisher then deletes the Engine's snapshot and readiness stops
 // depending on a record this build refuses to publish.
 func clearAcceptedConfiguration(engine *wafv1alpha1.Engine) {
 	if engine.Status != nil {
