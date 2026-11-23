@@ -125,7 +125,12 @@ istio:
 
 xds:
   # Per-peer-IP token bucket for failed ECDS authentication attempts. Successful
-  # authentication does not consume the bucket.
+  # authentication does not consume the bucket. The burst also bounds how many
+  # new streams from one peer IP can be in token review at once. Gateways that
+  # share an address (host-network pods on one node, or pods behind NAT) share
+  # the budget, so a client on that address that sends many invalid tokens can
+  # delay those Gateways' reconnects until it refills; Gateways whose tokens are
+  # already cached are not affected.
   authFailureRate: 10
   authFailureBurst: 1024
   # Maximum size in bytes of one ECDS request from a Gateway. Envoy's node
@@ -140,6 +145,20 @@ xds:
   # between updates are not affected; a connection idle for a minute is
   # pinged and closed if it does not answer within 15s.
   writeTimeout: 30s
+  # Maximum connections from one source address that carry no admitted ECDS
+  # stream, such as module downloads; over it one of them is closed for the
+  # newest, one without a request first. 0 means a 16th of the stream limit.
+  # Connections that carry an admitted ECDS stream are never closed for room.
+  # How fair the rest is depends on how many source addresses hold such
+  # connections, Gateways included: when sources tie, a newcomer from another
+  # source closes the oldest connection without a request, which can be a
+  # Gateway's connection still in its handshake or before its first stream; a
+  # connection with a request in progress, under token review or downloading
+  # the module is closed only after idle ones.
+  # Host-network Gateway pods on one node share the node's address.
+  # Under connection pressure a module download in progress can be closed
+  # this way; Envoy retries it.
+  maxConnectionsPerSource: 0
 
 # Cluster rule policy. It narrows what tenant rule text (RuleSource rules and
 # the RuleData files they Include) may use below what envoy-coraza supports and

@@ -19,10 +19,14 @@ package xds
 import (
 	"context"
 	"errors"
+	"fmt"
+	"maps"
+	"slices"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -809,5 +813,111 @@ func TestAuthzIndexRefreshAllRevokesRecreatedEngineName(t *testing.T) {
 	}
 	if !revoker.revoked(oldResource) {
 		t.Fatal("RefreshAll() did not revoke the previous UID-based resource name")
+	}
+}
+
+// Engines on one Gateway, refreshed at different times, can hold different
+// pod counts: each sum counts the Gateway once at the largest, the
+// identity's only from Engines that grant it, whatever order the Engines are
+// visited in, and admission applies the identity and namespace caps that
+// follow from those sums.
+func TestPodShareCountsEachGatewayOnce(t *testing.T) {
+	type engine struct {
+		uid  string
+		pods int
+	}
+	for _, tt := range []struct {
+		name                 string
+		engines              map[string]engine
+		share, namespacePods int
+	}{
+		{"same counts", map[string]engine{"a": {"sa-uid", 2}, "b": {"sa-uid", 2}, "c": {"sa-uid", 2}}, 2, 2},
+		{"different counts", map[string]engine{"earlier": {"sa-uid", 2}, "later": {"sa-uid", 10}}, 10, 10},
+		{"an Engine that does not grant the identity", map[string]engine{"previous": {"old-uid", 10}, "current": {"sa-uid", 2}}, 2, 10},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			stack := newServerStack(t, DefaultLimits())
+			id := stack.identity
+			// Go does not let a test choose the order a map is visited in, so
+			// the per-Gateway selection is checked on both orders directly.
+			names := slices.Sorted(maps.Keys(tt.engines))
+			reversed := slices.Clone(names)
+			slices.Reverse(reversed)
+			for _, order := range [][]string{names, reversed} {
+				var counted []gatewayPods
+				for _, name := range order {
+					e := tt.engines[name]
+					own := 0
+					if e.uid == id.UID {
+						own = e.pods
+					}
+					counted = keepLargest(counted, testGatewayName, e.pods, own)
+				}
+				require.Equal(t, []gatewayPods{{gateway: testGatewayName, all: tt.namespacePods, own: tt.share}}, counted, "order %v", order)
+			}
+
+			// Other ServiceAccounts every Engine grants, with no pods of their
+			// own, take what the namespace allowance leaves.
+			others := make([]Identity, 4)
+			for k := range others {
+				others[k] = Identity{Namespace: testNamespace, Name: fmt.Sprintf("other-%d", k), UID: fmt.Sprintf("other-uid-%d", k)}
+			}
+			clear(stack.authz.entries)
+			for name, e := range tt.engines {
+				resource := ResourceName(testNamespace, name, types.UID(name+"-uid"))
+				identities := map[string]string{id.Key(): e.uid}
+				for _, other := range others {
+					identities[other.Key()] = other.UID
+				}
+				stack.authz.entries[resource] = AuthzEntry{
+					ResourceName: resource, Namespace: testNamespace, EngineName: name, GatewayName: testGatewayName, RefreshedAt: time.Now(),
+					Identities: identities, Pods: map[string]int{id.Key(): e.pods},
+				}
+			}
+			for range 100 {
+				share, namespacePods, granted := stack.authz.podShare(id)
+				require.True(t, granted)
+				require.Equal(t, [2]int{tt.share, tt.namespacePods}, [2]int{share, namespacePods}, "podShare() share and namespace pods")
+			}
+
+			admit := func(identity Identity) int {
+				admitted := 0
+				for admitted <= stack.server.Limits.MaxStreams && stack.server.reserve(identity) == nil {
+					admitted++
+				}
+				return admitted
+			}
+			admitted := admit(id)
+			require.Equal(t, podStreamCap*tt.share+identityStreamSlack, admitted, "streams admitted for the identity")
+			for _, other := range others {
+				n := admit(other)
+				if n == 0 {
+					break
+				}
+				admitted += n
+			}
+			require.Equal(t, podStreamCap*tt.namespacePods+identityStreamSlack, admitted, "streams admitted in the namespace")
+		})
+	}
+}
+
+// BenchmarkPodShare measures an admission's pod count with 200 namespaces,
+// each with two Engines on one Gateway.
+func BenchmarkPodShare(b *testing.B) {
+	authz := NewAuthzIndex(nil, nil, time.Hour, nil)
+	for i := range 200 {
+		namespace := fmt.Sprintf("ns-%d", i)
+		for _, engine := range []string{"a", "b"} {
+			name := ResourceName(namespace, engine, types.UID(namespace+engine))
+			authz.entries[name] = AuthzEntry{
+				ResourceName: name, Namespace: namespace, EngineName: engine, GatewayName: testGatewayName, RefreshedAt: time.Now(),
+				Identities: map[string]string{namespace + "/gateway": "sa-uid"}, Pods: map[string]int{namespace + "/gateway": 3},
+			}
+		}
+	}
+	id := Identity{Namespace: "ns-7", Name: "gateway", UID: "sa-uid"}
+	b.ReportAllocs()
+	for b.Loop() {
+		authz.podShare(id)
 	}
 }

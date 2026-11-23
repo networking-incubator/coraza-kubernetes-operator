@@ -67,6 +67,7 @@ spec:
             - --xds-auth-failure-burst={{ .Values.xds.authFailureBurst }}
             - --xds-max-request-bytes={{ int .Values.xds.maxRequestBytes }}
             - --xds-write-timeout={{ .Values.xds.writeTimeout }}
+            - --xds-max-connections-per-source={{ int .Values.xds.maxConnectionsPerSource }}
             {{- with .Values.rulePolicy }}
             {{- $policy := . }}
             {{- range $key := list "deniedOperators" "deniedDirectives" }}

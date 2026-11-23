@@ -398,20 +398,64 @@ func (entry AuthzEntry) grants(id Identity) bool {
 	return ok && (uid == "" || id.UID == "" || uid == id.UID)
 }
 
-// podShare returns how many authorized Gateway pods run as id across every
-// Engine with a fresh mapping, at least one, so limits shared by an identity
-// scale with its pods.
-func (a *AuthzIndex) podShare(id Identity) int {
+// podShare returns how many authorized Gateway pods run as id, at least one,
+// and how many are counted in id's namespace, across the Gateways of every
+// Engine there with a fresh mapping, so limits shared by an identity or a
+// namespace scale with its pods; granted reports whether any such Engine
+// grants id. A Gateway is counted once in each sum however many Engines
+// target it, at the largest count those Engines' mappings hold, so the result
+// does not depend on the order they are visited in. Its pods are those in its
+// namespace that carry its gateway-name label, are Running and not being
+// deleted, are controlled by a ReplicaSet or Deployment, and name an existing
+// ServiceAccount (see refresh).
+func (a *AuthzIndex) podShare(id Identity) (share, namespacePods int, granted bool) {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	now, key := a.now(), id.Key()
-	pods := 0
+	// One count per Gateway, the largest across its Engines, of all its pods
+	// and of the identity's from Engines that grant it. A namespace holds few
+	// Gateways, so this stays on the stack.
+	var gateways [8]gatewayPods
+	counted := gateways[:0]
 	for _, entry := range a.entries {
-		if a.fresh(entry, now) && entry.grants(id) {
-			pods += entry.Pods[key]
+		if entry.Namespace != id.Namespace || !a.fresh(entry, now) {
+			continue
+		}
+		all, own := 0, 0
+		for _, n := range entry.Pods {
+			all += n
+		}
+		if entry.grants(id) {
+			granted = true
+			own = entry.Pods[key]
+		}
+		counted = keepLargest(counted, entry.GatewayName, all, own)
+	}
+	identityPods := 0
+	for _, gateway := range counted {
+		namespacePods += gateway.all
+		identityPods += gateway.own
+	}
+	return max(1, identityPods), namespacePods, granted
+}
+
+// gatewayPods is a Gateway's pod counts in podShare: all of them and the
+// identity's.
+type gatewayPods struct {
+	gateway  string
+	all, own int
+}
+
+// keepLargest records a Gateway's counts, keeping the largest of each seen.
+func keepLargest(counts []gatewayPods, gateway string, all, own int) []gatewayPods {
+	for i := range counts {
+		if counts[i].gateway == gateway {
+			counts[i].all = max(counts[i].all, all)
+			counts[i].own = max(counts[i].own, own)
+			return counts
 		}
 	}
-	return max(1, pods)
+	return append(counts, gatewayPods{gateway: gateway, all: all, own: own})
 }
 
 // fresh reports whether entry was refreshed within the staleness bound.
