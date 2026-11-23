@@ -83,10 +83,15 @@ type RuleDataList struct {
 
 // RuleDataSpec defines the content of a RuleData resource.
 type RuleDataSpec struct {
-	// files maps filenames to file content, used for @pmFromFile data.
+	// files maps filenames to file content, used for @pmFromFile data. It holds
+	// at most 1024 files of at most 1048576 characters each. The WAF plugin
+	// accepts at most 1048576 bytes per file, which a RuleSet using the file
+	// checks.
 	//
 	// +required
 	// +kubebuilder:validation:MinProperties=1
+	// +kubebuilder:validation:MaxProperties=1024
+	// +kubebuilder:validation:XValidation:rule="self.all(k, size(self[k]) <= 1048576)",message="each file must be at most 1048576 characters (1 MiB)"
 	Files map[string]string `json:"files,omitempty"`
 }
 

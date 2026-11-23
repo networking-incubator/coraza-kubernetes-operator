@@ -27,6 +27,8 @@ import (
 	"fmt"
 	"math"
 	"time"
+
+	"github.com/networking-incubator/coraza-kubernetes-operator/internal/ecds/render"
 )
 
 // -----------------------------------------------------------------------------
@@ -104,6 +106,12 @@ const (
 	pluginMaxMessageBytes     = 16 << 20
 	pluginMaxDecodedDataBytes = 8 << 20
 	pluginMaxDataFiles        = 1024
+	// resourceFramingBytes bounds the ECDS resource around a configuration:
+	// its name, the module URL and digest, and the VM settings.
+	resourceFramingBytes = 4 << 10
+	// minMaxMessageBytes is the smallest message that carries the largest
+	// configuration the plugin accepts, compressed envelope included.
+	minMaxMessageBytes = render.MaxConfigurationBytes + resourceFramingBytes + MessageEnvelopeBytes
 )
 
 // Limits is the serving-plane resource envelope. Flag defaults live in
@@ -198,6 +206,9 @@ func (l Limits) Validate() error {
 	if l.MaxMessageBytes > pluginMaxMessageBytes {
 		return fmt.Errorf("xds-max-message-bytes %d exceeds the ECDS message cap of %d bytes", l.MaxMessageBytes, pluginMaxMessageBytes)
 	}
+	if l.MaxMessageBytes < minMaxMessageBytes {
+		return fmt.Errorf("xds-max-message-bytes %d cannot carry the largest plugin configuration; it must be at least %d bytes", l.MaxMessageBytes, minMaxMessageBytes)
+	}
 	if l.MaxDecodedDataBytes > pluginMaxDecodedDataBytes {
 		return fmt.Errorf("xds-max-decoded-data-bytes %d exceeds the plugin decoded RuleData cap of %d bytes", l.MaxDecodedDataBytes, pluginMaxDecodedDataBytes)
 	}
@@ -219,7 +230,7 @@ func (l Limits) Validate() error {
 // AddFlags registers the serving-plane flags on fs.
 func (l *Limits) AddFlags(fs *flag.FlagSet) {
 	fs.IntVar(&l.MaxMessageBytes, "xds-max-message-bytes", DefaultMaxMessageBytes,
-		"Maximum gRPC message size in bytes for the ECDS server (the plugin configuration is separately capped at 8 MiB)")
+		fmt.Sprintf("Maximum gRPC message size in bytes for the ECDS server; at least %d, room for the plugin's 8 MiB configuration cap", minMaxMessageBytes))
 	fs.IntVar(&l.MaxDecodedDataBytes, "xds-max-decoded-data-bytes", DefaultMaxDecodedDataBytes,
 		"Maximum decoded RuleData bytes carried by one Engine (envoy-coraza accepts at most 8 MiB in the whole plugin configuration)")
 	fs.IntVar(&l.MaxDataFiles, "xds-max-data-files", DefaultMaxDataFiles,

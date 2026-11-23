@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -27,6 +28,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/events"
 	"k8s.io/client-go/util/workqueue"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -44,6 +46,7 @@ import (
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/rulesets/assemble"
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/rulesets/cache"
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/rulesets/validation"
+	"github.com/networking-incubator/coraza-kubernetes-operator/internal/xds"
 )
 
 // -----------------------------------------------------------------------------
@@ -73,6 +76,15 @@ type RuleSetReconciler struct {
 	Metrics  *CorazaMetrics
 	// RulePolicy is the cluster rule policy applied to content not accepted yet.
 	RulePolicy validation.RulePolicy
+	// Limits are the delivery limits Engines enforce. The RuleSet refuses
+	// content past them, so an Engine never has to withdraw what it serves.
+	Limits xds.Limits
+	// MaxRules bounds the rules of one RuleSet; zero means DefaultMaxRules.
+	MaxRules int
+
+	// results holds each RuleSet's contentResults.
+	resultsMu sync.Mutex
+	results   map[types.NamespacedName]contentResults
 }
 
 // SetupWithManager sets up the controller with the Manager.
@@ -142,6 +154,7 @@ func (r *RuleSetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 			} else {
 				logDebug(log, req, "RuleSet", "Resource not found, no cache entry to remove")
 			}
+			r.forgetContentResults(req.NamespacedName)
 			r.Metrics.ForgetRuleSet(req.Namespace, req.Name)
 			r.reconcileRuleDataMetrics(ctx, req.Namespace)
 			return ctrl.Result{}, nil
@@ -192,6 +205,13 @@ func (r *RuleSetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 			r.Metrics.ObserveRuleSetValidation(req.Namespace, "invalid", assembleDur+time.Since(guardStart))
 		}
 		return ctrl.Result{}, nil
+	}
+
+	// The limits run after the guard, so content that must be withdrawn
+	// reports RejectedContent, and before the accepted fast path, so content
+	// accepted under other limits is refused too.
+	if err := r.checkContentLimits(req.NamespacedName, contentHash, content); err != nil {
+		return ctrl.Result{}, r.markDegraded(ctx, log, req, &ruleset, ruleSetDegradedReasonContentTooLarge, err.Error())
 	}
 
 	alreadyAccepted := isConditionCurrent(ruleset.Status.Conditions, conditionReady, ruleSetReadyReasonRulesAccepted, ruleset.Generation) &&
@@ -312,6 +332,11 @@ func (r *RuleSetReconciler) prepareRuleSetInputs(ctx context.Context, log logr.L
 		Sources:          sourceInputs,
 		Data:             dataInputs,
 	}
+	// Content past what one configuration can carry is refused before it is
+	// assembled.
+	if err := checkInputsSize(inputs); err != nil {
+		return nil, ctrl.Result{}, r.markDegraded(ctx, log, req, ruleset, ruleSetDegradedReasonContentTooLarge, err.Error())
+	}
 
 	alreadyInvalid := isConditionCurrent(ruleset.Status.Conditions, conditionDegraded, ruleSetDegradedReasonInvalidRuleSet, ruleset.Generation) ||
 		isConditionCurrent(ruleset.Status.Conditions, conditionDegraded, ruleSetDegradedReasonRejectedContent, ruleset.Generation)
@@ -320,7 +345,8 @@ func (r *RuleSetReconciler) prepareRuleSetInputs(ctx context.Context, log logr.L
 	assembleStart := time.Now()
 	content, err := assemble.Assemble(inputs)
 	if err != nil {
-		msg := fmt.Sprintf("Ruleset is invalid\n%v", err)
+		// Compared with the stored message, which is truncated.
+		msg := truncateMessage(fmt.Sprintf("Ruleset is invalid\n%v", err), maxConditionMessageBytes)
 		if !alreadyInvalid || degradedConditionMessage(ruleset, ruleSetDegradedReasonInvalidRuleSet) != msg {
 			assembleDur := time.Since(assembleStart)
 			if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "RuleSet", ruleset, &ruleset.Status.Conditions, ruleset.Generation, ruleSetDegradedReasonInvalidRuleSet, msg); patchErr != nil {

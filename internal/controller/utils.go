@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"unicode/utf8"
 
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
@@ -191,7 +192,7 @@ func setConditionTrue(conditions *[]metav1.Condition, generation int64, conditio
 		ObservedGeneration: generation,
 		LastTransitionTime: metav1.Now(),
 		Reason:             reason,
-		Message:            message,
+		Message:            truncateMessage(message, maxConditionMessageBytes),
 	})
 }
 
@@ -203,7 +204,7 @@ func setConditionFalse(conditions *[]metav1.Condition, generation int64, conditi
 		ObservedGeneration: generation,
 		LastTransitionTime: metav1.Now(),
 		Reason:             reason,
-		Message:            message,
+		Message:            truncateMessage(message, maxConditionMessageBytes),
 	})
 }
 
@@ -226,13 +227,27 @@ func applyStatusProgressing(conditions *[]metav1.Condition, generation int64, re
 // Events exceeding this limit are silently rejected by the API server.
 const maxEventNoteBytes = 1024
 
+// maxConditionMessageBytes is the API's limit on a condition message; a longer
+// one fails the whole status patch.
+const maxConditionMessageBytes = 32768
+
 // truncateEventNote truncates a message to fit within the events v1 API note
-// field limit. Status condition messages are unaffected by this limit.
+// field limit.
 func truncateEventNote(msg string) string {
-	if len(msg) <= maxEventNoteBytes {
+	return truncateMessage(msg, maxEventNoteBytes)
+}
+
+// truncateMessage shortens msg to at most limit bytes, without splitting a
+// UTF-8 character, and marks the cut with "...".
+func truncateMessage(msg string, limit int) string {
+	if len(msg) <= limit {
 		return msg
 	}
-	return msg[:maxEventNoteBytes-3] + "..."
+	cut := limit - len("...")
+	for cut > 0 && !utf8.RuneStart(msg[cut]) {
+		cut--
+	}
+	return msg[:cut] + "..."
 }
 
 // patchDegraded marks a resource as Degraded, emits a Warning event, and

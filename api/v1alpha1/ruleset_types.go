@@ -96,7 +96,7 @@ type RuleSetSpec struct {
 	//
 	// +required
 	// +kubebuilder:validation:MinItems=1
-	// +kubebuilder:validation:MaxItems=2048
+	// +kubebuilder:validation:MaxItems=256
 	// +listType=atomic
 	Sources []SourceReference `json:"sources,omitempty"`
 
@@ -106,7 +106,7 @@ type RuleSetSpec struct {
 	//
 	// +optional
 	// +kubebuilder:validation:MinItems=1
-	// +kubebuilder:validation:MaxItems=256
+	// +kubebuilder:validation:MaxItems=64
 	// +listType=atomic
 	Data []DataReference `json:"data,omitempty"`
 

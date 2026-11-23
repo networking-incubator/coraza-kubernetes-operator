@@ -109,5 +109,5 @@ spec:
 When you change a **RuleData** (or a **RuleSet** that references it), the RuleSet controller re-compiles with the new data and the Engines referencing it re-accept the new content. The operator pushes that configuration to the Gateways over ECDS.
 
 {{% alert title="Note" color="info" %}}
-You can list **up to 256** `spec.data` entries. Put multiple named files in one RuleData, or split them across several RuleData objects; remember that duplicate filenames are resolved with **last-listed** RuleData winning.
+You can list **up to 64** `spec.data` entries. A RuleData holds at most 1024 files of at most 1048576 characters each. Put multiple named files in one RuleData, or split them across several RuleData objects; remember that duplicate filenames are resolved with **last-listed** RuleData winning. Sizes are checked in bytes: a file of 1048576 characters with multi-byte characters is still refused. The merged RuleData must stay within the Engine limits (6 MiB and 1024 files by default), and together with the rule text within the 8 MiB configuration limit (see [Maximum references]({{< relref "/howto/creating-firewall-rules#maximum-references" >}})).
 {{% /alert %}}

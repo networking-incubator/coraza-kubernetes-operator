@@ -150,6 +150,9 @@ rulePolicy:
   maxRequestBodyLimit: 16777216
   # Allowed or Denied. Denied rejects SecResponseBodyAccess On.
   responseBodyAccess: Allowed
+  # Most rules one RuleSet may hold (--rule-max-rules). Unlike the values
+  # above, it applies to every RuleSet.
+  maxRules: 20000
 
 # Serving certificate for the ECDS and WASM asset endpoint. When existingSecret
 # is empty and generate is true, `helm install`/`helm upgrade` create a

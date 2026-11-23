@@ -179,6 +179,22 @@ func TestBuildMetricsServerOptions_SelfSignedWhenNoCert(t *testing.T) {
 // Cluster rule policy flag Tests
 // -----------------------------------------------------------------------------
 
+func TestRuleMaxRulesFlag(t *testing.T) {
+	for _, args := range [][]string{nil, {"--rule-max-rules=0"}} {
+		fs := flag.NewFlagSet("test", flag.ContinueOnError)
+		var cfg config
+		addRulePolicyFlags(fs, &cfg)
+		require.NoError(t, fs.Parse(args))
+		_, err := cfg.rulePolicy()
+		if args == nil {
+			assert.Equal(t, "20000", fs.Lookup("rule-max-rules").DefValue)
+			assert.NoError(t, err)
+		} else {
+			assert.ErrorContains(t, err, "rule-max-rules 0 must be positive")
+		}
+	}
+}
+
 func TestRulePolicyFlags(t *testing.T) {
 	tests := []struct {
 		name string

@@ -65,7 +65,7 @@ spec:
                   required:
                   - name
                   type: object
-                maxItems: 256
+                maxItems: 64
                 minItems: 1
                 type: array
                 x-kubernetes-list-type: atomic
@@ -98,7 +98,7 @@ spec:
                   required:
                   - name
                   type: object
-                maxItems: 2048
+                maxItems: 256
                 minItems: 1
                 type: array
                 x-kubernetes-list-type: atomic

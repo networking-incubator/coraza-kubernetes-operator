@@ -127,6 +127,14 @@ argument as written, so a padded glob matches nothing. A RuleSet whose rules
 
 This release lowers the default decoded RuleData limit per Engine from 12 MiB to 6 MiB (`--xds-max-decoded-data-bytes`) and the data-file cap from 4096 to 1024 (`--xds-max-data-files`). RuleData sets above the new limits that were accepted before now fail acceptance: the Engine reports `Degraded` with `InvalidRuleSet` and its content is not delivered. Reduce the RuleData files, or raise the flags within the plugin's caps: 8 MiB of rule data, 1024 files, 1 MiB per file, and 8 MiB for the whole plugin configuration. The operator also refuses at startup a decoded limit whose keyed form would not fit `--xds-max-message-bytes`.
 
+## Rule Content Size Limit
+
+This release refuses, before it is compiled, RuleSet content that no Engine can deliver: rule text and merged RuleData that encode to more than the plugin's 8 MiB configuration limit, or compress past it, and RuleData past the Engine limits (`--xds-max-decoded-data-bytes`, `--xds-max-data-files`, 1 MiB per file). The size is checked for the longest possible Engine name, so content that an Engine with a short name delivered within 317 bytes of 8 MiB, or within about 2 KiB of the limit once compressed, is now refused. It also limits a RuleSet to `--rule-max-rules` rules, 20000 by default (Helm `rulePolicy.maxRules`); the OWASP CRS holds about 700. Such a RuleSet reports `Degraded` with `ContentTooLarge` and keeps serving the content it accepted before, and an Engine that meets content past its limits keeps its accepted configuration instead of withdrawing it. A RuleSet's content is compiled once; it is not compiled again on later reconciles until it changes.
+
+The operator now refuses to start when `--xds-max-message-bytes` is set below 8393728, the smallest message that carries the largest plugin configuration. The chart does not set this flag, so only installations that pass it as a custom argument are affected.
+
+The CRDs also bound the API: a RuleSet lists at most 256 `spec.sources` (was 2048) and 64 `spec.data` (was 256), and a RuleData holds at most 1024 files of at most 1048576 characters each (a RuleSet still refuses a file above 1048576 bytes). The RuleSet generated from the OWASP CRS uses 28 sources and one RuleData of 21 files. Objects already stored above the new bounds keep working; an edit that changes an over-limit field must bring it within the bound.
+
 ## Rolling Back
 
 To roll back a Helm upgrade to the previous version:

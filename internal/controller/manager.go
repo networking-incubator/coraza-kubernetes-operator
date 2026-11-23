@@ -60,6 +60,8 @@ type Deps struct {
 	AssetBaseURL      string
 	XDS               *xds.Dependencies
 	RulePolicy        validation.RulePolicy
+	// MaxRules bounds the rules of one RuleSet.
+	MaxRules int
 }
 
 // -----------------------------------------------------------------------------
@@ -73,6 +75,11 @@ func SetupControllers(mgr ctrl.Manager, deps Deps) error {
 		return fmt.Errorf("register coraza metrics: %w", err)
 	}
 
+	xdsLimits := xds.DefaultLimits()
+	if deps.XDS != nil {
+		xdsLimits = deps.XDS.Limits
+	}
+
 	if err := (&RuleSetReconciler{
 		Client:     mgr.GetClient(),
 		Scheme:     mgr.GetScheme(),
@@ -80,6 +87,8 @@ func SetupControllers(mgr ctrl.Manager, deps Deps) error {
 		Cache:      deps.RuleSetCache,
 		Metrics:    corazaMetrics,
 		RulePolicy: deps.RulePolicy,
+		Limits:     xdsLimits,
+		MaxRules:   deps.MaxRules,
 	}).SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("unable to create controller RuleSet: %w", err)
 	}
@@ -90,11 +99,6 @@ func SetupControllers(mgr ctrl.Manager, deps Deps) error {
 		Metrics:  corazaMetrics,
 	}).SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("unable to create controller RuleSource: %w", err)
-	}
-
-	xdsLimits := xds.DefaultLimits()
-	if deps.XDS != nil {
-		xdsLimits = deps.XDS.Limits
 	}
 
 	if err := (&EngineReconciler{
