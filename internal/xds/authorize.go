@@ -80,7 +80,9 @@ type AuthzEntry struct {
 	GatewayName  string
 	// Identities maps "namespace/name" of a Gateway workload ServiceAccount to
 	// its UID. An empty UID means the UID could not be resolved at refresh.
-	Identities  map[string]string
+	Identities map[string]string
+	// Pods counts the authorized Gateway pods running as each identity.
+	Pods        map[string]int
 	RefreshedAt time.Time
 }
 
@@ -219,6 +221,7 @@ func (a *AuthzIndex) refresh(ctx context.Context, engine *wafv1alpha1.Engine, re
 	}
 
 	identities := make(map[string]string, len(pods.Items))
+	podCounts := make(map[string]int, len(pods.Items))
 	for i := range pods.Items {
 		pod := &pods.Items[i]
 		if !authorizedGatewayPod(pod) {
@@ -230,6 +233,7 @@ func (a *AuthzIndex) refresh(ctx context.Context, engine *wafv1alpha1.Engine, re
 		}
 		key := namespacedNameKey(pod.Namespace, account)
 		if _, ok := identities[key]; ok {
+			podCounts[key]++
 			continue
 		}
 		var serviceAccount corev1.ServiceAccount
@@ -241,6 +245,7 @@ func (a *AuthzIndex) refresh(ctx context.Context, engine *wafv1alpha1.Engine, re
 			return a.refreshFailed(resourceName, fmt.Errorf("get ServiceAccount %s: %w", key, err))
 		}
 		identities[key] = string(serviceAccount.UID)
+		podCounts[key]++
 	}
 
 	a.mu.Lock()
@@ -260,6 +265,7 @@ func (a *AuthzIndex) refresh(ctx context.Context, engine *wafv1alpha1.Engine, re
 		EngineName:   engine.Name,
 		GatewayName:  gateway.Name,
 		Identities:   identities,
+		Pods:         podCounts,
 		RefreshedAt:  a.now(),
 	}
 	a.mu.Unlock()
@@ -379,29 +385,51 @@ func (a *AuthzIndex) Authorize(resourceName string, id Identity) bool {
 	if !ok {
 		return false
 	}
-	if a.now().Sub(entry.RefreshedAt) > a.staleness {
+	if !a.fresh(entry, a.now()) {
 		return false
 	}
-	serviceAccountUID, ok := entry.Identities[id.Key()]
-	if !ok {
-		return false
-	}
-	if serviceAccountUID != "" && id.UID != "" && serviceAccountUID != id.UID {
-		return false
-	}
-	return true
+	return entry.grants(id)
 }
 
-// soleResource returns the single resource id is currently authorized for,
-// or "" when id is authorized for none or several. It resolves NACKs that
-// carry no resource name; the result is still subject to Authorize.
+// grants reports whether entry lists id's ServiceAccount. An empty UID on
+// either side means it could not be resolved and is not compared.
+func (entry AuthzEntry) grants(id Identity) bool {
+	uid, ok := entry.Identities[id.Key()]
+	return ok && (uid == "" || id.UID == "" || uid == id.UID)
+}
+
+// podShare returns how many authorized Gateway pods run as id across every
+// Engine with a fresh mapping, at least one, so limits shared by an identity
+// scale with its pods.
+func (a *AuthzIndex) podShare(id Identity) int {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	now, key := a.now(), id.Key()
+	pods := 0
+	for _, entry := range a.entries {
+		if a.fresh(entry, now) && entry.grants(id) {
+			pods += entry.Pods[key]
+		}
+	}
+	return max(1, pods)
+}
+
+// fresh reports whether entry was refreshed within the staleness bound.
+func (a *AuthzIndex) fresh(entry AuthzEntry, now time.Time) bool {
+	return now.Sub(entry.RefreshedAt) <= a.staleness
+}
+
+// soleResource returns the single resource id is currently authorized for by
+// a fresh mapping, or "" when id is authorized for none or several. It
+// resolves NACKs that carry no resource name; the result is still subject to
+// Authorize.
 func (a *AuthzIndex) soleResource(id Identity) string {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
+	now := a.now()
 	var sole string
 	for resourceName, entry := range a.entries {
-		uid, ok := entry.Identities[id.Key()]
-		if !ok || (uid != "" && id.UID != "" && uid != id.UID) {
+		if !a.fresh(entry, now) || !entry.grants(id) {
 			continue
 		}
 		if sole != "" {
@@ -466,7 +494,7 @@ func (a *AuthzIndex) refreshFailed(resourceName string, err error) error {
 func (a *AuthzIndex) expireIfStale(resourceName string) {
 	a.mu.Lock()
 	entry, ok := a.entries[resourceName]
-	stale := ok && a.now().Sub(entry.RefreshedAt) > a.staleness
+	stale := ok && !a.fresh(entry, a.now())
 	if stale {
 		delete(a.entries, resourceName)
 		a.revocations[resourceName]++

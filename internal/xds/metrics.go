@@ -217,6 +217,12 @@ const (
 	RefusalSlowRequest = "slow_request"
 	// RefusalWriteTimeout is a peer that stopped reading responses.
 	RefusalWriteTimeout = "write_timeout"
+	// RefusalInvalidRequest is a discovery request no Envoy sends: another
+	// type URL, a malformed subscription or an oversized field.
+	RefusalInvalidRequest = "invalid_request"
+	// RefusalResponseBudget is an identity asking for full responses faster
+	// than its budget allows.
+	RefusalResponseBudget = "response_budget"
 )
 
 // Refused records a refused request or a reset stream. reason must be one of
