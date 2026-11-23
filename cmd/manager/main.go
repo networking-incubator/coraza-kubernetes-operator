@@ -24,6 +24,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"time"
@@ -34,6 +35,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/client-go/kubernetes"
@@ -84,6 +86,7 @@ func main() {
 	cfg := parseFlags()
 	setupLog = ctrl.Log.WithName("setup")
 	logFlags()
+	setMemoryLimit()
 	setupLog.Info("Deprecated flags are accepted but ignored",
 		"flags", "--default-wasm-image, --envoy-cluster-name")
 
@@ -415,14 +418,61 @@ func buildMetricsServerOptions(cfg config, tlsOpts []func(*tls.Config)) metricss
 	return opts
 }
 
+// setMemoryLimit derives the Go runtime memory limit from the container memory
+// limit the chart passes through the downward API, so the garbage collector
+// works harder near the limit instead of letting the heap grow into an
+// out-of-memory kill. It bounds collection headroom only, not live heap.
+// Without a limit, as in local runs, or with GOMEMLIMIT set, it does nothing.
+func setMemoryLimit() {
+	if os.Getenv("GOMEMLIMIT") != "" {
+		return
+	}
+	containerLimit := os.Getenv("MEMORY_LIMIT_BYTES")
+	limit, ok := runtimeMemoryLimit(containerLimit)
+	if !ok {
+		return
+	}
+	debug.SetMemoryLimit(limit)
+	setupLog.Info("Set the Go runtime memory limit", "bytes", limit, "containerLimitBytes", containerLimit)
+}
+
+// runtimeMemoryLimit returns 90% of the container memory limit in value. The
+// rest is left for memory the runtime does not count, such as thread stacks.
+func runtimeMemoryLimit(value string) (int64, bool) {
+	limit, err := strconv.ParseInt(value, 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	limit = limit / 10 * 9
+	return limit, limit > 0
+}
+
+// stripLastApplied drops managed fields and the kubectl last-applied
+// annotation, which repeats the whole spec of an applied RuleSource or
+// RuleData, before the object is cached: every replica caches these objects in
+// full. The operator reads neither field and writes these kinds only through
+// status patches, so the stored objects keep both. A per-type transform
+// replaces the default one, so it strips managed fields too.
+func stripLastApplied(in any) (any, error) {
+	if obj, err := meta.Accessor(in); err == nil {
+		annotations := obj.GetAnnotations()
+		delete(annotations, corev1.LastAppliedConfigAnnotation)
+		obj.SetAnnotations(annotations)
+	}
+	return ctrlcache.TransformStripManagedFields()(in)
+}
+
 // buildCacheOptions returns cache options that scope the NetworkPolicy informer
 // to the operator namespace, and the Pod informer to Gateway data-plane pods
 // (label-selected, with the churny parts of PodStatus stripped). Without this,
 // the controllers would cache every Pod and NetworkPolicy in the cluster.
+// RuleSource and RuleData are cached without their last-applied copy.
 func buildCacheOptions(operatorNamespace string) ctrlcache.Options {
 	return ctrlcache.Options{
 		DefaultTransform: ctrlcache.TransformStripManagedFields(),
 		ByObject: map[client.Object]ctrlcache.ByObject{
+			&wafv1alpha1.RuleSource{}: {Transform: stripLastApplied},
+			&wafv1alpha1.RuleData{}:   {Transform: stripLastApplied},
 			&networkingv1.NetworkPolicy{}: {
 				Namespaces: map[string]ctrlcache.Config{
 					operatorNamespace: {},

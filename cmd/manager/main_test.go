@@ -19,6 +19,7 @@ package main
 import (
 	"crypto/tls"
 	"flag"
+	"fmt"
 	"path/filepath"
 	"strconv"
 	"testing"
@@ -27,9 +28,12 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	ctrlcache "sigs.k8s.io/controller-runtime/pkg/cache"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	wafv1alpha1 "github.com/networking-incubator/coraza-kubernetes-operator/api/v1alpha1"
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/rulesets/validation"
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/xds"
 )
@@ -54,6 +58,71 @@ func TestBuildCacheOptionsScopesPodsToGatewayDataPlane(t *testing.T) {
 		"the Pod informer must only cache pods carrying the gateway-name label")
 	assert.False(t, byObject.Label.Matches(labels.Set{"app": "gw"}),
 		"the Pod informer must not cache non-gateway pods")
+}
+
+// TestBuildCacheOptionsTrimsRuleObjects checks that the RuleSource and RuleData
+// informers drop the last-applied annotation and managed fields, and keep the
+// spec, status, labels and other annotations the controllers read.
+func TestBuildCacheOptionsTrimsRuleObjects(t *testing.T) {
+	opts := buildCacheOptions("operators")
+	condition := metav1.Condition{Type: "Ready", Status: metav1.ConditionTrue, Reason: "Validated"}
+	for _, object := range []client.Object{
+		&wafv1alpha1.RuleSource{
+			Spec:   wafv1alpha1.RuleSourceSpec{Rules: "SecRuleEngine On"},
+			Status: wafv1alpha1.RuleSourceStatus{Conditions: []metav1.Condition{condition}},
+		},
+		&wafv1alpha1.RuleData{
+			Spec:   wafv1alpha1.RuleDataSpec{Files: map[string]string{"bad.data": "attack"}},
+			Status: wafv1alpha1.RuleDataStatus{Conditions: []metav1.Condition{condition}},
+		},
+	} {
+		t.Run(fmt.Sprintf("%T", object), func(t *testing.T) {
+			var transform func(any) (any, error)
+			for cached, config := range opts.ByObject {
+				if fmt.Sprintf("%T", cached) == fmt.Sprintf("%T", object) {
+					transform = config.Transform
+				}
+			}
+			require.NotNil(t, transform, "the informer must trim cached objects")
+
+			object.SetLabels(map[string]string{"team": "payments"})
+			object.SetAnnotations(map[string]string{
+				corev1.LastAppliedConfigAnnotation:   `{"spec":{}}`,
+				wafv1alpha1.AnnotationSkipValidation: "false",
+			})
+			object.SetManagedFields([]metav1.ManagedFieldsEntry{{Manager: "kubectl"}})
+			want := object.DeepCopyObject().(client.Object)
+			want.SetAnnotations(map[string]string{wafv1alpha1.AnnotationSkipValidation: "false"})
+			want.SetManagedFields(nil)
+
+			got, err := transform(object)
+			require.NoError(t, err)
+			assert.Equal(t, want, got)
+		})
+	}
+}
+
+func TestRuntimeMemoryLimit(t *testing.T) {
+	tests := []struct {
+		value string
+		want  int64
+		ok    bool
+	}{
+		{value: "1073741824", want: 966367638, ok: true},
+		{value: "536870912", want: 483183819, ok: true},
+		{value: ""},
+		{value: "0"},
+		{value: "-1073741824"},
+		{value: "1Gi"},
+		{value: "9"},
+	}
+	for _, tt := range tests {
+		got, ok := runtimeMemoryLimit(tt.value)
+		assert.Equal(t, tt.ok, ok, "value %q", tt.value)
+		if tt.ok {
+			assert.Equal(t, tt.want, got, "value %q", tt.value)
+		}
+	}
 }
 
 // -----------------------------------------------------------------------------
