@@ -147,10 +147,15 @@ func (s *SnapshotStore) Replace(snapshot *Snapshot) error {
 	return nil
 }
 
+// errSnapshotAdvanced reports a rejected-configuration retry that a newer
+// snapshot supersedes.
+var errSnapshotAdvanced = errors.New("snapshot advanced")
+
 // BumpRejected publishes a derived snapshot for one proxy so Envoy re-applies a
 // rejected typed configuration without changing the Engine's shared snapshot.
 // acceptedVersion must still be the current snapshot version; a concurrent
-// Replace with newer content makes the retry stale and it is skipped.
+// Replace with newer content makes the retry stale: it is skipped and
+// errSnapshotAdvanced returned.
 func (s *SnapshotStore) BumpRejected(resourceName, proxyKey, acceptedVersion string, attempt int) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -166,7 +171,7 @@ func (s *SnapshotStore) BumpRejected(resourceName, proxyKey, acceptedVersion str
 	// first-message NACK); retrying the current snapshot is safe because it
 	// cannot restore older content.
 	if acceptedVersion != "" && meta.Version != acceptedVersion {
-		return fmt.Errorf("snapshot for resource %q advanced from %q to %q", resourceName, acceptedVersion, meta.Version)
+		return fmt.Errorf("%w: resource %q from %q to %q", errSnapshotAdvanced, resourceName, acceptedVersion, meta.Version)
 	}
 	proxy := s.proxies[proxyKey]
 	if proxy != nil && proxy.engineKey != key {

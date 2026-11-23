@@ -34,12 +34,15 @@ import (
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	discoveryv3 "github.com/envoyproxy/go-control-plane/envoy/service/discovery/v3"
 	extensionconfigservice "github.com/envoyproxy/go-control-plane/envoy/service/extension/v3"
+	"github.com/envoyproxy/go-control-plane/pkg/resource/v3"
 	xdsserver "github.com/envoyproxy/go-control-plane/pkg/server/v3"
 	"github.com/go-logr/logr"
+	"golang.org/x/time/rate"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 )
 
 const (
@@ -165,6 +168,8 @@ type serverStream struct {
 	proxyID      string
 	proxyKey     string
 	proxyBound   bool
+	// ackedVersion is the version the proxy last acknowledged on this stream.
+	ackedVersion string
 
 	mu          sync.Mutex
 	lastVersion string
@@ -203,6 +208,7 @@ type Server struct {
 	streams     sync.Map // int64 -> *serverStream
 	nacks       sync.Map // nackKey(resource, session) -> nackState
 	openStreams atomic.Int64
+	responses   *responseBudget
 }
 
 // NewServer wires the go-control-plane server around the snapshot cache.
@@ -221,6 +227,7 @@ func NewServer(store *SnapshotStore, auth *Authenticator, authz *AuthzIndex, str
 		Logger:       logr.Discard(),
 		RetryDelay:   2 * time.Second,
 		authDeadline: authenticationDeadline,
+		responses:    newResponseBudget(),
 	}
 	s.srv = xdsserver.NewServer(context.Background(), store.cache, xdsserver.CallbackFuncs{
 		StreamOpenFunc:     s.onStreamOpen,
@@ -447,7 +454,7 @@ func (s *Server) onStreamRequest(streamID int64, req *discoveryv3.DiscoveryReque
 	}
 	entry := raw.(*serverStream)
 
-	if entry.session == nil {
+	if !entry.requested.Load() {
 		// The deadline bounds a stream that never sends a request: one arrived.
 		entry.mu.Lock()
 		if entry.authTimer != nil {
@@ -455,18 +462,9 @@ func (s *Server) onStreamRequest(streamID int64, req *discoveryv3.DiscoveryReque
 		}
 		entry.requested.Store(true)
 		entry.mu.Unlock()
-
-		cancel, _ := entry.ctx.Value(lifecycleKey{}).(context.CancelCauseFunc)
-		session, err := s.Streams.RegisterWithCancel(entry.ctx, cancel, "", entry.identity, entry.admission.token)
-		if err != nil {
-			s.Metrics.StreamLimitRejected()
-			return status.Error(codes.ResourceExhausted, "stream limit exceeded")
-		}
-		if !entry.admission.bind(session.ID) {
-			s.Streams.Unregister(session.ID)
-			return status.Error(codes.Unavailable, "stream must be re-established")
-		}
-		entry.session = session
+	}
+	if err := s.checkRequest(req); err != nil {
+		return err
 	}
 	pinRequestNode(entry, req)
 
@@ -481,15 +479,15 @@ func (s *Server) onStreamRequest(streamID int64, req *discoveryv3.DiscoveryReque
 		// version or consume a retry budget.
 		rejected := s.rejectedResourceName(entry, req)
 		if rejected == "" {
-			s.Logger.Info("ECDS NACK without a resolvable resource",
-				"session", entry.session.ID, "nonce", req.GetResponseNonce(), "version", req.GetVersionInfo())
-			return nil
+			return s.invalidRequest()
 		}
-		if !s.Authz.Authorize(rejected, entry.identity) {
-			s.Metrics.AuthFailure("unauthorized")
-			s.Logger.Info("ECDS rejected resource not authorized", "resource", rejected, "identity", entry.identity.Key(), "uid", entry.identity.UID)
-			return status.Error(codes.Unavailable, "authorization is not ready")
+		if err := s.authorizeStream(entry, rejected); err != nil {
+			return err
 		}
+		if err := s.spendResponse(entry); err != nil {
+			return err
+		}
+		req.ResourceNames = []string{rejected}
 		// A NACK's version_info is the last version the proxy ACCEPTED, not the
 		// version it rejected. Prefer the last response on this stream and fall
 		// back to the currently published snapshot.
@@ -497,36 +495,40 @@ func (s *Server) onStreamRequest(streamID int64, req *discoveryv3.DiscoveryReque
 		return nil
 	}
 
-	names := req.GetResourceNames()
-	if len(names) == 0 {
-		if req.GetResponseNonce() != "" {
-			s.Metrics.Ack()
-			return nil
-		}
-		return status.Error(codes.InvalidArgument, invalidSubscriptionMessage)
+	// An ACK of the last response must not make the cache resend it, whatever
+	// version_info the client claims.
+	entry.mu.Lock()
+	lastVersion := entry.lastVersion
+	if nonce := req.GetResponseNonce(); nonce != "" && nonce == entry.lastNonce {
+		req.VersionInfo = lastVersion
 	}
-	if len(names) != 1 {
-		return status.Error(codes.InvalidArgument, invalidSubscriptionMessage)
-	}
+	entry.mu.Unlock()
 
-	name := names[0]
-	if name == "" || !strings.HasPrefix(name, resourceNamePrefix) || strings.ContainsAny(name, "*?") {
-		return status.Error(codes.InvalidArgument, invalidSubscriptionMessage)
+	// Before a subscription exists only a named subscription is accepted; later
+	// requests may omit the name they already subscribed to.
+	name := entry.resourceName
+	switch names := req.GetResourceNames(); {
+	case len(names) == 1 && validResourceName(names[0]):
+		name = names[0]
+	case len(names) != 0 || name == "":
+		return s.invalidRequest()
 	}
-	if name != entry.resourceName {
-		// Record the subscription before authorizing so a concurrent
-		// RevokeResource can find and cancel this session during setup. A
-		// failed authorization ends the stream, so the entry is never reused.
-		entry.resourceName = name
-		s.Streams.SetResource(entry.session.ID, name)
-		// Authorization is retryable: the mapping is rebuilt on Engine and pod
-		// events, and Envoy treats PermissionDenied as terminal for a
-		// subscription, which would leave the filter fail-closed for good.
-		if !s.Authz.Authorize(name, entry.identity) {
-			s.Metrics.AuthFailure("unauthorized")
-			s.Logger.Info("ECDS subscription not authorized yet", "resource", name, "identity", entry.identity.Key(), "uid", entry.identity.UID)
-			return status.Error(codes.Unavailable, "authorization is not ready")
+	subscribing := name != entry.resourceName
+	// Authorization is retryable: the mapping is rebuilt on Engine and pod
+	// events, and Envoy treats PermissionDenied as terminal for a
+	// subscription, which would leave the filter fail-closed for good.
+	if err := s.authorizeStream(entry, name); err != nil {
+		return err
+	}
+	req.ResourceNames = []string{name}
+	// The cache answers with the full resource unless the request carries the
+	// version last sent on this stream.
+	if subscribing || req.GetResponseNonce() == "" || lastVersion == "" || req.GetVersionInfo() != lastVersion {
+		if err := s.spendResponse(entry); err != nil {
+			return err
 		}
+	}
+	if subscribing {
 		engineKey, ok := s.Authz.EngineKey(name)
 		if !ok {
 			s.Metrics.AuthFailure("unauthorized")
@@ -544,10 +546,120 @@ func (s *Server) onStreamRequest(streamID int64, req *discoveryv3.DiscoveryReque
 		// it, so a rejected configuration is still republished.
 		s.clearNack(entry)
 		s.ackProxyRetry(entry, req.GetVersionInfo())
-		s.Logger.Info("ECDS configuration accepted by proxy", "resource", entry.resourceName, "version", req.GetVersionInfo())
+		// A proxy may repeat its acknowledgement; log each version once.
+		if req.GetVersionInfo() != entry.ackedVersion {
+			entry.ackedVersion = req.GetVersionInfo()
+			s.Logger.Info("ECDS configuration accepted by proxy", "resource", entry.resourceName, "version", req.GetVersionInfo())
+		}
 	}
 	req.Node.Id = s.watchNode(entry, name, entry.engineKey, req.GetVersionInfo())
 	return nil
+}
+
+// Bounds on client-supplied request strings. Envoy echoes server-generated
+// versions and nonces (under 100 bytes) and truncates its rejection message
+// to 4096 characters; Istio node IDs and resource names stay under 1 KiB.
+const (
+	maxResourceNameBytes = 1 << 10
+	maxVersionInfoBytes  = 2 << 10
+	maxNonceBytes        = 2 << 10
+	maxErrorMessageBytes = 8 << 10
+	maxNodeIDBytes       = 1 << 10
+)
+
+// checkRequest refuses requests no Envoy sends and bounds the client-supplied
+// strings the stream keeps or logs. A long rejection message is truncated
+// rather than refused, so the rejection is still retried.
+func (s *Server) checkRequest(req *discoveryv3.DiscoveryRequest) error {
+	if req.GetTypeUrl() != resource.ExtensionConfigType ||
+		len(req.GetVersionInfo()) > maxVersionInfoBytes || len(req.GetResponseNonce()) > maxNonceBytes {
+		return s.invalidRequest()
+	}
+	if detail := req.GetErrorDetail(); detail != nil {
+		detail.Message = truncateUTF8(detail.GetMessage(), maxErrorMessageBytes)
+		detail.Details = nil
+	}
+	return nil
+}
+
+func (s *Server) invalidRequest() error {
+	s.Metrics.Refused(RefusalInvalidRequest)
+	return status.Error(codes.InvalidArgument, invalidSubscriptionMessage)
+}
+
+// validResourceName reports whether name has the shape of a CKO ECDS
+// resource; authorization decides whether the stream may have it.
+func validResourceName(name string) bool {
+	return len(name) <= maxResourceNameBytes && strings.HasPrefix(name, resourceNamePrefix) && !strings.ContainsAny(name, "*?")
+}
+
+// truncateUTF8 cuts s to at most n bytes without splitting a character.
+func truncateUTF8(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return strings.ToValidUTF8(s[:n], "")
+}
+
+// authorizeStream authorizes resourceName for the stream's identity on every
+// request. The stream's registry slot is taken only once a subscription is
+// authorized; the check is repeated after the slot is visible to
+// RevokeResource, so a revocation in between is not missed.
+func (s *Server) authorizeStream(entry *serverStream, resourceName string) error {
+	if !s.authorized(entry, resourceName) {
+		return status.Error(codes.Unavailable, "authorization is not ready")
+	}
+	if entry.session != nil && entry.resourceName == resourceName {
+		return nil
+	}
+	if entry.session == nil {
+		cancel, _ := entry.ctx.Value(lifecycleKey{}).(context.CancelCauseFunc)
+		session, err := s.Streams.RegisterWithCancel(entry.ctx, cancel, resourceName, entry.identity, entry.admission.token)
+		if err != nil {
+			s.Metrics.StreamLimitRejected()
+			return status.Error(codes.ResourceExhausted, "stream limit exceeded")
+		}
+		if !entry.admission.bind(session.ID) {
+			s.Streams.Unregister(session.ID)
+			return status.Error(codes.Unavailable, "stream must be re-established")
+		}
+		entry.session = session
+	} else {
+		s.Streams.SetResource(entry.session.ID, resourceName)
+	}
+	entry.resourceName = resourceName
+	if !s.authorized(entry, resourceName) {
+		return status.Error(codes.Unavailable, "authorization is not ready")
+	}
+	return nil
+}
+
+func (s *Server) authorized(entry *serverStream, resourceName string) bool {
+	if s.Authz.Authorize(resourceName, entry.identity) {
+		return true
+	}
+	s.Metrics.AuthFailure("unauthorized")
+	// The resource name is client-supplied and a peer can repeat the request
+	// at will, so the line stays at V(1) and leaves the name out.
+	s.Logger.V(1).Info("ECDS subscription not authorized yet", "identity", entry.identity.Key(), "uid", entry.identity.UID)
+	return false
+}
+
+// spendResponse charges the stream's identity for a request the cache answers
+// with the full resource: a new subscription, a request before the first
+// response, or a rejection.
+func (s *Server) spendResponse(entry *serverStream) error {
+	key, share := "pod/"+entry.identity.PodUID, 1
+	if entry.identity.PodUID == "" {
+		// Pods sharing a token's ServiceAccount share its budget.
+		key = "sa/" + entry.identity.Key()
+		share = s.Authz.podShare(entry.identity)
+	}
+	if s.responses.allow(key, share) {
+		return nil
+	}
+	s.Metrics.Refused(RefusalResponseBudget)
+	return status.Error(codes.ResourceExhausted, "too many configuration requests")
 }
 
 func (s *Server) authenticationFailure(err error) error {
@@ -559,16 +671,21 @@ func (s *Server) authenticationFailure(err error) error {
 	return status.Error(codes.Unauthenticated, "authentication failed")
 }
 
-// pinRequestNode uses the client ID only to partition proxy retries, never to authorize an Engine.
+// pinRequestNode uses the client ID only to partition proxy retries, never to
+// authorize an Engine. The client's node is reduced to the pinned ID: the
+// server reads nothing else from it, and the stream keeps its first node for
+// its whole lifetime.
 func pinRequestNode(entry *serverStream, req *discoveryv3.DiscoveryRequest) {
-	if req.GetNode().GetId() != "" && entry.proxyID == "" {
-		entry.proxyID = req.GetNode().GetId()
+	if id := req.GetNode().GetId(); id != "" && entry.proxyID == "" {
+		entry.proxyID = truncateUTF8(id, maxNodeIDBytes)
 	}
 	if entry.proxyID == "" {
 		entry.proxyID = entry.identity.Key() + "/" + entry.identity.UID
 	}
 	if req.Node == nil {
 		req.Node = &corev3.Node{}
+	} else {
+		proto.Reset(req.Node)
 	}
 	req.Node.Id = entry.engineKey
 	if entry.proxyBound {
@@ -619,10 +736,8 @@ func (s *Server) rejectedResourceName(entry *serverStream, req *discoveryv3.Disc
 	if entry.resourceName != "" {
 		return entry.resourceName
 	}
-	if names := req.GetResourceNames(); len(names) == 1 {
-		if name := names[0]; strings.HasPrefix(name, resourceNamePrefix) && !strings.ContainsAny(name, "*?") {
-			return name
-		}
+	if names := req.GetResourceNames(); len(names) == 1 && validResourceName(names[0]) {
+		return names[0]
 	}
 	if len(req.GetResourceNames()) == 0 {
 		return s.Authz.soleResource(entry.identity)
@@ -710,12 +825,22 @@ func (s *Server) runRejectedRetry(entry *serverStream, resourceName, proxyKey, b
 		entry.mu.Unlock()
 		return
 	}
-	if err := s.Store.BumpRejected(resourceName, proxyKey, base, attempt); err != nil {
-		entry.mu.Unlock()
+	err := s.Store.BumpRejected(resourceName, proxyKey, base, attempt)
+	if errors.Is(err, errSnapshotAdvanced) {
+		// A newer snapshot supersedes the retry. A stream already sent it
+		// keeps going; another, such as one whose first message was the
+		// rejection, resubscribes to receive it.
+		if current, currentErr := s.Store.CurrentVersionFor(resourceName, proxyKey); currentErr == nil && current == entry.lastVersion {
+			entry.mu.Unlock()
+			return
+		}
+		err = nil
+	}
+	entry.mu.Unlock()
+	if err != nil {
 		s.Logger.Error(err, "republish rejected configuration", "resource", resourceName)
 		return
 	}
-	entry.mu.Unlock()
 	s.Streams.ResetStream(entry.session.ID)
 }
 
@@ -865,6 +990,57 @@ func (s *Server) onStreamClosed(streamID int64, _ *corev3.Node) {
 	if proxyBound && s.Store != nil {
 		s.Store.ReleaseRejectedRetry(proxyKey)
 	}
+}
+
+// The operator itself makes a proxy resubscribe at most once per
+// rejected-configuration retry (RetryDelay, 2s at the fastest rung), and each
+// retry costs a rejection plus a new subscription, so a proxy needs about one
+// full response per second at most. The burst absorbs reconnect storms such as
+// an operator restart or stream lifetime expiry.
+const (
+	responseBudgetRate  = 1 // full responses per second
+	responseBudgetBurst = 16
+	// responseBudgetSweep is how often full (idle) buckets are dropped.
+	responseBudgetSweep = time.Minute
+)
+
+// responseBudget is a token bucket per verified identity for requests the
+// cache answers with the full resource, so reopening streams or repeating
+// rejections cannot force unbounded resends. A share scales the bucket for
+// identities several pods use.
+type responseBudget struct {
+	mu        sync.Mutex
+	buckets   map[string]*rate.Limiter
+	lastSweep time.Time
+}
+
+func newResponseBudget() *responseBudget {
+	return &responseBudget{buckets: make(map[string]*rate.Limiter)}
+}
+
+func (b *responseBudget) allow(key string, share int) bool {
+	now := time.Now()
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if now.Sub(b.lastSweep) >= responseBudgetSweep {
+		// A full bucket carries no state, so dropping it loses nothing.
+		for k, limiter := range b.buckets {
+			if limiter.TokensAt(now) >= float64(limiter.Burst()) {
+				delete(b.buckets, k)
+			}
+		}
+		b.lastSweep = now
+	}
+	limit, burst := rate.Limit(responseBudgetRate*share), responseBudgetBurst*share
+	limiter, ok := b.buckets[key]
+	if !ok {
+		limiter = rate.NewLimiter(limit, burst)
+		b.buckets[key] = limiter
+	} else {
+		limiter.SetLimitAt(now, limit)
+		limiter.SetBurstAt(now, burst)
+	}
+	return limiter.AllowN(now, 1)
 }
 
 // bearerToken extracts exactly one "Bearer <token>" authorization header.

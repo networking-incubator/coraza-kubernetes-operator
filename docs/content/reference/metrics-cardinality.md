@@ -59,7 +59,7 @@ for counters by Prometheus convention).
 
 | Metric | Type | Labels | Worst-case series/cluster | Notes |
 |--------|------|--------|--------------------------|-------|
-| `coraza_xds_refusals_total` | counter | `reason` | 4 per replica | ECDS requests and streams the listener refused or reset. `reason` ∈ {`method` (a gRPC method other than the ECDS stream), `request_size` (a request above `--xds-max-request-bytes`), `slow_request` (a request that did not arrive in time), `write_timeout` (a client that stopped reading, including WASM asset downloads)} |
+| `coraza_xds_refusals_total` | counter | `reason` | 6 per replica | ECDS requests and streams the listener refused or reset. `reason` ∈ {`method` (a gRPC method other than the ECDS stream), `request_size` (a request above `--xds-max-request-bytes`), `slow_request` (a request that did not arrive in time), `write_timeout` (a client that stopped reading, including WASM asset downloads), `invalid_request` (a discovery request no Envoy sends: another type URL, a malformed or missing subscription, or an oversized field), `response_budget` (one Gateway pod, or one ServiceAccount without pod-bound tokens, asking for full configurations faster than about one per second after a burst of 16)} |
 
 ### Controller-Runtime Built-ins (not `coraza_` prefixed)
 

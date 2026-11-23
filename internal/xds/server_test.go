@@ -742,15 +742,16 @@ func TestFirstAckCannotWatchAnotherEngine(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// No subscription was authorized, so this first-message ACK must not
-	// create a watch on the client-supplied Engine key.
-	if err := stream.Send(&discoveryv3.DiscoveryRequest{
+	// No subscription exists, so a name-less first-message ACK is refused and
+	// cannot create a watch on the client-supplied Engine key.
+	send(t, stream, &discoveryv3.DiscoveryRequest{
 		Node:          &corev3.Node{Id: "victim-ns/victim-engine"},
 		ResponseNonce: "spoofed-nonce",
-	}); err != nil {
-		t.Fatal(err)
+	})
+	if code := recvCode(t, stream); code != codes.InvalidArgument {
+		t.Fatalf("code = %v, want InvalidArgument", code)
 	}
-	expectNoResult(t, startRecv(stream))
+	require.Zero(t, fixture.watches("victim-ns/victim-engine"))
 }
 
 func TestFirstNackCannotBumpAnotherEngine(t *testing.T) {
