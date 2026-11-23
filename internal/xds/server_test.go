@@ -99,7 +99,7 @@ func newStreamFixtureWithLimits(t *testing.T, limits Limits) *streamFixture {
 			time.Sleep(delay)
 		}
 		if !valid || request.Spec.Token != validToken {
-			return true, &authv1.TokenReview{Status: authv1.TokenReviewStatus{Authenticated: false}}, nil
+			return true, rejectedReview(), nil
 		}
 		return true, &authv1.TokenReview{Status: authv1.TokenReviewStatus{
 			Authenticated: true,
@@ -931,7 +931,9 @@ func TestStreamUnauthenticatedWhenRevalidationFails(t *testing.T) {
 	_ = recv(t, stream)
 
 	fixture.setTokenValid(false)
-	fixture.streams.revalidateAll(context.Background())
+	for range revalidationRejectionsToClose {
+		fixture.streams.revalidateAll(context.Background())
+	}
 	if code := recvCode(t, stream); code != codes.Unauthenticated {
 		t.Fatalf("code = %v, want Unauthenticated", code)
 	}
@@ -1135,20 +1137,23 @@ func TestAuthFailureLimiterIgnoresNonAuthErrors(t *testing.T) {
 	}
 }
 
-// A TokenReview Status.Error is a backend failure, not a token rejection:
-// it must not consume the peer's bucket, while Authenticated=false without an
-// error still does.
-func TestAuthenticateTreatsReviewStatusErrorAsBackendFailure(t *testing.T) {
+// The API server answers a rejected token with Authenticated=false and an
+// error string: that is an authentication failure and consumes the peer's
+// bucket. Only an error next to Authenticated=true is a backend failure that
+// leaves the bucket alone.
+func TestAuthenticateReviewStatusShapes(t *testing.T) {
 	limits := DefaultLimits()
 	limits.AuthFailureRate = 1
 	limits.AuthFailureBurst = 1
 	fixture := newStreamFixtureWithLimits(t, limits)
+	now := time.Unix(1_000_000, 0)
+	fixture.server.Auth.failureLimiter.now = func() time.Time { return now }
 	peerAddr := &net.TCPAddr{IP: net.ParseIP("192.0.2.1"), Port: 1001}
 
 	backendError := true
 	fixture.fakeClient.PrependReactor("create", "tokenreviews", func(action k8stesting.Action) (bool, runtime.Object, error) {
 		if backendError {
-			return true, &authv1.TokenReview{Status: authv1.TokenReviewStatus{Error: "apiserver unavailable"}}, nil
+			return true, &authv1.TokenReview{Status: authv1.TokenReviewStatus{Authenticated: true, Error: "authenticator unavailable"}}, nil
 		}
 		return false, nil, nil
 	})
@@ -1159,7 +1164,10 @@ func TestAuthenticateTreatsReviewStatusErrorAsBackendFailure(t *testing.T) {
 
 	backendError = false
 	if _, err := fixture.server.Auth.Authenticate(authContextWithPeer("invalid", peerAddr), "invalid"); !errors.Is(err, ErrUnauthenticated) {
-		t.Fatalf("next invalid token error = %v, want ErrUnauthenticated rather than a rate limit", err)
+		t.Fatalf("rejected token error = %v, want ErrUnauthenticated rather than a rate limit", err)
+	}
+	if _, err := fixture.server.Auth.Authenticate(authContextWithPeer("invalid-2", peerAddr), "invalid-2"); !errors.Is(err, ErrAuthRateLimited) {
+		t.Fatalf("next token error = %v, want ErrAuthRateLimited once the rejection spent the burst", err)
 	}
 }
 

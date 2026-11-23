@@ -42,6 +42,13 @@ const (
 	// maxBearerTokenLen bounds the token before it is hashed and reviewed. It is
 	// far above any ServiceAccount JWT.
 	maxBearerTokenLen = 64 << 10
+	// podUIDExtraKey is the TokenReview user.extra key carrying the pod UID of
+	// a pod-bound ServiceAccount token (k8s.io/apiserver serviceaccount.PodUIDKey).
+	podUIDExtraKey = "authentication.kubernetes.io/pod-uid"
+	// revalidationRejectionsToClose is how many consecutive revalidation
+	// rejections close a stream. The API server reports its own authenticator
+	// failures in the same shape as a rejected token, so one is not enough.
+	revalidationRejectionsToClose = 2
 )
 
 // ErrUnauthenticated marks a rejected token. Callers map it to an
@@ -56,6 +63,9 @@ type Identity struct {
 	Namespace string
 	Name      string
 	UID       string
+	// PodUID is the pod a projected token is bound to, or empty for a token
+	// that is not pod-bound.
+	PodUID string
 }
 
 // Key returns the "namespace/name" authorization key.
@@ -136,9 +146,9 @@ func (a *Authenticator) Authenticate(ctx context.Context, token string) (*Identi
 
 	identity, err := a.review(ctx, token)
 	if reservation != nil {
-		// Only a rejected token is a peer failure: a cancelled context or an
-		// internal review error must not consume the peer's bucket, and a
-		// wrapped ErrUnauthenticated still is one.
+		// Only a rejected token is a peer failure: an internal review error
+		// must not consume the peer's bucket, and a wrapped
+		// ErrUnauthenticated still is one.
 		reservation.finish(!errors.Is(err, ErrUnauthenticated))
 	}
 	if err != nil {
@@ -170,13 +180,18 @@ func (a *Authenticator) sweepExpired() {
 }
 
 // Revalidate re-runs TokenReview without reading the cache. A successful
-// result refreshes the cache entry.
+// result refreshes the cache entry; a rejected token drops it so a new stream
+// cannot authenticate from the cache.
 func (a *Authenticator) Revalidate(ctx context.Context, token string) (*Identity, error) {
+	key := authenticationCacheKey(token, a.audience)
 	identity, err := a.review(ctx, token)
 	if err != nil {
+		if errors.Is(err, ErrUnauthenticated) {
+			a.cache.Delete(key)
+		}
 		return nil, err
 	}
-	a.storeCachedIdentity(authenticationCacheKey(token, a.audience), token, identity)
+	a.storeCachedIdentity(key, token, identity)
 	return identity, nil
 }
 
@@ -212,8 +227,14 @@ func (a *Authenticator) review(ctx context.Context, token string) (*Identity, er
 
 	var lastErr error
 	for attempt := 0; attempt <= a.retries; attempt++ {
-		callCtx, cancel := context.WithTimeout(ctx, a.timeout)
-		review, err := a.tokenReviews.Create(callCtx, request, metav1.CreateOptions{})
+		// A cancelled caller starts no new attempt. The call in flight outlives
+		// ctx, bounded by the review timeout, so a peer that resets its stream
+		// mid-review is still charged for a rejected token.
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		callCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), a.timeout)
+		review, err := a.create(callCtx, request)
 		cancel()
 		if err == nil {
 			return a.identityFromReview(review)
@@ -237,18 +258,30 @@ func (a *Authenticator) review(ctx context.Context, token string) (*Identity, er
 	return nil, fmt.Errorf("token review: %w", lastErr)
 }
 
+// create runs one TokenReview. A panic in the client fails the attempt like
+// an error, so callers keep their failure accounting and the process runs on.
+func (a *Authenticator) create(ctx context.Context, request *authv1.TokenReview) (review *authv1.TokenReview, err error) {
+	defer func() {
+		if v := recover(); v != nil {
+			err = fmt.Errorf("token review panicked: %v", v)
+		}
+	}()
+	return a.tokenReviews.Create(ctx, request, metav1.CreateOptions{})
+}
+
 func (a *Authenticator) identityFromReview(review *authv1.TokenReview) (*Identity, error) {
 	if review == nil {
 		return nil, ErrUnauthenticated
 	}
-	// A TokenReview backend error is a review failure, not a rejected token:
-	// it must not consume a peer's failure budget, so it is returned before
-	// the Authenticated check and without the ErrUnauthenticated sentinel.
-	if review.Status.Error != "" {
-		return nil, fmt.Errorf("token review backend error: %s", review.Status.Error)
-	}
+	// The API server answers a rejected token with Authenticated=false and an
+	// error string, so that shape is an authentication failure. Only an error
+	// next to Authenticated=true is a backend failure that must not consume a
+	// peer's failure budget.
 	if !review.Status.Authenticated {
 		return nil, ErrUnauthenticated
+	}
+	if review.Status.Error != "" {
+		return nil, fmt.Errorf("token review backend error: %s", review.Status.Error)
 	}
 
 	if a.audience == "" {
@@ -267,11 +300,15 @@ func (a *Authenticator) identityFromReview(review *authv1.TokenReview) (*Identit
 		return nil, fmt.Errorf("%w: malformed ServiceAccount username", ErrUnauthenticated)
 	}
 
-	return &Identity{
+	identity := &Identity{
 		Namespace: parts[0],
 		Name:      parts[1],
 		UID:       review.Status.User.UID,
-	}, nil
+	}
+	if podUIDs := review.Status.User.Extra[podUIDExtraKey]; len(podUIDs) == 1 {
+		identity.PodUID = podUIDs[0]
+	}
+	return identity, nil
 }
 
 func authenticationCacheKey(token, audience string) string {
@@ -336,6 +373,9 @@ type StreamSession struct {
 	token        string
 	StartedAt    time.Time
 	expiresAt    time.Time
+	// rejections counts consecutive revalidation rejections of the token.
+	// Guarded by StreamRegistry.mu.
+	rejections int
 
 	ctx    context.Context
 	cancel context.CancelCauseFunc
@@ -544,16 +584,17 @@ func (r *StreamRegistry) revalidateAll(ctx context.Context) {
 		}
 		if review.err != nil {
 			r.metrics.AuthFailure("error")
-			// A rejected token drops the stream. A transport or API-server
-			// failure does not: StreamMaxLifetime still bounds how long the
-			// stream can stay unrevalidated, and closing every stream on a
-			// short outage would reconnect them all into the recovering API
-			// server for a fresh TokenReview.
-			if errors.Is(review.err, ErrUnauthenticated) {
+			// A token rejected on consecutive passes drops the stream. A
+			// transport or API-server failure does not: StreamMaxLifetime
+			// still bounds how long the stream can stay unrevalidated, and
+			// closing every stream on a short outage would reconnect them all
+			// into the recovering API server for a fresh TokenReview.
+			if errors.Is(review.err, ErrUnauthenticated) && r.recordRejection(target.session) {
 				target.session.cancel(ErrRevalidateFailed)
 			}
 			continue
 		}
+		r.clearRejections(target.session)
 		if review.identity.UID != "" && target.identity.UID != "" && review.identity.UID != target.identity.UID {
 			r.metrics.AuthFailure("unauthorized")
 			target.session.cancel(ErrRevoked)
@@ -564,6 +605,22 @@ func (r *StreamRegistry) revalidateAll(ctx context.Context) {
 			target.session.cancel(ErrRevoked)
 		}
 	}
+}
+
+// recordRejection counts one revalidation rejection of the session's token and
+// reports whether the stream must close.
+func (r *StreamRegistry) recordRejection(session *StreamSession) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	session.rejections++
+	return session.rejections >= revalidationRejectionsToClose
+}
+
+// clearRejections resets the count after a successful revalidation.
+func (r *StreamRegistry) clearRejections(session *StreamSession) {
+	r.mu.Lock()
+	session.rejections = 0
+	r.mu.Unlock()
 }
 
 // revalidationConcurrency bounds simultaneous TokenReviews in one pass.

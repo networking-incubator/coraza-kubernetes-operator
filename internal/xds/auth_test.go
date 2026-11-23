@@ -31,6 +31,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"google.golang.org/grpc/metadata"
 	authv1 "k8s.io/api/authentication/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	k8sfake "k8s.io/client-go/kubernetes/fake"
 	k8stesting "k8s.io/client-go/testing"
@@ -54,6 +55,83 @@ func reviewServer(t *testing.T, respond func(*authv1.TokenReview) (*authv1.Token
 		return true, response, nil
 	})
 	return client, &requests
+}
+
+// reviewFunc is a TokenReview client that, unlike the client-go fake, serves
+// reviews concurrently and sees the caller's context.
+type reviewFunc func(ctx context.Context, review *authv1.TokenReview) (*authv1.TokenReview, error)
+
+func (f reviewFunc) Create(ctx context.Context, review *authv1.TokenReview, _ metav1.CreateOptions) (*authv1.TokenReview, error) {
+	return f(ctx, review)
+}
+
+// A caller that gives up during the TokenReview of a rejected token is still
+// charged by the per-source failure limiter.
+func TestAuthenticateChargesRejectionAfterCallerCancels(t *testing.T) {
+	reviewed := make(chan struct{}, 1)
+	auth := NewAuthenticator(reviewFunc(func(ctx context.Context, _ *authv1.TokenReview) (*authv1.TokenReview, error) {
+		select {
+		case <-time.After(100 * time.Millisecond):
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+		reviewed <- struct{}{}
+		return rejectedReview(), nil
+	}), "", time.Minute, time.Minute, time.Second, 0)
+	auth.failureLimiter = newAuthFailureLimiter(0.001, 1)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	if _, err := auth.Authenticate(ctx, "rejected-1"); !errors.Is(err, ErrUnauthenticated) {
+		t.Fatalf("Authenticate() error = %v, want the review's rejection despite the cancelled caller", err)
+	}
+	<-reviewed
+	if _, err := auth.Authenticate(context.Background(), "rejected-2"); !errors.Is(err, ErrAuthRateLimited) {
+		t.Fatalf("next Authenticate() error = %v, want ErrAuthRateLimited", err)
+	}
+}
+
+// A TokenReview client that panics fails the review instead of the process,
+// and the failure is not charged to the peer.
+func TestAuthenticateSurvivesPanickingReview(t *testing.T) {
+	auth := NewAuthenticator(reviewFunc(func(context.Context, *authv1.TokenReview) (*authv1.TokenReview, error) {
+		panic("client failed")
+	}), "", time.Minute, time.Minute, time.Second, 0)
+	auth.failureLimiter = newAuthFailureLimiter(0.001, 1)
+
+	for _, token := range []string{"token-1", "token-2"} {
+		if _, err := auth.Authenticate(context.Background(), token); err == nil || errors.Is(err, ErrUnauthenticated) || errors.Is(err, ErrAuthRateLimited) {
+			t.Fatalf("Authenticate(%s) error = %v, want an uncharged review error", token, err)
+		}
+	}
+}
+
+// A cancelled revalidation pass, such as one running at shutdown, starts no
+// TokenReview.
+func TestRevalidationWithCancelledContextIssuesNoReviews(t *testing.T) {
+	registry, _, resourceName, identity, _ := newRegistryFixture(t, DefaultLimits())
+	var reviews atomic.Int32
+	registry.auth.tokenReviews = reviewFunc(func(context.Context, *authv1.TokenReview) (*authv1.TokenReview, error) {
+		reviews.Add(1)
+		return rejectedReview(), nil
+	})
+	for i := range 3 {
+		if _, err := registry.Register(context.Background(), resourceName, identity, fmt.Sprintf("token-%d", i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	registry.revalidateAll(ctx)
+	if got := reviews.Load(); got != 0 {
+		t.Fatalf("TokenReviews after cancellation = %d, want 0", got)
+	}
+}
+
+// rejectedReview is how the API server answers a token it rejects.
+func rejectedReview() *authv1.TokenReview {
+	return &authv1.TokenReview{Status: authv1.TokenReviewStatus{Authenticated: false, Error: "invalid bearer token"}}
 }
 
 func authenticatedReview(username string, audiences ...string) func(*authv1.TokenReview) (*authv1.TokenReview, error) {
@@ -127,7 +205,7 @@ func TestAuthenticatorRejectsNonServiceAccountAndUnauthenticated(t *testing.T) {
 
 	t.Run("unauthenticated", func(t *testing.T) {
 		client, _ := reviewServer(t, func(*authv1.TokenReview) (*authv1.TokenReview, error) {
-			return &authv1.TokenReview{Status: authv1.TokenReviewStatus{Authenticated: false}}, nil
+			return rejectedReview(), nil
 		})
 		auth := NewAuthenticator(client.AuthenticationV1().TokenReviews(), "", time.Minute, time.Minute, time.Second, 0)
 		if _, err := auth.Authenticate(context.Background(), testToken); !errors.Is(err, ErrUnauthenticated) {
@@ -273,7 +351,7 @@ func newRegistryFixture(t *testing.T, limits Limits) (*StreamRegistry, *AuthzInd
 		ok := valid
 		mu.Unlock()
 		if !ok {
-			return true, &authv1.TokenReview{Status: authv1.TokenReviewStatus{Authenticated: false}}, nil
+			return true, rejectedReview(), nil
 		}
 		return true, &authv1.TokenReview{Status: authv1.TokenReviewStatus{
 			Authenticated: true,
@@ -331,18 +409,64 @@ func TestStreamRegistryEnforcesCaps(t *testing.T) {
 	}
 }
 
+// A stream closes only after two consecutive revalidation rejections of its
+// token: the API server reports its own authenticator failures in the same
+// shape, so a single rejection followed by a success keeps the stream.
 func TestStreamRegistryRevalidationFailuresCloseStream(t *testing.T) {
 	registry, _, resourceName, identity, setValid := newRegistryFixture(t, DefaultLimits())
-	session, err := registry.Register(context.Background(), resourceName, identity, validToken)
+	ctx := context.Background()
+	if _, err := registry.auth.Authenticate(ctx, validToken); err != nil {
+		t.Fatal(err)
+	}
+	session, err := registry.Register(ctx, resourceName, identity, validToken)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	setValid(false)
-	registry.revalidateAll(context.Background())
+	registry.revalidateAll(ctx)
+	if cause := context.Cause(session.Context()); cause != nil {
+		t.Fatalf("context cause after one rejection = %v, want the stream kept", cause)
+	}
+	if _, ok := registry.auth.cache.Load(authenticationCacheKey(validToken, "")); ok {
+		t.Fatal("a rejected token must be purged from the success cache")
+	}
 
+	setValid(true)
+	registry.revalidateAll(ctx)
+	setValid(false)
+	registry.revalidateAll(ctx)
+	if cause := context.Cause(session.Context()); cause != nil {
+		t.Fatalf("context cause = %v, want a success to reset the rejection count", cause)
+	}
+
+	registry.revalidateAll(ctx)
 	if cause := context.Cause(session.Context()); !errors.Is(cause, ErrRevalidateFailed) {
-		t.Fatalf("context cause = %v, want ErrRevalidateFailed", cause)
+		t.Fatalf("context cause = %v, want ErrRevalidateFailed after two consecutive rejections", cause)
+	}
+}
+
+func TestAuthenticatorCarriesPodUID(t *testing.T) {
+	client, _ := reviewServer(t, func(*authv1.TokenReview) (*authv1.TokenReview, error) {
+		return &authv1.TokenReview{Status: authv1.TokenReviewStatus{
+			Authenticated: true,
+			User: authv1.UserInfo{
+				Username: "system:serviceaccount:shop:gateway",
+				UID:      "sa-uid",
+				Extra:    map[string]authv1.ExtraValue{podUIDExtraKey: {"pod-uid-1"}},
+			},
+		}}, nil
+	})
+	auth := NewAuthenticator(client.AuthenticationV1().TokenReviews(), "", time.Minute, time.Minute, time.Second, 0)
+
+	for range 2 { // the second call is served from the success cache
+		identity, err := auth.Authenticate(context.Background(), testToken)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if identity.PodUID != "pod-uid-1" {
+			t.Fatalf("PodUID = %q, want pod-uid-1", identity.PodUID)
+		}
 	}
 }
 
