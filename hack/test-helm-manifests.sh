@@ -417,6 +417,22 @@ else
     || fail "render failed but the error did not mention caName: $render_err"
 fi
 
+# ── tls.sans reaches the bootstrap ──────────────────────────────────────────
+# tls.sans already exists for the generate path; silently dropping it under
+# bootstrap would hand out a certificate missing the name a client verifies.
+section "tls.bootstrap passes tls.sans through"
+out=$(render --set tls.bootstrap=true --set 'tls.sans={coraza.example.com}')
+echo "$out" | grep -q -- "--xds-cert-dns-name=coraza.example.com" \
+  && pass "extra SAN forwarded to the manager" || fail "tls.sans dropped under bootstrap"
+
+# ── the generated Secret survives a switch to bootstrap ─────────────────────
+# Without a keep policy, helm prunes the Secret when it leaves the rendered
+# manifest, the operator mints a fresh CA, and proxies still trust the old one.
+section "generated serving Secret is kept on upgrade"
+out=$(render)
+echo "$out" | grep -q "helm.sh/resource-policy: keep" \
+  && pass "generated Secret is annotated keep" || fail "generated Secret has no keep policy"
+
 # ── Summary ───────────────────────────────────────────────────────────────────
 echo
 echo "Results: $PASS passed, $FAIL failed"

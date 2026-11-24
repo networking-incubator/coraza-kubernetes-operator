@@ -42,6 +42,13 @@ kind: Secret
 metadata:
   name: {{ $secretName }}
   namespace: {{ .Release.Namespace }}
+  annotations:
+    # Turning tls.bootstrap on later drops this Secret from the rendered
+    # manifest, and helm would prune it. The operator would then mint a fresh
+    # CA while proxies still trust the old one inlined into their
+    # EnvoyFilters, so every ECDS stream would fail verification. Keeping it
+    # lets the bootstrap adopt the existing material instead.
+    helm.sh/resource-policy: keep
   labels:
     {{- include "coraza-operator.labels" . | nindent 4 }}
 type: kubernetes.io/tls
@@ -63,6 +70,8 @@ kind: Secret
 metadata:
   name: {{ $secretName }}
   namespace: {{ .Release.Namespace }}
+  annotations:
+    helm.sh/resource-policy: keep
   labels:
     {{- include "coraza-operator.labels" . | nindent 4 }}
 type: kubernetes.io/tls

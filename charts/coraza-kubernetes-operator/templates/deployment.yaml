@@ -65,6 +65,9 @@ spec:
             - --xds-ca-path=/etc/coraza-tls/{{ .Values.tls.caName | default "ca.crt" }}
             {{- if .Values.tls.bootstrap }}
             - --xds-cert-secret={{ include "coraza-operator.servingCertSecretName" . }}
+            {{- range .Values.tls.sans }}
+            - --xds-cert-dns-name={{ . }}
+            {{- end }}
             {{- end }}
             - --xds-auth-failure-rate={{ .Values.xds.authFailureRate }}
             - --xds-auth-failure-burst={{ .Values.xds.authFailureBurst }}

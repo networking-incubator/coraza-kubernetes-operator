@@ -237,6 +237,7 @@ type config struct {
 	xdsCertName      string
 	xdsKeyName       string
 	xdsCertSecret    string
+	xdsCertDNSNames  []string
 	xdsLimits        xds.Limits
 
 	// Cluster rule policy, applied to RuleSet content not accepted yet.
@@ -295,6 +296,16 @@ func parseFlags() config {
 		"The Secret in POD_NAMESPACE holding the xDS serving certificate. When set, the operator "+
 			"creates it with a self-signed CA if it is missing or unusable. Leave empty when the "+
 			"certificate is provisioned externally (Helm, cert-manager).")
+	flag.Func("xds-cert-dns-name",
+		"An extra DNS SAN for a certificate created by --xds-cert-secret. Repeatable.",
+		func(value string) error {
+			value = strings.TrimSpace(value)
+			if value == "" {
+				return errors.New("the DNS name is empty")
+			}
+			cfg.xdsCertDNSNames = append(cfg.xdsCertDNSNames, value)
+			return nil
+		})
 	cfg.xdsLimits = xds.DefaultLimits()
 	cfg.xdsLimits.AddFlags(flag.CommandLine)
 	addRulePolicyFlags(flag.CommandLine, &cfg)
@@ -359,25 +370,30 @@ func bootstrapServingCert(cfg config, podNamespace string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), servingCertBootstrapTimeout)
 	defer cancel()
 
-	regenerated, err := xds.EnsureServingCert(ctx, c, xds.ServingCertOptions{
-		Namespace:   podNamespace,
-		Name:        cfg.xdsCertSecret,
-		ServiceName: serviceName,
-		CertName:    cfg.xdsCertName,
-		KeyName:     cfg.xdsKeyName,
-		Logger:      setupLog,
+	result, err := xds.EnsureServingCert(ctx, c, xds.ServingCertOptions{
+		Namespace:     podNamespace,
+		Name:          cfg.xdsCertSecret,
+		ServiceName:   serviceName,
+		ExtraDNSNames: cfg.xdsCertDNSNames,
+		CertName:      cfg.xdsCertName,
+		KeyName:       cfg.xdsKeyName,
+		Logger:        setupLog,
 	})
 	if err != nil {
 		return err
 	}
-	if regenerated {
-		// CASource caches the first CA it reads, and the kubelet has not
-		// projected the new Secret yet, so this process would keep publishing
-		// the superseded CA to Gateways.
-		setupLog.Info("The xDS serving certificate was replaced; restart the operator so Gateways receive the new CA",
-			"secret", cfg.xdsCertSecret)
+
+	if !result.Replaced {
+		return nil
 	}
-	return nil
+	// Existing material was overwritten, so the pod still has the previous
+	// Secret projected. Serving now would publish the superseded CA to
+	// Gateways while the certificate watcher picks up the new leaf, and
+	// CASource caches whichever CA it reads first. Wait for the volume to
+	// catch up instead.
+	setupLog.Info("The xDS serving certificate was replaced; waiting for the new one to be mounted",
+		"secret", cfg.xdsCertSecret)
+	return xds.WaitForMountedCert(ctx, cfg.xdsCertDir, cfg.xdsCertName, result.CertPEM, setupLog)
 }
 
 // operatorServiceName resolves the Service the Gateways dial. The chart passes

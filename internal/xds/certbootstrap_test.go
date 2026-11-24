@@ -22,7 +22,12 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
+	"time"
+
+	"github.com/go-logr/logr"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -234,12 +239,15 @@ func TestEnsureServingCertPreservesExistingSecretType(t *testing.T) {
 	delete(seed.Data, servingCertCAKey)
 	c := newServingCertClient(t, seed)
 
-	regenerated, err := EnsureServingCert(context.Background(), c, opts)
+	result, err := EnsureServingCert(context.Background(), c, opts)
 	if err != nil {
 		t.Fatalf("EnsureServingCert: %v", err)
 	}
-	if !regenerated {
-		t.Error("EnsureServingCert did not report that it wrote new material")
+	if !result.Replaced {
+		t.Error("EnsureServingCert did not report that it replaced the material")
+	}
+	if len(result.CertPEM) == 0 {
+		t.Error("EnsureServingCert did not return the certificate it wrote")
 	}
 
 	secret := getServingCertSecret(t, c, opts)
@@ -438,4 +446,118 @@ func (c *createRacingClient) Create(ctx context.Context, obj client.Object, opts
 		}
 	}
 	return c.Client.Create(ctx, obj, opts...)
+}
+
+func TestEnsureServingCertRejectsCollidingKeyNames(t *testing.T) {
+	tests := map[string]struct{ certName, keyName string }{
+		"certificate and key collide":  {certName: "server.pem", keyName: "server.pem"},
+		"certificate takes the CA key": {certName: servingCertCAKey, keyName: "tls.key"},
+		"key takes the CA key":         {certName: "tls.crt", keyName: servingCertCAKey},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			opts := testServingCertOptions()
+			opts.CertName = tc.certName
+			opts.KeyName = tc.keyName
+			c := newServingCertClient(t)
+
+			// One map key cannot hold both values, so the Secret would look
+			// complete while the listener could never load it.
+			if _, err := EnsureServingCert(context.Background(), c, opts); err == nil {
+				t.Fatal("EnsureServingCert accepted colliding Secret keys")
+			}
+			secrets := &corev1.SecretList{}
+			if err := c.List(context.Background(), secrets); err != nil {
+				t.Fatalf("listing Secrets: %v", err)
+			}
+			if len(secrets.Items) != 0 {
+				t.Errorf("created %d Secret(s) despite colliding keys", len(secrets.Items))
+			}
+		})
+	}
+}
+
+func TestEnsureServingCertRenewsBeforeTheCAExpires(t *testing.T) {
+	opts := testServingCertOptions()
+	// A leaf good for 90 days is useless behind a CA that expires in 10, so
+	// the renewal window has to be applied to the whole chain.
+	opts.Validity = 10 * 24 * time.Hour
+	seed, err := newServingCertSecret(opts)
+	if err != nil {
+		t.Fatalf("seeding the Secret: %v", err)
+	}
+	c := newServingCertClient(t, seed)
+
+	opts.Validity = DefaultServingCertValidity
+	opts.RenewBefore = 30 * 24 * time.Hour
+	result, err := EnsureServingCert(context.Background(), c, opts)
+	if err != nil {
+		t.Fatalf("EnsureServingCert: %v", err)
+	}
+	if !result.Replaced {
+		t.Fatal("material expiring inside the renewal window was reused")
+	}
+
+	secret := getServingCertSecret(t, c, opts)
+	chain, err := parseCertChain(secret.Data[defaultCertName])
+	if err != nil {
+		t.Fatalf("parsing the renewed certificate: %v", err)
+	}
+	if time.Until(chain[0].NotAfter) < 60*24*time.Hour {
+		t.Errorf("the renewed certificate still expires at %s", chain[0].NotAfter)
+	}
+}
+
+func TestServingCertDefectAcceptsAChainWithIntermediates(t *testing.T) {
+	opts := testServingCertOptions()
+	seed, err := newServingCertSecret(opts)
+	if err != nil {
+		t.Fatalf("seeding the Secret: %v", err)
+	}
+	// cert-manager and external PKIs commonly put the issuing certificate
+	// after the leaf in tls.crt. Treating only the first block as the whole
+	// story would throw usable material away on every start.
+	seed.Data[defaultCertName] = append(
+		append([]byte{}, seed.Data[defaultCertName]...), seed.Data[servingCertCAKey]...)
+
+	if reason := servingCertDefect(seed, opts); reason != "" {
+		t.Errorf("a leaf followed by its issuer was rejected: %s", reason)
+	}
+}
+
+func TestWaitForMountedCertReturnsWhenTheFileCatchesUp(t *testing.T) {
+	dir := t.TempDir()
+	want := []byte("new certificate")
+	if err := os.WriteFile(filepath.Join(dir, defaultCertName), []byte("stale"), 0o600); err != nil {
+		t.Fatalf("seeding the mounted file: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	go func() {
+		// Stand in for the kubelet refreshing the projected volume.
+		time.Sleep(50 * time.Millisecond)
+		_ = os.WriteFile(filepath.Join(dir, defaultCertName), want, 0o600)
+	}()
+
+	if err := WaitForMountedCert(ctx, dir, defaultCertName, want, logr.Discard()); err != nil {
+		t.Fatalf("WaitForMountedCert: %v", err)
+	}
+}
+
+func TestWaitForMountedCertGivesUpWithTheContext(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, defaultCertName), []byte("stale"), 0o600); err != nil {
+		t.Fatalf("seeding the mounted file: %v", err)
+	}
+
+	// Startup must fail rather than hang when the projection never arrives.
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	if err := WaitForMountedCert(ctx, dir, defaultCertName, []byte("never"), logr.Discard()); err == nil {
+		t.Fatal("WaitForMountedCert returned success without the certificate appearing")
+	}
 }

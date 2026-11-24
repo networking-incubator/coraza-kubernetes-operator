@@ -17,6 +17,7 @@ limitations under the License.
 package xds
 
 import (
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -28,6 +29,8 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -65,6 +68,19 @@ const (
 	// changing the Secret underneath us.
 	updateRetries = 3
 )
+
+// ServingCertResult reports what EnsureServingCert did.
+type ServingCertResult struct {
+	// Created is true when the Secret did not exist and this call wrote it.
+	Created bool
+	// Replaced is true when existing material was overwritten in place. The
+	// pod still has the previous Secret projected, so the caller must wait for
+	// the new one before serving; see WaitForMountedCert.
+	Replaced bool
+	// CertPEM is the leaf that was written, empty when existing material was
+	// reused or another replica won the race.
+	CertPEM []byte
+}
 
 // ServingCertOptions configures EnsureServingCert.
 type ServingCertOptions struct {
@@ -167,6 +183,10 @@ func (o ServingCertOptions) validate() error {
 		return errors.New("secret name is required")
 	case o.ServiceName == "":
 		return errors.New("service name is required")
+	case o.certKey() == o.keyKey():
+		return fmt.Errorf("the certificate and key must use different Secret keys, both are %q", o.certKey())
+	case o.certKey() == servingCertCAKey || o.keyKey() == servingCertCAKey:
+		return fmt.Errorf("the certificate and key must not use %q, which holds the CA bundle", servingCertCAKey)
 	}
 	return nil
 }
@@ -186,9 +206,9 @@ func (o ServingCertOptions) validate() error {
 // rendered EnvoyFilters.
 //
 // The namespaced RBAC it needs is declared in internal/controller/manager.go.
-func EnsureServingCert(ctx context.Context, c client.Client, opts ServingCertOptions) (bool, error) {
+func EnsureServingCert(ctx context.Context, c client.Client, opts ServingCertOptions) (ServingCertResult, error) {
 	if err := opts.validate(); err != nil {
-		return false, err
+		return ServingCertResult{}, err
 	}
 	logger := opts.Logger
 	if logger.GetSink() == nil {
@@ -213,18 +233,18 @@ func EnsureServingCert(ctx context.Context, c client.Client, opts ServingCertOpt
 			return created, createErr
 
 		case err != nil:
-			return false, fmt.Errorf("reading the xDS serving certificate Secret %s: %w", key, err)
+			return ServingCertResult{}, fmt.Errorf("reading the xDS serving certificate Secret %s: %w", key, err)
 		}
 
 		reason := servingCertDefect(existing, opts)
 		if reason == "" {
 			logger.Info("Reusing the existing xDS serving certificate", "secret", key.String())
-			return false, nil
+			return ServingCertResult{}, nil
 		}
 
 		logger.Info("Regenerating the xDS serving certificate",
 			"secret", key.String(), "reason", reason, "attempt", attempt+1)
-		updateErr := updateServingCert(ctx, c, existing, opts)
+		written, updateErr := updateServingCert(ctx, c, existing, opts)
 		if apierrors.IsConflict(updateErr) {
 			// Someone else wrote first. Reread rather than assume they fixed
 			// it: the conflicting write may have touched only an annotation
@@ -232,31 +252,31 @@ func EnsureServingCert(ctx context.Context, c client.Client, opts ServingCertOpt
 			continue
 		}
 		if updateErr != nil {
-			return false, fmt.Errorf("updating the xDS serving certificate Secret %s: %w", key, updateErr)
+			return ServingCertResult{}, fmt.Errorf("updating the xDS serving certificate Secret %s: %w", key, updateErr)
 		}
-		return true, nil
+		return ServingCertResult{Replaced: true, CertPEM: written}, nil
 	}
 
-	return false, fmt.Errorf("the xDS serving certificate Secret %s kept changing under us after %d attempts",
-		key, updateRetries)
+	return ServingCertResult{}, fmt.Errorf(
+		"the xDS serving certificate Secret %s kept changing under us after %d attempts", key, updateRetries)
 }
 
 func createServingCert(ctx context.Context, c client.Client, key client.ObjectKey,
-	opts ServingCertOptions, logger logr.Logger) (bool, error) {
+	opts ServingCertOptions, logger logr.Logger) (ServingCertResult, error) {
 	secret, err := newServingCertSecret(opts)
 	if err != nil {
-		return false, err
+		return ServingCertResult{}, err
 	}
 	if err := c.Create(ctx, secret); err != nil {
 		if apierrors.IsAlreadyExists(err) {
-			return false, err
+			return ServingCertResult{}, err
 		}
-		return false, fmt.Errorf("creating the xDS serving certificate Secret %s: %w", key, err)
+		return ServingCertResult{}, fmt.Errorf("creating the xDS serving certificate Secret %s: %w", key, err)
 	}
 	logger.Info("Generated the xDS serving certificate",
 		"secret", key.String(), "dnsNames", opts.dnsNames(),
 		"notAfter", time.Now().Add(opts.validity()).UTC().Format(time.RFC3339))
-	return true, nil
+	return ServingCertResult{Created: true, CertPEM: secret.Data[opts.certKey()]}, nil
 }
 
 // updateServingCert replaces the material of an existing Secret in place. The
@@ -264,10 +284,10 @@ func createServingCert(ctx context.Context, c client.Client, key client.ObjectKe
 // the regenerated type would make every repair of a pre-existing Opaque Secret
 // fail permanently.
 func updateServingCert(ctx context.Context, c client.Client, existing *corev1.Secret,
-	opts ServingCertOptions) error {
+	opts ServingCertOptions) ([]byte, error) {
 	regenerated, err := newServingCertSecret(opts)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if existing.Data == nil {
 		existing.Data = map[string][]byte{}
@@ -275,7 +295,10 @@ func updateServingCert(ctx context.Context, c client.Client, existing *corev1.Se
 	for name, value := range regenerated.Data {
 		existing.Data[name] = value
 	}
-	return c.Update(ctx, existing)
+	if err := c.Update(ctx, existing); err != nil {
+		return nil, err
+	}
+	return regenerated.Data[opts.certKey()], nil
 }
 
 // servingCertDefect returns a human-readable reason the stored material cannot
@@ -293,15 +316,20 @@ func servingCertDefect(secret *corev1.Secret, opts ServingCertOptions) string {
 		return "the certificate and key do not form a usable pair"
 	}
 
-	block, _ := pem.Decode(secret.Data[opts.certKey()])
-	if block == nil {
-		return "the certificate is not valid PEM"
-	}
-	leaf, err := x509.ParseCertificate(block.Bytes)
+	// tls.crt may hold a leaf followed by intermediates, as a certificate
+	// supplied by cert-manager or an external PKI often does.
+	chain, err := parseCertChain(secret.Data[opts.certKey()])
 	if err != nil {
-		return "the certificate cannot be parsed"
+		return err.Error()
 	}
-	if time.Now().Add(opts.renewBefore()).After(leaf.NotAfter) {
+	leaf := chain[0]
+
+	// Verify as of the end of the renewal window rather than now, so material
+	// that expires inside it is replaced while it still works. This covers the
+	// signing CA too: a leaf good for 90 days is useless behind a CA that
+	// expires in 10.
+	renewAt := time.Now().Add(opts.renewBefore())
+	if renewAt.After(leaf.NotAfter) {
 		return fmt.Sprintf("the certificate expires at %s", leaf.NotAfter.UTC().Format(time.RFC3339))
 	}
 
@@ -311,12 +339,48 @@ func servingCertDefect(secret *corev1.Secret, opts ServingCertOptions) string {
 	if !roots.AppendCertsFromPEM(secret.Data[servingCertCAKey]) {
 		return "the CA bundle holds no certificate"
 	}
+	intermediates := x509.NewCertPool()
+	for _, cert := range chain[1:] {
+		intermediates.AddCert(cert)
+	}
 	for _, want := range opts.dnsNames() {
-		if _, err := leaf.Verify(x509.VerifyOptions{DNSName: want, Roots: roots}); err != nil {
-			return fmt.Sprintf("the certificate does not verify against the CA bundle for %s", want)
+		_, err := leaf.Verify(x509.VerifyOptions{
+			DNSName:       want,
+			Roots:         roots,
+			Intermediates: intermediates,
+			CurrentTime:   renewAt,
+		})
+		if err != nil {
+			return fmt.Sprintf("the certificate does not verify against the CA bundle for %s at %s",
+				want, renewAt.UTC().Format(time.RFC3339))
 		}
 	}
 	return ""
+}
+
+// parseCertChain decodes every certificate in a PEM bundle, leaf first.
+func parseCertChain(certPEM []byte) ([]*x509.Certificate, error) {
+	var chain []*x509.Certificate
+	rest := certPEM
+	for {
+		var block *pem.Block
+		block, rest = pem.Decode(rest)
+		if block == nil {
+			break
+		}
+		if block.Type != "CERTIFICATE" {
+			continue
+		}
+		cert, err := x509.ParseCertificate(block.Bytes)
+		if err != nil {
+			return nil, errors.New("the certificate cannot be parsed")
+		}
+		chain = append(chain, cert)
+	}
+	if len(chain) == 0 {
+		return nil, errors.New("the certificate is not valid PEM")
+	}
+	return chain, nil
 }
 
 // newServingCertSecret mints a self-signed CA and a leaf signed by it.
@@ -414,6 +478,45 @@ func newLeaf(commonName string, dnsNames []string, validity time.Duration,
 	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}),
 		pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER}),
 		nil
+}
+
+// WaitForMountedCert blocks until the certificate file at dir/certName holds
+// want, the material EnsureServingCert just wrote, or ctx expires.
+//
+// It exists for one case: an in-place regeneration. The pod already has the
+// previous Secret projected, and the kubelet only refreshes the volume on its
+// next sync. Starting the listener in that window would load the old CA into
+// CASource, which caches its first valid read, while the certificate watcher
+// later picks up the new leaf: Gateways would then be handed a leaf the
+// published CA cannot verify. Waiting for the projection keeps the two in
+// step.
+//
+// A first install does not need this. There is no stale material to read, and
+// CASource does not cache a missing file.
+func WaitForMountedCert(ctx context.Context, dir, certName string, want []byte, logger logr.Logger) error {
+	if logger.GetSink() == nil {
+		logger = logr.Discard()
+	}
+	path := filepath.Join(dir, certName)
+
+	ticker := time.NewTicker(certificateRetryInterval)
+	defer ticker.Stop()
+
+	for {
+		// #nosec G304 -- path is built from --xds-cert-path and
+		// --xds-cert-name, operator flags set by the chart. It is the same
+		// file the listener's certwatcher already opens, and no request data
+		// reaches it.
+		if mounted, err := os.ReadFile(path); err == nil && bytes.Equal(mounted, want) {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("the regenerated xDS serving certificate did not appear at %s: %w", path, ctx.Err())
+		case <-ticker.C:
+			logger.Info("Waiting for the regenerated xDS serving certificate to be mounted", "path", path)
+		}
+	}
 }
 
 // zeroize overwrites a buffer that held private key material rather than

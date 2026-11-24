@@ -229,9 +229,10 @@ tls:
   certName: "tls.crt"
   keyName: "tls.key"
   caName: "ca.crt"
-  # Extra DNS SANs appended when the serving certificate is generated. Changing
-  # this list does not update a Secret reused by Helm; rotate the certificate
-  # and restart the operator before using a newly added hostname.
+  # Extra DNS SANs appended when the serving certificate is generated, and
+  # passed to the operator as --xds-cert-dns-name when tls.bootstrap is set.
+  # Changing this list does not update a Secret reused by Helm; rotate the
+  # certificate and restart the operator before using a newly added hostname.
   sans: []
 
 networkPolicy:
