@@ -71,10 +71,20 @@ const (
 	authenticationShare = 4
 )
 
+// parkedNode is the cache node a rejection is parked under. No snapshot is ever
+// published for it, so the cache never answers a request that names it.
+const parkedNode = "\x00parked"
+
 // nackState tracks retries for one stream's current version.
 type nackState struct {
 	version  string
 	attempts int
+}
+
+// rejectedRetry is a rejected configuration waiting out its retry delay.
+type rejectedRetry struct {
+	engineKey, resourceName, proxyKey, base string
+	attempt                                 int
 }
 
 // nackKey scopes a retry budget to one stream. Every replica of a Gateway
@@ -187,11 +197,11 @@ type serverStream struct {
 	nackKey     string
 	requested   atomic.Bool
 	authTimer   *time.Timer
-	// retryPending is true while a rejected-configuration retry is scheduled.
-	// retryTimer is that retry, kept so ACK and stream close can cancel it.
-	retryPending bool
-	retryTimer   *time.Timer
-	closed       bool
+	// retry is the rejected-configuration retry waiting out its delay, and
+	// retryTimer the timer that runs it; both are nil when no retry waits.
+	retry      *rejectedRetry
+	retryTimer *time.Timer
+	closed     bool
 }
 
 // Server serves ECDS with go-control-plane's SnapshotCache and stream handler.
@@ -257,6 +267,7 @@ func NewServer(store *SnapshotStore, auth *Authenticator, authz *AuthzIndex, str
 		perNamespace: make(map[string]int),
 		perPod:       make(map[string]int),
 	}
+	store.setOnChange(s.wakeRejected)
 	s.srv = xdsserver.NewServer(context.Background(), store.cache, xdsserver.CallbackFuncs{
 		StreamOpenFunc:     s.onStreamOpen,
 		StreamRequestFunc:  s.onStreamRequest,
@@ -607,8 +618,9 @@ func (s *Server) onStreamRequest(streamID int64, req *discoveryv3.DiscoveryReque
 	if req.GetErrorDetail() != nil {
 		s.Metrics.Nack("rejected")
 		// A proxy that rejects a configuration because the remote module is not
-		// cached yet only re-applies it on a new subscription, so end the
-		// stream with a retryable status. Envoy can send the NACK as the first
+		// cached yet builds only bytes it has not received, and only when it
+		// subscribes again, so end the stream with a retryable status once the
+		// retry delay has passed. Envoy can send the NACK as the first
 		// message of a reconnected stream, before any subscription was recorded
 		// and possibly without resource_names. The resource is still
 		// client-controlled, so authorize it before it can change a retry
@@ -620,10 +632,13 @@ func (s *Server) onStreamRequest(streamID int64, req *discoveryv3.DiscoveryReque
 		if err := s.authorizeStream(entry, rejected); err != nil {
 			return err
 		}
-		if err := s.spendResponse(entry); err != nil {
-			return err
-		}
+		// The cache answers a request whose version differs from its snapshot's
+		// with the full resource, and Envoy accepts the bytes it just rejected
+		// without building them. Park the rejection under a node the cache
+		// holds no snapshot for: it answers nothing, so a rejection spends none
+		// of the response budget, and the retry resets the stream.
 		req.ResourceNames = []string{rejected}
+		req.Node.Id = parkedNode
 		// A NACK's version_info is the last version the proxy ACCEPTED, not the
 		// version it rejected. Prefer the last response on this stream and fall
 		// back to the currently published snapshot.
@@ -676,10 +691,8 @@ func (s *Server) onStreamRequest(streamID int64, req *discoveryv3.DiscoveryReque
 
 	if req.GetResponseNonce() != "" {
 		s.Metrics.Ack()
-		// Do not cancel a pending retry here: Envoy sends an ACK for the last
-		// accepted version immediately after a cold-start NACK, and the retry
-		// has not published its derived version yet. Only stream close cancels
-		// it, so a rejected configuration is still republished.
+		// A pending retry is left to run: only stream close or a newer
+		// rejection replaces it.
 		s.clearNack(entry)
 		s.ackProxyRetry(entry, req.GetVersionInfo())
 		// A proxy may repeat its acknowledgement; log each version once.
@@ -778,8 +791,8 @@ func (s *Server) authorized(entry *serverStream, resourceName string) bool {
 }
 
 // spendResponse charges the stream's identity for a request the cache answers
-// with the full resource: a new subscription, a request before the first
-// response, or a rejection.
+// with the full resource: a new subscription or a request before the first
+// response. A rejection is parked and never answered, so it is not charged.
 func (s *Server) spendResponse(entry *serverStream) error {
 	key, share := "pod/"+entry.identity.PodUID, 1
 	if entry.identity.PodUID == "" {
@@ -854,11 +867,6 @@ func (s *Server) watchNode(entry *serverStream, resourceName, engineKey, version
 	return engineKey
 }
 
-// resubscribeRejected reports whether the rejected configuration should end the
-// stream so the proxy resubscribes. A cold proxy rejects the first push because
-// the remote module is not cached yet, and Envoy never asks for that resource
-// again on its own; the reconnect gives it the configuration once the fetch has
-// completed.
 // rejectedResourceName returns the resource a NACK refers to. Envoy may send
 // it before the stream recorded its subscription, and a NACK replayed on a
 // reconnected stream may carry no resource_names at all: fall back to the
@@ -877,11 +885,13 @@ func (s *Server) rejectedResourceName(entry *serverStream, req *discoveryv3.Disc
 	return ""
 }
 
-// resubscribeRejected republishes the rejected configuration under a derived
-// version and ends the stream so the proxy resubscribes. A cold proxy rejects
-// the first push because the remote module is not cached yet, and Envoy never
-// asks for that resource again on its own; the reconnect gives it the
-// configuration once the fetch has completed.
+// resubscribeRejected schedules the retry of a rejected configuration: once the
+// delay has passed, a derived version of it is published for the proxy and the
+// stream is reset so the proxy resubscribes. A cold proxy rejects the first
+// push because the remote module is not cached yet, and Envoy never asks for
+// that resource again on its own; the reconnect gives it the configuration once
+// the fetch has completed. A rejection replaces a retry that still waits: the
+// proxy has rejected newer bytes since, and nothing else would retry them.
 func (s *Server) resubscribeRejected(entry *serverStream, resourceName, rejectedVersion string) {
 	if resourceName == "" || s.Store == nil || entry.session == nil {
 		return
@@ -905,50 +915,35 @@ func (s *Server) resubscribeRejected(entry *serverStream, resourceName, rejected
 	// option: a stranded pod stays fail-closed forever, and the entry is
 	// reclaimed on ACK and stream close.
 	key := nackKey(resourceName, entry.session.ID)
-
-	// Envoy never re-applies a version it rejected, and the remote module fetch
-	// it started needs to finish first: publish a derived version and close the
-	// stream so the proxy resubscribes and applies it from the code cache.
-	// Repeated NACKs before the timer fires must not schedule more timers or
-	// advance the proxy's version more than once.
-	entry.mu.Lock()
-	if entry.retryPending || entry.closed {
-		entry.mu.Unlock()
-		return
-	}
-	entry.retryPending = true
-	entry.mu.Unlock()
-
-	// Record the budget before the timer exists: a zero RetryDelay can fire
-	// immediately, and a post-close recordNack would leak a map entry.
 	s.trackNack(entry, key)
 	state := s.recordNack(key, base)
 	s.Logger.Info("resubscribing proxy after rejected configuration",
 		"resource", resourceName, "version", rejectedVersion, "attempt", attempt, "rejections", state.attempts)
 
+	// Envoy never re-applies a version it rejected, and the remote module fetch
+	// it started needs to finish first: publish a derived version and close the
+	// stream so the proxy resubscribes and applies it from the code cache.
 	entry.mu.Lock()
-	if entry.closed || !entry.retryPending {
-		entry.cancelRetryLocked()
-		entry.mu.Unlock()
+	defer entry.mu.Unlock()
+	if entry.closed {
 		return
 	}
-	entry.retryTimer = time.AfterFunc(nackDelay(s.RetryDelay, attempt), func() {
-		s.runRejectedRetry(entry, resourceName, proxyKey, base, attempt)
-	})
-	entry.mu.Unlock()
+	entry.cancelRetryLocked()
+	entry.retry = &rejectedRetry{engineKey: entry.engineKey, resourceName: resourceName, proxyKey: proxyKey, base: base, attempt: attempt}
+	entry.retryTimer = time.AfterFunc(nackDelay(s.RetryDelay, attempt), func() { s.runRejectedRetry(entry) })
 }
 
 // runRejectedRetry publishes a proxy-scoped retry once the delay elapses. It
-// takes ownership of the pending retry under entry.mu first, so a stream close
-// or ACK can cancel it without publishing after closure.
-func (s *Server) runRejectedRetry(entry *serverStream, resourceName, proxyKey, base string, attempt int) {
+// takes ownership of the waiting retry under entry.mu first, so a stream close
+// or a newer rejection can cancel it without publishing after closure.
+func (s *Server) runRejectedRetry(entry *serverStream) {
 	entry.mu.Lock()
-	if entry.closed || !entry.retryPending {
+	retry := entry.retry
+	if entry.closed || retry == nil {
 		entry.mu.Unlock()
 		return
 	}
-	entry.retryPending = false
-	entry.retryTimer = nil
+	entry.retry, entry.retryTimer = nil, nil
 	// Keep entry.mu while checking registration and bumping. onStreamClosed
 	// takes the same lock before it marks the entry closed and removes it, so a
 	// retry either completes while the stream is still registered or is
@@ -957,33 +952,42 @@ func (s *Server) runRejectedRetry(entry *serverStream, resourceName, proxyKey, b
 		entry.mu.Unlock()
 		return
 	}
-	err := s.Store.BumpRejected(resourceName, proxyKey, base, attempt)
+	err := s.Store.BumpRejected(retry.resourceName, retry.proxyKey, retry.base, retry.attempt)
 	if errors.Is(err, errSnapshotAdvanced) {
-		// A newer snapshot supersedes the retry. A stream already sent it
-		// keeps going; another, such as one whose first message was the
-		// rejection, resubscribes to receive it.
-		if current, currentErr := s.Store.CurrentVersionFor(resourceName, proxyKey); currentErr == nil && current == entry.lastVersion {
-			entry.mu.Unlock()
-			return
-		}
+		// A newer snapshot supersedes the retry, and a parked stream is never
+		// sent it: the proxy resubscribes to receive it.
 		err = nil
 	}
 	entry.mu.Unlock()
 	if err != nil {
-		s.Logger.Error(err, "republish rejected configuration", "resource", resourceName)
+		s.Logger.Error(err, "republish rejected configuration", "resource", retry.resourceName)
 		return
 	}
 	s.Streams.ResetStream(entry.session.ID)
 }
 
-// cancelRetryLocked cancels a pending rejected-configuration retry. Caller
+// wakeRejected runs the retry of every stream that waits on a rejection of the
+// Engine's configuration, now that the Engine has new content: the proxy
+// resubscribes and receives it instead of waiting out the retry delay.
+func (s *Server) wakeRejected(engineKey string) {
+	s.streams.Range(func(_, value any) bool {
+		entry := value.(*serverStream)
+		entry.mu.Lock()
+		if entry.retry != nil && entry.retry.engineKey == engineKey {
+			entry.retryTimer.Reset(0)
+		}
+		entry.mu.Unlock()
+		return true
+	})
+}
+
+// cancelRetryLocked cancels a waiting rejected-configuration retry. Caller
 // holds entry.mu.
 func (entry *serverStream) cancelRetryLocked() {
 	if entry.retryTimer != nil {
 		entry.retryTimer.Stop()
-		entry.retryTimer = nil
 	}
-	entry.retryPending = false
+	entry.retry, entry.retryTimer = nil, nil
 }
 
 // nackDelay doubles the base delay for every retry rung of the same content,
@@ -1126,9 +1130,9 @@ func (s *Server) onStreamClosed(streamID int64, _ *corev3.Node) {
 
 // The operator itself makes a proxy resubscribe at most once per
 // rejected-configuration retry (RetryDelay, 2s at the fastest rung), and each
-// retry costs a rejection plus a new subscription, so a proxy needs about one
-// full response per second at most. The burst absorbs reconnect storms such as
-// an operator restart or stream lifetime expiry.
+// retry costs one new subscription, so a proxy needs about one full response
+// per second at most. The burst absorbs reconnect storms such as an operator
+// restart or stream lifetime expiry.
 const (
 	responseBudgetRate  = 1 // full responses per second
 	responseBudgetBurst = 16

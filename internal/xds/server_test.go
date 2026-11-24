@@ -400,9 +400,10 @@ func TestStreamNackRepublishesUnderNewVersion(t *testing.T) {
 
 	nack := func(stream extensionv3.ExtensionConfigDiscoveryService_StreamExtensionConfigsClient, resp *discoveryv3.DiscoveryResponse) {
 		t.Helper()
+		// The proxy has accepted nothing yet, and a rejection carries the last
+		// accepted version, not the rejected one.
 		if err := stream.Send(&discoveryv3.DiscoveryRequest{
 			ResourceNames: []string{fixture.resourceName},
-			VersionInfo:   resp.GetVersionInfo(),
 			ResponseNonce: resp.GetNonce(),
 			ErrorDetail:   status.New(codes.InvalidArgument, "rejected by Envoy").Proto(),
 		}); err != nil {
@@ -474,7 +475,6 @@ func TestStreamNackRetryIsScopedToRejectingProxy(t *testing.T) {
 	}))
 	require.NoError(t, rejecting.Send(&discoveryv3.DiscoveryRequest{
 		ResourceNames: []string{fixture.resourceName},
-		VersionInfo:   rejected.GetVersionInfo(),
 		ResponseNonce: rejected.GetNonce(),
 		ErrorDetail:   status.New(codes.InvalidArgument, "rejected by Envoy").Proto(),
 	}))
@@ -537,7 +537,6 @@ func TestStreamNackRetryContinuesAfterManyRejections(t *testing.T) {
 
 	if err := stream.Send(&discoveryv3.DiscoveryRequest{
 		ResourceNames: []string{fixture.resourceName},
-		VersionInfo:   first.GetVersionInfo(),
 		ResponseNonce: first.GetNonce(),
 		ErrorDetail:   status.New(codes.InvalidArgument, "rejected by Envoy").Proto(),
 	}); err != nil {
@@ -567,7 +566,6 @@ func TestStreamNackRepublishFailureKeepsStream(t *testing.T) {
 	first := recv(t, stream)
 	if err := stream.Send(&discoveryv3.DiscoveryRequest{
 		ResourceNames: []string{fixture.resourceName},
-		VersionInfo:   first.GetVersionInfo(),
 		ResponseNonce: first.GetNonce(),
 		ErrorDetail:   status.New(codes.InvalidArgument, "rejected by Envoy").Proto(),
 	}); err != nil {
@@ -610,7 +608,7 @@ func TestStreamAckResetsNackBudget(t *testing.T) {
 
 	if err := stream.Send(&discoveryv3.DiscoveryRequest{
 		ResourceNames: []string{fixture.resourceName},
-		VersionInfo:   first.GetVersionInfo(),
+		VersionInfo:   first.GetVersionInfo(), // accepted by the acknowledgement above
 		ResponseNonce: first.GetNonce(),
 		ErrorDetail:   status.New(codes.InvalidArgument, "rejected by Envoy").Proto(),
 	}); err != nil {
@@ -888,7 +886,6 @@ func TestNackBudgetIsPerStream(t *testing.T) {
 	fixture.awaitWritten(t)
 	if err := streamB.Send(&discoveryv3.DiscoveryRequest{
 		ResourceNames: []string{fixture.resourceName},
-		VersionInfo:   second.GetVersionInfo(),
 		ResponseNonce: second.GetNonce(),
 		ErrorDetail:   status.New(codes.InvalidArgument, "rejected by Envoy").Proto(),
 	}); err != nil {
@@ -1248,23 +1245,24 @@ func expectResult(t *testing.T, results <-chan recvResult) *discoveryv3.Discover
 	}
 }
 
-// TestResubscribeRejectedSchedulesOneRetryPerStream pins the per-stream bound:
-// repeated NACKs while a retry is pending must not schedule more timers.
-func TestResubscribeRejectedSchedulesOneRetryPerStream(t *testing.T) {
+// A rejection replaces the retry that still waits: the proxy has rejected newer
+// bytes since, and no other retry would cover them.
+func TestResubscribeRejectedReplacesThePendingRetry(t *testing.T) {
 	fixture := newStreamFixture(t)
 	fixture.server.RetryDelay = time.Hour
 	entry := &serverStream{streamID: 41, session: &StreamSession{ID: 41}}
 
-	fixture.server.resubscribeRejected(entry, fixture.resourceName, "")
+	fixture.server.resubscribeRejected(entry, fixture.resourceName, "sha256:v1")
 	entry.mu.Lock()
 	first := entry.retryTimer
-	require.NotNil(t, first)
-	require.True(t, entry.retryPending)
 	entry.mu.Unlock()
+	require.NotNil(t, first)
 
-	fixture.server.resubscribeRejected(entry, fixture.resourceName, "")
+	fixture.server.resubscribeRejected(entry, fixture.resourceName, "sha256:v2")
 	entry.mu.Lock()
-	require.True(t, first == entry.retryTimer, "a second NACK replaced the pending retry")
+	require.NotSame(t, first, entry.retryTimer, "a later rejection must schedule its own retry")
+	require.False(t, first.Stop(), "the replaced retry must not fire")
+	require.Equal(t, "sha256:v2", entry.retry.base)
 	entry.cancelRetryLocked()
 	entry.mu.Unlock()
 	fixture.server.clearNack(entry)
@@ -1282,13 +1280,13 @@ func TestRejectedRetryDoesNotRunAfterClose(t *testing.T) {
 
 	fixture.server.onStreamClosed(42, nil)
 	entry.mu.Lock()
-	require.False(t, entry.retryPending)
+	require.Nil(t, entry.retry)
 	require.Nil(t, entry.retryTimer)
 	entry.mu.Unlock()
 
 	// Simulate a callback that had already passed its scheduling check.
 	proxyKey := proxyCacheKey(testNamespace+"/"+streamEngine, Identity{}, "")
-	fixture.server.runRejectedRetry(entry, fixture.resourceName, proxyKey, "", 1)
+	fixture.server.runRejectedRetry(entry)
 	_, err := fixture.store.cache.GetSnapshot(proxyKey)
 	require.Error(t, err, "a closed stream must not publish a retry snapshot for the proxy either")
 }
@@ -1299,12 +1297,12 @@ func TestRejectedRetryBumpsWhenActive(t *testing.T) {
 	require.NoError(t, fixture.store.Replace(fixture.snapshot(t, "v1")))
 	entry := &serverStream{streamID: 43, session: &StreamSession{ID: 43}}
 	fixture.server.streams.Store(int64(43), entry)
+	proxyKey := proxyCacheKey(testNamespace+"/"+streamEngine, Identity{}, "")
 	entry.mu.Lock()
-	entry.retryPending = true
+	entry.retry = &rejectedRetry{resourceName: fixture.resourceName, proxyKey: proxyKey, base: "sha256:v1", attempt: 1}
 	entry.mu.Unlock()
 
-	proxyKey := proxyCacheKey(testNamespace+"/"+streamEngine, Identity{}, "")
-	fixture.server.runRejectedRetry(entry, fixture.resourceName, proxyKey, "sha256:v1", 1)
+	fixture.server.runRejectedRetry(entry)
 
 	version, err := fixture.store.CurrentVersion(fixture.resourceName)
 	require.NoError(t, err)
@@ -1313,6 +1311,85 @@ func TestRejectedRetryBumpsWhenActive(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "sha256:v1.retry1", retryVersion)
 	entry.mu.Lock()
-	require.False(t, entry.retryPending)
+	require.Nil(t, entry.retry)
 	entry.mu.Unlock()
+}
+
+// retryPending reports whether a stream waits out the delay of a retry.
+func (f *streamFixture) retryPending() bool {
+	pending := false
+	f.server.streams.Range(func(_, value any) bool {
+		entry := value.(*serverStream)
+		entry.mu.Lock()
+		defer entry.mu.Unlock()
+		pending = pending || entry.retry != nil
+		return true
+	})
+	return pending
+}
+
+// A rejection is parked, not answered: however many a stream sends, the cache
+// sends nothing back and the response budget stays untouched.
+func TestStreamParksRejections(t *testing.T) {
+	fixture := newStreamFixture(t)
+	fixture.server.RetryDelay = time.Hour
+	require.NoError(t, fixture.store.Replace(fixture.snapshot(t, "v1")))
+
+	// A pod's budget is one burst of 16 full responses, which answering this
+	// many rejections would exhaust.
+	stream := fixture.open(t, podToken("pod-1"), fixture.resourceName)
+	first := recv(t, stream)
+	const rejections = 100
+	for range rejections {
+		send(t, stream, &discoveryv3.DiscoveryRequest{
+			ResourceNames: []string{fixture.resourceName},
+			ResponseNonce: first.GetNonce(),
+			ErrorDetail:   status.New(codes.InvalidArgument, "rejected by Envoy").Proto(),
+		})
+	}
+	nacks := fixture.metrics.nacks.WithLabelValues("rejected")
+	require.Eventually(t, func() bool { return testutil.ToFloat64(nacks) == rejections }, 5*time.Second, 5*time.Millisecond)
+
+	expectNoResult(t, startRecv(stream))
+	fixture.server.streams.Range(func(_, value any) bool {
+		entry := value.(*serverStream)
+		entry.mu.Lock()
+		defer entry.mu.Unlock()
+		require.Equal(t, first.GetNonce(), entry.lastNonce, "the cache must not have sent another response")
+		return true
+	})
+	require.Zero(t, fixture.watches(testNamespace+"/"+streamEngine), "a rejection must not watch the Engine's snapshot")
+	require.Equal(t, 1, fixture.watches(parkedNode), "each rejection replaces the stream's parked watch")
+	require.Zero(t, testutil.ToFloat64(fixture.metrics.refusals.WithLabelValues(RefusalResponseBudget)))
+}
+
+// New content ends the wait for a rejected configuration's retry at once: the
+// stream is reset so the proxy receives it without waiting out the delay, and
+// publishing the same content again does not.
+func TestStreamRejectionWakesOnNewContent(t *testing.T) {
+	fixture := newStreamFixture(t)
+	fixture.server.RetryDelay = time.Hour
+	require.NoError(t, fixture.store.Replace(fixture.snapshot(t, "v1")))
+	stream := fixture.open(t, validToken, fixture.resourceName)
+	first := recv(t, stream)
+	fixture.awaitWritten(t)
+	send(t, stream, &discoveryv3.DiscoveryRequest{
+		ResourceNames: []string{fixture.resourceName},
+		ResponseNonce: first.GetNonce(),
+		ErrorDetail:   status.New(codes.InvalidArgument, "rejected by Envoy").Proto(),
+	})
+	require.Eventually(t, fixture.retryPending, 5*time.Second, 5*time.Millisecond)
+
+	results := startRecv(stream)
+	require.NoError(t, fixture.store.Replace(fixture.snapshot(t, "v1")))
+	expectNoResult(t, results)
+
+	require.NoError(t, fixture.store.Replace(fixture.snapshot(t, "v2")))
+	select {
+	case result := <-results:
+		require.Equal(t, codes.Unavailable, status.Code(result.err))
+	case <-time.After(5 * time.Second):
+		t.Fatal("the stream was not reset by new content")
+	}
+	require.Equal(t, "sha256:v2", recv(t, fixture.open(t, validToken, fixture.resourceName)).GetVersionInfo())
 }

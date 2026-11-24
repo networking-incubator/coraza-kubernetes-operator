@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"math"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -40,6 +41,7 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
+	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
 // This file models how an Envoy proxy consumes one ECDS resource, so tests can
@@ -488,7 +490,7 @@ func TestWasmModuleFetchesUntilCached(t *testing.T) {
 }
 
 // A proxy that starts without its module rejects the configuration it is sent
-// first, and ends up with a built filter.
+// first, and a single retry gives it a built filter.
 func TestProxyModelAppliesAConfigurationAfterARejection(t *testing.T) {
 	fixture := newStreamFixture(t)
 	// The retry waits for the module fetch to end.
@@ -499,13 +501,14 @@ func TestProxyModelAppliesAConfigurationAfterARejection(t *testing.T) {
 	proxy.start(t)
 
 	require.Eventually(t, func() bool { return proxy.state().applied != nil }, 5*time.Second, 5*time.Millisecond)
-	require.NotZero(t, proxy.state().stats.buildFailures)
+	state := proxy.state()
+	require.Equal(t, 1, state.stats.nacks)
+	require.Zero(t, state.stats.unbuilt)
 }
 
 // A proxy never accepts bytes it did not build. A rejection is parked, so the
 // cache sends nothing for it, instead of the bytes the proxy just rejected.
 func TestProxyModelNeverAcceptsBytesItDidNotBuild(t *testing.T) {
-	t.Skip("the cache answers a rejection with the rejected bytes until rejections are parked")
 	fixture := newStreamFixture(t)
 	// Keep the retry out of the way.
 	fixture.server.RetryDelay = time.Hour
@@ -514,10 +517,74 @@ func TestProxyModelNeverAcceptsBytesItDidNotBuild(t *testing.T) {
 	proxy.module.failFetches = neverFetched
 	proxy.start(t)
 
-	require.Eventually(t, func() bool { return proxy.state().stats.nacks == 1 }, 5*time.Second, 5*time.Millisecond)
+	require.Eventually(t, fixture.retryPending, 5*time.Second, 5*time.Millisecond)
 	require.Never(t, func() bool { return proxy.state().stats.responses > 1 }, 300*time.Millisecond, 10*time.Millisecond)
 	state := proxy.state()
 	require.Zero(t, state.stats.unbuilt)
 	require.Empty(t, state.version)
 	require.Nil(t, state.applied)
+}
+
+// snapshotWithContent is the fixture's snapshot of version with configuration
+// bytes of its own, as new rules give: the fixture's other snapshots differ in
+// their version only, and a proxy accepts them without building the filter again.
+func (f *streamFixture) snapshotWithContent(t *testing.T, version string) *Snapshot {
+	t.Helper()
+	snapshot := f.snapshot(t, version)
+	var config wasmhttp.Wasm
+	require.NoError(t, snapshot.Resource.TypedConfig.UnmarshalTo(&config))
+	var err error
+	config.GetConfig().GetVmConfig().Configuration, err = anypb.New(wrapperspb.String(version))
+	require.NoError(t, err)
+	snapshot.Resource.TypedConfig, err = anypb.New(&config)
+	require.NoError(t, err)
+	return snapshot
+}
+
+// New content reaches a proxy that rejected the old content at once, without
+// waiting out the retry delay.
+func TestProxyModelReceivesNewContentWhileRejecting(t *testing.T) {
+	fixture := newStreamFixture(t)
+	fixture.server.RetryDelay = time.Hour
+	require.NoError(t, fixture.store.Replace(fixture.snapshotWithContent(t, "v1")))
+	proxy := newProxyModel(fixture.resourceName, "waiting-proxy", fixture.newECDSClient(t))
+	proxy.module.fetchTime = time.Millisecond
+	proxy.start(t)
+	require.Eventually(t, fixture.retryPending, 5*time.Second, 5*time.Millisecond)
+	// The new content is built once the fetch the rejection started has ended.
+	require.Eventually(t, func() bool {
+		proxy.module.mu.Lock()
+		defer proxy.module.mu.Unlock()
+		return proxy.module.cached
+	}, 5*time.Second, time.Millisecond)
+
+	require.NoError(t, fixture.store.Replace(fixture.snapshotWithContent(t, "v2")))
+	require.Eventually(t, func() bool { return strings.HasPrefix(proxy.state().version, "sha256:v2") }, 5*time.Second, 5*time.Millisecond)
+	state := proxy.state()
+	require.NotNil(t, state.applied)
+	require.Zero(t, state.stats.unbuilt)
+}
+
+// New content that the proxy rejects too is retried like the content before it:
+// the proxy ends up with a built filter without another content change.
+func TestProxyModelConvergesWhenNewContentIsAlsoRejected(t *testing.T) {
+	fixture := newStreamFixture(t)
+	fixture.server.RetryDelay = 50 * time.Millisecond
+	require.NoError(t, fixture.store.Replace(fixture.snapshotWithContent(t, "v1")))
+	proxy := newProxyModel(fixture.resourceName, "rejecting-proxy", fixture.newECDSClient(t))
+	// The first fetch ends without the module, so the next configuration is
+	// rejected as well.
+	proxy.module.fetchTime = 5 * time.Millisecond
+	proxy.module.failFetches = 1
+	proxy.start(t)
+	require.Eventually(t, func() bool { return proxy.state().stats.buildFailures == 1 }, 5*time.Second, time.Millisecond)
+
+	require.NoError(t, fixture.store.Replace(fixture.snapshotWithContent(t, "v2")))
+	require.Eventually(t, func() bool {
+		state := proxy.state()
+		return state.applied != nil && strings.HasPrefix(state.version, "sha256:v2")
+	}, 5*time.Second, 5*time.Millisecond)
+	state := proxy.state()
+	require.GreaterOrEqual(t, state.stats.buildFailures, 2)
+	require.Zero(t, state.stats.unbuilt)
 }
