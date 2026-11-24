@@ -28,7 +28,7 @@ import (
 // checked against: unsupportedOperators, supportedOperators, operatorAliases,
 // supportedDirectives and ctlDirectives. A test fails when the Makefile pin
 // moves, so bumping the gateway module forces a re-check of the lists.
-const gatewayModuleCheckedAt = "81f0a2b73f53337462368eff590946356e1193bf"
+const gatewayModuleCheckedAt = "1caf0a5ae9f7ee0cf83899bb58daa6a33a98bff1"
 
 // unsupportedOperators are operators Go Coraza registers but envoy-coraza is
 // built without: it uses the coraza crate's default features, which leave out

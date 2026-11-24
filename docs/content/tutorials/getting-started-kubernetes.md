@@ -19,7 +19,7 @@ run from the repository root:
 make demo
 ```
 
-By default, `make demo` downloads the published CRS-enabled `coraza-rs` v0.0.2 artifact,
+By default, `make demo` downloads the published CRS-enabled `coraza-rs` v0.0.3-rc.2 artifact,
 verifies its SHA-256 digest, and bundles it into the operator image. It then creates the
 cluster with Istio (Sail operator), installs the operator, applies `config/samples`, and
 asserts that a normal request passes while the demo attacks are blocked:
@@ -28,6 +28,8 @@ asserts that a normal request passes while the demo attacks are blocked:
   allowed  GET /                      -> 200 (want 200)
   blocked  GET /?q=evilmonkey         -> 403 (want 403)
   blocked  GET /?q=evildata           -> 403 (want 403, @pmFromFile RuleData)
+  blocked  GET /?q=select+*+from+users -> 403 (want 403, block action)
+  blocked  GET /?q=<script>alert(1)</script> -> 403 (want 403, block action)
 ```
 
 Requirements: Docker, `kind`, `helm`, `kubectl`, `python3`, `curl`, `sha256sum`, and

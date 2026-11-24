@@ -12,6 +12,69 @@ Kubernetes Operator (CKO).
 [GitHub Workflow]:https://docs.github.com/en/actions/concepts/workflows-and-actions/workflows
 [release.yml]:https://github.com/networking-incubator/coraza-kubernetes-operator/blob/main/.github/workflows/release.yml
 
+## Pre-requisites
+
+### Coraza-rs release
+
+Verify whether [coraza-rs](https://github.com/networking-incubator/coraza-rs)
+needs a matching release. The CKO release workflow builds the bundled WASM from
+the commit pinned by `CORAZA_RS_VERSION` with `WASM_CRS=0`; it does not consume
+coraza-rs's prebuilt WASM assets.
+
+If a new coraza-rs release is needed, cut a tag in that repository. Its release
+workflow creates:
+
+* `coraza-rs.wasm` — the WASM plugin
+* `coraza-rs-crs.wasm` — the plugin with embedded CRS rules
+
+Before tagging CKO, synchronize both sets of Makefile pins:
+
+* `CORAZA_RS_VERSION` is the source commit used by the CKO release workflow. It
+  is a Git commit SHA, not an artifact checksum.
+* `WASM_RELEASE_VERSION`, `WASM_RELEASE_GIT_SHA`, `WASM_RELEASE_SHA256`, and
+  `WASM_RELEASE_CRS_VERSION` pin the published assets used by `make wasm.release`
+  and the default `make demo`. These do not affect the CKO release workflow, but
+  keep local deployment testing on the same coraza-rs release. The SHA variable
+  selects the CRS-enabled asset when `WASM_CRS=1`, otherwise the plain asset.
+  `WASM_RELEASE_GIT_SHA` defaults to `CORAZA_RS_VERSION`; override it only when
+  testing an artifact built from a different commit.
+
+For coraza-rs `v0.0.3-rc.2`, the tag points to:
+
+```make
+CORAZA_RS_VERSION ?= 1caf0a5ae9f7ee0cf83899bb58daa6a33a98bff1
+WASM_RELEASE_VERSION ?= v0.0.3-rc.2
+WASM_RELEASE_GIT_SHA ?= $(CORAZA_RS_VERSION)
+WASM_RELEASE_SHA256 ?= $(if $(filter 1,$(WASM_CRS)),2a4eb39b390439e4ba68c6c57788c9b12113f2a4ba45aa6ae8148e50d93c6dab,40968f7d237065192819b7984cbf0790374e87321caca448154b124f6b3f97d2)
+WASM_RELEASE_CRS_VERSION ?= v4.30.0
+```
+
+When `CORAZA_RS_VERSION` moves, re-check the gateway capability lists in
+`internal/rulesets/validation` - supported operators, directive aliases, and
+`ctl` actions - against the new coraza-rs source. Only then update
+`gatewayModuleCheckedAt` in `internal/rulesets/validation/operators.go`. The
+guard test intentionally fails until that commit is updated:
+
+```console
+go test ./internal/rulesets/validation -run TestGatewayListsMatchGatewayModulePin
+```
+
+To obtain the published artifact digests when updating the pins, query the
+coraza-rs release API. Keep the resulting hashes pinned in the Makefile; do not
+fetch them dynamically during a build:
+
+```sh
+version=v0.0.3-rc.2
+curl -fsSL "https://api.github.com/repos/networking-incubator/coraza-rs/releases/tags/$version" |
+  jq -r '.assets[] | select(.name == "coraza-rs.wasm" or .name == "coraza-rs-crs.wasm") | "\(.name) \(.digest | sub("^sha256:"; ""))"'
+```
+
+Validate the published artifact with `make demo` before tagging CKO. It deploys
+the CRS-enabled artifact on KIND and runs the demo traffic checks. To build from
+the pinned coraza-rs source instead, use `make demo WASM_SOURCE=build`; this
+requires the Rust toolchain. Both paths overwrite the generated files under
+`internal/assets/`, which should not be committed.
+
 ## Process
 
 ### Step 1 - Communication
@@ -71,8 +134,11 @@ correct:
 - The release **name** should just be the tag name
 - Add the major themes and most important changes to the top of the **description**
 - The remainder of the **description** should include the auto-generated release notes
-- The **crds.yaml**, **operator.yaml**, **samples.yaml** & Helm chart **.tgz** artifacts are attached
-  - Check each manifest and the chart package, and verify their correctness
+- The **crds.yaml**, **operator.yaml**, **samples.yaml**, Helm chart **.tgz**, and WASM
+  assets (**plugin.wasm**, **plugin.wasm.sha256**, **plugin.manifest.yaml**) are attached
+  - Check the rendered image tag and chart metadata (`version` has no `v` prefix;
+    `appVersion` matches the image tag, including `v`)
+  - Verify the WASM manifest's `git_sha`, `crs_version`, and SHA-256 against the release
 - Make sure the **previous release** is set correctly
   - e.g. for a `v1.0.0` release, _don't_ target `rc`, patch or other pre-releases. Target the last major/minor.
 
@@ -83,8 +149,8 @@ Once you've verified the release, we need to tag the container image appropriate
 ### Step 4 - Container Image Tagging
 
 The release workflow pushes the operator image tagged as the git tag
-(e.g. `v0.1.1`). The OLM bundle references the image by its immutable
-digest, so the tag does not affect OLM installs.
+(e.g. `v0.1.1`) to GHCR and Quay. When OLM bundle publishing is enabled, the
+bundle references the operator image by its immutable digest.
 
 For stable (non-pre-release) versions, tag the image as `latest` before
 publishing the release:
@@ -101,8 +167,13 @@ docker push ghcr.io/networking-incubator/coraza-kubernetes-operator:latest
 
 ### OLM (Operator Lifecycle Manager)
 
-The release workflow builds and pushes three container images. Two of them
-are specific to OLM:
+**Current status:** the OLM bundle and catalog jobs in `release.yml` are disabled
+with `if: false`; the `operatorhub.yml` job is disabled as well. OLM publishing
+is not part of the normal image or Helm chart release. The flow below describes
+the intended bundle/catalog pipeline if it is re-enabled.
+
+When enabled, the release workflow builds and pushes OLM bundle and catalog
+images alongside the operator image:
 
 ```
   Operator image (:v0.2.0)
@@ -132,7 +203,7 @@ are specific to OLM:
   OLM / OperatorHub UI
 ```
 
-**What the release workflow does automatically:**
+**Intended automated flow (currently disabled):**
 
 1. `make bundle` — generates bundle manifests from the Helm chart
 2. `make bundle.build bundle.push` — builds and pushes the bundle image
@@ -154,12 +225,10 @@ are specific to OLM:
 
 **What needs manual attention:**
 
-- **`catalog.yaml` must be committed before tagging the release.** The release
-  workflow runs `catalog.update` in its working tree but does **not** commit the
-  result back to the repository. If you skip this step, the next release will
-  start from a stale checkout and the OLM upgrade chain will break — each
-  release's catalog will have no `replaces` link to the previous version,
-  making every version an independent install instead of an upgrade.
+- If preparing an OLM catalog release, **`catalog.yaml` must be committed before
+  tagging**. The catalog job updates it in its working tree but does not commit
+  the result back. This is not required for the current Helm/image-only release
+  while the OLM jobs remain disabled.
 
   Before tagging, run:
 
@@ -185,6 +254,27 @@ to create a discussion to announce the release. Say "Yes" to that and publish an
 `announcement` type discussion for the release that links to the release page, or
 go to the discussions page and write up an announcement from there.
 
+**Publish the Helm chart index** — the release workflow triggers Pages while the
+release is still a draft, and `pages.yml` excludes drafts. After publishing the
+release, trigger Pages again so the chart package is indexed:
+
+```console
+gh workflow run pages.yml
+```
+
+Published prereleases are included in the index. Verify the chart appears (use
+`--devel` to include prereleases in Helm search):
+
+```console
+# Run once if the chart repository is not already configured.
+helm repo add coraza-kubernetes-operator https://networking-incubator.github.io/coraza-kubernetes-operator/
+helm repo update coraza-kubernetes-operator
+helm search repo coraza-kubernetes-operator/coraza-kubernetes-operator --versions --devel
+```
+
+Merging the post-release PR to `main` also triggers Pages; no extra dispatch is
+needed if that run has already published the updated index.
+
 Make sure the latest release announcement is pinned, and older release
 announcements get unpinned.
 
@@ -198,15 +288,17 @@ follow-up PR to `main` with the following changes:
 **Bump Chart version** — update `charts/coraza-kubernetes-operator/Chart.yaml`:
 
 ```yaml
-version: 0.5.0        # chart version (without 'v' prefix)
-appVersion: "0.5.0"   # operator version (quoted string, without 'v' prefix)
+version: 0.6.0-rc.1        # chart version (without 'v' prefix)
+appVersion: "v0.6.0-rc.1"  # operator image tag (matches the release tag)
 ```
 
-While the release workflow overrides these via `helm package --version` and
-`--app-version`, the values in the repository must be correct for users who
-install from a local checkout (e.g. `helm install ./charts/...`). The
-`appVersion` also serves as the default `image.tag` when `image.tag` is not
-set in values — bumping it before the image exists would break local installs.
+No manual chart bump is needed before tagging: `make release.manifests` renders
+the operator manifest with `image.tag` set to the release tag, and packages the
+chart with `--version` set to the tag without `v` and `--app-version` set to the
+tag with `v`. After the image is published, update the values in the repository
+for users installing from a local checkout (e.g. `helm install ./charts/...`).
+The chart's `appVersion` is also the default `image.tag`, so it must match the
+published image tag, including the `v` prefix.
 
 **Update docs versioning** — update `docs/versions.yaml` to add the new release
 version and set it as the default. This must also happen **after** tagging
@@ -229,10 +321,9 @@ versions:
     default: false
 ```
 
-Once the PR merges, re-publish the Helm chart index and docs by using one of
-these options:
-1. Trigger the [github Pages](https://github.com/networking-incubator/coraza-kubernetes-operator/actions/workflows/pages.yml) workflow manually from the GitHub UI.
-2. Run the CLI command `gh workflow run pages.yml`.
+Merging the PR to `main` triggers the [GitHub Pages](https://github.com/networking-incubator/coraza-kubernetes-operator/actions/workflows/pages.yml)
+workflow, which rebuilds the docs and Helm chart index. If that run does not
+occur, trigger it manually with `gh workflow run pages.yml`.
 
 ### Step 7 - OperatorHub
 
@@ -243,6 +334,10 @@ Re-enabling that automation is tracked in [issue #201](https://github.com/networ
 
 Until then, submit the OLM bundle **locally** after the GitHub release exists
 and the operator image is published to GHCR.
+
+This is separate from the Helm chart release. For a prerelease, skip OperatorHub
+submission unless maintainers explicitly request it; the disabled workflow's
+planned behavior is to skip prereleases.
 
 1. Check out the **release tag** (same commit you released).
 
