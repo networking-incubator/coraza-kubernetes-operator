@@ -122,7 +122,11 @@ jobs:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      # Quay publishing is disabled by default while its robot token is renewed.
+      # Set the repository variable QUAY_PUBLISH=true and restore the Quay tag
+      # below to re-enable it.
       - name: log in to Quay
+        if: ${{ vars.QUAY_PUBLISH == 'true' }}
         uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         with:
           registry: ${{ env.QUAY_REGISTRY }}
@@ -134,9 +138,10 @@ jobs:
         with:
           context: .
           push: true
+          # Restore this line to re-enable Quay:
+          #   ${{ env.QUAY_REGISTRY }}/${{ env.QUAY_IMAGE_NAME }}:${{ github.ref_name }}
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}
-            ${{ env.QUAY_REGISTRY }}/${{ env.QUAY_IMAGE_NAME }}:${{ github.ref_name }}
           platforms: linux/amd64
 
   build-push-bundle:
