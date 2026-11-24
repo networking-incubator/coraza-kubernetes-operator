@@ -569,8 +569,11 @@ func TestListenerClosesConnectionThatStopsReading(t *testing.T) {
 	}, limits.WriteTimeout+10*time.Second, 10*time.Millisecond, "the stalled connection kept its stream slots")
 	t.Logf("a TCP-stalled connection released its %d stream slots after %v", limits.MaxStreams, time.Since(started))
 
+	// The stalled streams were sent a tag they never acknowledged, so the
+	// Engine has moved on to later generations: the new stream is sent the
+	// current one.
 	stream := fixture.open(t, validToken, fixture.resourceName)
-	require.Equal(t, fixture.wire("v1", 0), recv(t, stream).GetVersionInfo())
+	require.Equal(t, fixture.wire("v1", fixture.generation(testNamespace+"/"+streamEngine)), recv(t, stream).GetVersionInfo())
 }
 
 // largeSnapshot is fixture's snapshot carrying size bytes of plugin
