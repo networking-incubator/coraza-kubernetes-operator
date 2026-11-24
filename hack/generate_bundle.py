@@ -10,8 +10,10 @@ Additional manifests (Service, CRDs) are copied into bundle/manifests/.
 
 import argparse
 import copy
+import datetime
 import json
 import os
+import re
 import shutil
 import sys
 from pathlib import Path
@@ -54,21 +56,77 @@ OWNED_API_PREFIX = "waf.k8s.coraza.io/"
 # Display order for alm-examples (RuleSet before Engine: engine references the ruleset).
 _ALM_EXAMPLE_KIND_ORDER = {"RuleSet": 0, "Engine": 1}
 
+# OperatorHub requires createdAt in this exact shape.
+CREATED_AT_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
+CREATED_AT_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
+
+# Target platforms the bundle can be rendered for. OperatorHub.io requires a
+# bundle that works on vanilla Kubernetes; "openshift" is for the separate
+# redhat-openshift-ecosystem/community-operators-prod submission.
+PLATFORMS = ("kubernetes", "openshift")
+
+
+def resolve_created_at(explicit: str | None) -> str:
+    """
+    Return the CSV createdAt stamp.
+
+    SOURCE_DATE_EPOCH is honoured so a rebuild of the same commit produces an
+    identical bundle; reviewers diff regenerated bundles against the submitted
+    ones.
+    """
+    if explicit:
+        if not CREATED_AT_PATTERN.match(explicit):
+            die(f"--created-at must match yyyy-mm-ddThh:mm:ssZ, got '{explicit}'")
+        return explicit
+
+    epoch = os.environ.get("SOURCE_DATE_EPOCH")
+    if epoch:
+        try:
+            when = datetime.datetime.fromtimestamp(int(epoch), tz=datetime.timezone.utc)
+        except ValueError:
+            die(f"SOURCE_DATE_EPOCH must be an integer, got '{epoch}'")
+    else:
+        when = datetime.datetime.now(tz=datetime.timezone.utc)
+    return when.strftime(CREATED_AT_FORMAT)
+
 # ---------------------------------------------------------------------------
 # Helm Rendering
 # ---------------------------------------------------------------------------
 
 
+def helm_values(platform: str) -> dict:
+    """
+    Return the Helm values the bundle is rendered with.
+
+    tls.generate is off for every platform. The chart's generate branch mints a
+    private key, and this render is published to a public Git repository and
+    catalog image, so the key must never be produced here. Only kinds in
+    BUNDLE_RESOURCE_KINDS reach the bundle today, which already excludes
+    Secrets, but turning generation off states the intent rather than relying
+    on that list staying unchanged.
+
+    The serving Secret is therefore a prerequisite the cluster administrator
+    creates before installing the bundle; see the CSV description.
+    """
+    values = {"tls.generate": "false"}
+    if platform == "openshift":
+        # OpenShift assigns the UID range through its SCC, and OpenShift
+        # Service Mesh labels gateways with this revision.
+        values["openshift.enabled"] = "true"
+        values["istio.revision"] = "openshift-gateway"
+    return values
+
+
 def helm_template(chart_dir: str, release_name: str, namespace: str,
-                  version: str, kube_version: str) -> list:
+                  version: str, kube_version: str, platform: str) -> list:
     """Render the Helm chart and return parsed YAML documents."""
+    sets = " ".join(f"--set {k}={v}" for k, v in helm_values(platform).items())
     cmd = (
         f"helm template {release_name} {chart_dir} "
         f"--namespace {namespace} "
         f"--kube-version {kube_version} "
         f"--version {version} "
-        f"--set openshift.enabled=true "
-        f"--set istio.revision=openshift-gateway"
+        f"{sets}"
     )
     result = run(cmd, capture_output=True)
     docs = list(yaml.safe_load_all(result.stdout))
@@ -146,7 +204,8 @@ def build_csv(template_path: str, deployment: dict, cluster_role: dict,
               sa_name: str, version: str, image: str,
               replaces: str, channels: str, default_channel: str,
               package_name: str, min_kube_version: str,
-              alm_examples: list, roles: list | None = None) -> dict:
+              alm_examples: list, created_at: str,
+              roles: list | None = None) -> dict:
     """Build the CSV by injecting Helm-rendered resources into the template."""
     with open(template_path) as f:
         csv = yaml.safe_load(f)
@@ -155,6 +214,7 @@ def build_csv(template_path: str, deployment: dict, cluster_role: dict,
 
     csv["metadata"]["name"] = f"{package_name}.v{version}"
     csv["metadata"]["annotations"]["containerImage"] = image
+    csv["metadata"]["annotations"]["createdAt"] = created_at
     alm_json = json.dumps(alm_examples, indent=2, ensure_ascii=False) + "\n"
     csv["metadata"]["annotations"]["alm-examples"] = LiteralBlockStr(alm_json)
     csv["spec"]["version"] = SemverYAML(version)
@@ -316,6 +376,18 @@ def main():
         metavar="SEMVER",
         help=f"Kubernetes version for Helm --kube-version and CSV minKubeVersion (default: {DEFAULT_MIN_KUBE_VERSION})",
     )
+    parser.add_argument(
+        "--platform",
+        choices=PLATFORMS,
+        default="kubernetes",
+        help="Target platform for the rendered bundle (default: kubernetes, for OperatorHub.io)",
+    )
+    parser.add_argument(
+        "--created-at",
+        default=None,
+        metavar="TIMESTAMP",
+        help="CSV createdAt (yyyy-mm-ddThh:mm:ssZ); defaults to SOURCE_DATE_EPOCH or now",
+    )
     default_samples = Path(__file__).resolve().parent.parent / "config/samples"
     parser.add_argument(
         "--samples-dir",
@@ -336,9 +408,12 @@ def main():
     min_kube_version = args.min_kube_version or DEFAULT_MIN_KUBE_VERSION
     kube_version = min_kube_version
 
+    created_at = resolve_created_at(args.created_at)
+
     # Render Helm chart
-    print("Rendering Helm chart...", file=sys.stderr)
-    docs = helm_template(chart_dir, args.release_name, args.namespace, version, kube_version)
+    print(f"Rendering Helm chart for {args.platform}...", file=sys.stderr)
+    docs = helm_template(chart_dir, args.release_name, args.namespace, version,
+                         kube_version, args.platform)
     print(f"  got {len(docs)} documents", file=sys.stderr)
 
     deployment = find_by_kind(docs, "Deployment")
@@ -376,6 +451,7 @@ def main():
         package_name=args.package_name,
         min_kube_version=min_kube_version,
         alm_examples=alm_examples,
+        created_at=created_at,
         roles=roles,
     )
     csv = strip_helm_labels(csv)

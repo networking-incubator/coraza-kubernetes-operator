@@ -543,6 +543,9 @@ CATALOG_FILE ?= $(CATALOG_DIR)/coraza-kubernetes-operator/catalog.yaml
 OLM_CHANNEL ?= alpha
 # Bare semver (no v). Keep in sync with DEFAULT_MIN_KUBE_VERSION in hack/generate_bundle.py.
 KUBE_VERSION ?= 1.32.0
+# Target platform for the rendered bundle: kubernetes (OperatorHub.io) or
+# openshift (redhat-openshift-ecosystem/community-operators-prod).
+BUNDLE_PLATFORM ?= kubernetes
 
 .PHONY: bundle
 bundle: helm.sync ## Generate OLM bundle from Helm chart
@@ -553,7 +556,27 @@ bundle: helm.sync ## Generate OLM bundle from Helm chart
 		--image $(CONTROLLER_MANAGER_CONTAINER_IMAGE) \
 		--channels $(OLM_CHANNEL) \
 		--default-channel $(OLM_CHANNEL) \
-		--min-kube-version $(KUBE_VERSION)
+		--min-kube-version $(KUBE_VERSION) \
+		--platform $(BUNDLE_PLATFORM)
+
+# Selectors for bundle.validate. operator-sdk takes --select-optional as a
+# single string, so a repeated flag replaces the earlier value instead of
+# adding to it: each selector needs its own invocation or it is silently
+# skipped. suite=operatorframework covers operatorhubv2, capabilities,
+# categories, alpha-deprecated-apis, good-practices and multiarch; the
+# deprecated standalone "operatorhub" validator is what the upstream OPP
+# pipeline still runs, so it is checked here too.
+BUNDLE_VALIDATE_SELECTORS ?= suite=operatorframework name=operatorhub
+
+.PHONY: bundle.validate
+bundle.validate: operator-sdk ## Validate the staged bundle against the OperatorHub.io suites
+	@[ -d "$(BUNDLE_DIR)/manifests" ] || { echo "No bundle at $(BUNDLE_DIR). Run 'make bundle' first." >&2; exit 1; }
+	@for selector in $(BUNDLE_VALIDATE_SELECTORS); do \
+		echo "==> bundle validate --select-optional $$selector"; \
+		$(OPERATOR_SDK) bundle validate $(BUNDLE_DIR) \
+			--select-optional "$$selector" \
+			--optional-values=k8s-version=$(basename $(KUBE_VERSION)) || exit 1; \
+	done
 
 .PHONY: bundle.opp
 bundle.opp: bundle ## Run OPP kiwi tests against staged bundle (needs docker, ansible, jmespath)
