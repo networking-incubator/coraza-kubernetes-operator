@@ -108,7 +108,7 @@ bundle() {
     if [ "${WASM_CRS:-0}" = "1" ]; then
       require CORAZA_RS_DIR
       require CORAZA_RS_VERSION
-      WASM_CRS_VERSION="$(git -C "$CORAZA_RS_DIR" show "$CORAZA_RS_VERSION:envoy-coraza/crs.pin" 2>/dev/null | awk 'NR==1{print $1}' || true)"
+      WASM_CRS_VERSION="$(git -C "$CORAZA_RS_DIR" show "$CORAZA_RS_VERSION:envoy-coraza/crs.pin" 2>/dev/null | sed -n '1s/[[:space:]].*//p' || true)"
       [ -n "$WASM_CRS_VERSION" ] || die "cannot read crs.pin from $CORAZA_RS_VERSION in $CORAZA_RS_DIR"
     else
       WASM_CRS_VERSION=none
@@ -138,7 +138,7 @@ verify() {
 
   local manifest="$ASSETS_DIR/plugin.manifest.yaml"
   local want got
-  want="$(awk '/^sha256:/{print $2; exit}' "$manifest")"
+  want="$(sed -n '/^sha256:/{s/^sha256:[[:space:]]*//;s/[[:space:]].*//;p;q;}' "$manifest")"
   [ -n "$want" ] || die "no sha256 in $manifest"
   got="$(sha256 "$ASSETS_DIR/plugin.wasm")"
   [ "$want" = "$got" ] || die "digest mismatch: manifest $want, $ASSETS_DIR/plugin.wasm $got"
