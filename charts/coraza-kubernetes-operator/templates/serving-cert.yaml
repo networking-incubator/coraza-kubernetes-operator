@@ -1,4 +1,11 @@
-{{- if and (not .Values.tls.existingSecret) .Values.tls.generate }}
+{{- /* The operator writes the CA under ca.crt and the volume does not remap
+keys, so a custom caName would leave --xds-ca-path pointing at a file that
+never appears. Fail here rather than install an operator that silently cannot
+render EnvoyFilters. */}}
+{{- if and .Values.tls.bootstrap (ne (.Values.tls.caName | default "ca.crt") "ca.crt") }}
+{{- fail "tls.caName must be ca.crt when tls.bootstrap=true: the operator writes the CA under that key" }}
+{{- end }}
+{{- if and (not .Values.tls.existingSecret) .Values.tls.generate (not .Values.tls.bootstrap) }}
 {{- /* The generated Secret always uses the default keys; a custom name would
 leave the listener looking for a file that does not exist. */}}
 {{- if or

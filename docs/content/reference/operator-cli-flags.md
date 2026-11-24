@@ -51,6 +51,7 @@ The operator serves Envoy Configuration Discovery Service (ECDS) streams and the
 | `--xds-cert-path` | `/etc/coraza-tls` | Directory containing the xDS serving certificate. |
 | `--xds-cert-name` | `tls.crt` | Filename of the xDS serving certificate. |
 | `--xds-key-name` | `tls.key` | Filename of the xDS serving key. |
+| `--xds-cert-secret` | (none) | Secret in `POD_NAMESPACE` holding the xDS serving certificate. When set, the operator creates it with a self-signed CA on startup if it is missing or unusable, and reuses it otherwise. Set by the chart when `tls.bootstrap=true`; leave empty when Helm or cert-manager provisions the certificate. |
 | `--xds-token-audience` | (none) | Expected TokenReview audience; empty uses the API server default audience. |
 
 ### xDS Limits

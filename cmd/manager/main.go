@@ -17,6 +17,7 @@ limitations under the License.
 package main
 
 import (
+	"context"
 	"crypto/tls"
 	"errors"
 	"flag"
@@ -78,6 +79,12 @@ var (
 	setupLog = ctrl.Log.WithName("setup")
 )
 
+// servingCertBootstrapTimeout bounds the API calls that provision the xDS
+// serving Secret. They run before the manager starts, on a client with no
+// per-request timeout, so an unreachable API server would otherwise hang
+// startup rather than fail it.
+const servingCertBootstrapTimeout = 2 * time.Minute
+
 // -----------------------------------------------------------------------------
 // Main
 // -----------------------------------------------------------------------------
@@ -120,6 +127,11 @@ func main() {
 	kubeClient, err := kubernetes.NewForConfig(mgr.GetConfig())
 	if err != nil {
 		setupLog.Error(err, "unable to create kubernetes clientset")
+		os.Exit(1)
+	}
+
+	if err := bootstrapServingCert(cfg, podNamespace); err != nil {
+		setupLog.Error(err, "unable to provision the xDS serving certificate")
 		os.Exit(1)
 	}
 
@@ -224,6 +236,7 @@ type config struct {
 	xdsCertDir       string
 	xdsCertName      string
 	xdsKeyName       string
+	xdsCertSecret    string
 	xdsLimits        xds.Limits
 
 	// Cluster rule policy, applied to RuleSet content not accepted yet.
@@ -278,6 +291,10 @@ func parseFlags() config {
 		"The name of the xDS serving certificate file")
 	flag.StringVar(&cfg.xdsKeyName, "xds-key-name", "tls.key",
 		"The name of the xDS serving key file")
+	flag.StringVar(&cfg.xdsCertSecret, "xds-cert-secret", "",
+		"The Secret in POD_NAMESPACE holding the xDS serving certificate. When set, the operator "+
+			"creates it with a self-signed CA if it is missing or unusable. Leave empty when the "+
+			"certificate is provisioned externally (Helm, cert-manager).")
 	cfg.xdsLimits = xds.DefaultLimits()
 	cfg.xdsLimits.AddFlags(flag.CommandLine)
 	addRulePolicyFlags(flag.CommandLine, &cfg)
@@ -315,6 +332,63 @@ func (cfg config) rulePolicy() (validation.RulePolicy, error) {
 		cfg.ruleMaxRequestBodyLimit, cfg.ruleResponseBodyAccess)
 }
 
+// bootstrapServingCert provisions the xDS serving Secret when --xds-cert-secret
+// names one. Installs that cannot run Helm (OLM bundles, plain manifests,
+// GitOps renderers) have nothing else to mint it, and the listener would never
+// obtain a certificate.
+//
+// It runs before the manager starts and uses an uncached client: the Secret is
+// needed before the cache is running, and all replicas converge on whichever
+// one wins the create. The deadline keeps a stalled API server from hanging
+// startup indefinitely, since this client has no per-request timeout.
+func bootstrapServingCert(cfg config, podNamespace string) error {
+	if cfg.xdsCertSecret == "" {
+		return nil
+	}
+
+	serviceName := operatorServiceName(cfg)
+	if serviceName == "" {
+		return errors.New("the operator Service name is not configured: set --operator-service-name or --operator-name")
+	}
+
+	c, err := client.New(ctrl.GetConfigOrDie(), client.Options{Scheme: scheme})
+	if err != nil {
+		return fmt.Errorf("creating the bootstrap client: %w", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), servingCertBootstrapTimeout)
+	defer cancel()
+
+	regenerated, err := xds.EnsureServingCert(ctx, c, xds.ServingCertOptions{
+		Namespace:   podNamespace,
+		Name:        cfg.xdsCertSecret,
+		ServiceName: serviceName,
+		CertName:    cfg.xdsCertName,
+		KeyName:     cfg.xdsKeyName,
+		Logger:      setupLog,
+	})
+	if err != nil {
+		return err
+	}
+	if regenerated {
+		// CASource caches the first CA it reads, and the kubelet has not
+		// projected the new Secret yet, so this process would keep publishing
+		// the superseded CA to Gateways.
+		setupLog.Info("The xDS serving certificate was replaced; restart the operator so Gateways receive the new CA",
+			"secret", cfg.xdsCertSecret)
+	}
+	return nil
+}
+
+// operatorServiceName resolves the Service the Gateways dial. The chart passes
+// the release fullname as --operator-name, which is also the Service name.
+func operatorServiceName(cfg config) string {
+	if cfg.operatorServiceName != "" {
+		return cfg.operatorServiceName
+	}
+	return cfg.operatorName
+}
+
 // buildECDSConfig derives the ECDS endpoint and asset base URL from the flags,
 // and loads the CA bundle. A missing CA is not fatal: Engine reconciliation
 // reports TLSNotConfigured instead of rendering an unverified chain. A missing
@@ -322,13 +396,7 @@ func (cfg config) rulePolicy() (validation.RulePolicy, error) {
 func buildECDSConfig(cfg config, podNamespace string, ca *xds.CASource) (controller.ECDSConfig, string, error) {
 	advertise := cfg.xdsAdvertiseAddress
 	if advertise == "" {
-		serviceName := cfg.operatorServiceName
-		if serviceName == "" {
-			// The chart passes the release fullname as --operator-name, which is
-			// also the Service name.
-			serviceName = cfg.operatorName
-		}
-		if serviceName != "" {
+		if serviceName := operatorServiceName(cfg); serviceName != "" {
 			advertise = fmt.Sprintf("%s.%s.svc.cluster.local", serviceName, podNamespace)
 		}
 	}
