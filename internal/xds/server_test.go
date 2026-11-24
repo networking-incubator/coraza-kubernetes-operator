@@ -20,8 +20,10 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
+	"fmt"
 	"io"
 	"net"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -41,6 +43,7 @@ import (
 	extensionv3 "github.com/envoyproxy/go-control-plane/envoy/service/extension/v3"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -506,11 +509,10 @@ func TestStreamNackRetryIsScopedToRejectingProxy(t *testing.T) {
 	require.NoError(t, err, "the resubscribe is served the next generation's snapshot")
 	require.Equal(t, fixture.wire("v1", 1), next.GetVersion(resource.ExtensionConfigType))
 
-	require.Eventually(t, func() bool {
-		count := 0
-		fixture.server.nacks.Range(func(_, _ any) bool { count++; return true })
-		return count == 0
-	}, time.Second, 5*time.Millisecond)
+	// The rejection counts against the rejecting proxy alone.
+	require.Equal(t, 1, fixture.record("proxy-rejecting").attempts)
+	fixture.awaitAcknowledged(t, "proxy-acking")
+	require.Zero(t, fixture.record("proxy-acking").attempts)
 	require.NoError(t, retry.Send(&discoveryv3.DiscoveryRequest{
 		ResourceNames: []string{fixture.resourceName},
 		VersionInfo:   retried.GetVersionInfo(),
@@ -532,9 +534,9 @@ func TestStreamNackRetryContinuesAfterManyRejections(t *testing.T) {
 	stream := fixture.open(t, validToken, fixture.resourceName)
 	first := recv(t, stream)
 	fixture.awaitWritten(t)
-	// A stream that already rejected this configuration many times must keep
-	// retrying: giving up strands a fail-closed proxy.
-	fixture.seedNackBudget(t, 100)
+	// A proxy that already rejected configurations many times in a row must keep
+	// being retried: giving up strands a fail-closed proxy.
+	fixture.seedRejections(t, fixture.proxyID, 100)
 
 	if err := stream.Send(&discoveryv3.DiscoveryRequest{
 		ResourceNames: []string{fixture.resourceName},
@@ -544,24 +546,27 @@ func TestStreamNackRetryContinuesAfterManyRejections(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// The retry ladder continues: the stream is reset and the generation
-	// advances for the resubscribe.
+	// The retry continues: the stream is reset and the generation advances for
+	// the resubscribe.
 	if code := recvCode(t, stream); code != codes.Unavailable {
 		t.Fatalf("code = %v, want Unavailable", code)
 	}
 	require.Eventually(t, func() bool { return fixture.generation(testNamespace+"/"+streamEngine) == 1 }, time.Second, 5*time.Millisecond)
+	require.Equal(t, 101, fixture.record(fixture.proxyID).attempts)
 }
 
-func TestStreamAckResetsNackBudget(t *testing.T) {
+// An acknowledgement ends the proxy's back-off, so a later rejection starts it
+// again, and is still retried.
+func TestStreamAckEndsTheBackoff(t *testing.T) {
 	fixture := newStreamFixture(t)
 	fixture.server.RetryDelay = 0
 	require.NoError(t, fixture.store.Replace(fixture.snapshot(t, "v1")))
 
-	// The stream has already rejected this configuration many times.
+	// The proxy has already rejected configurations many times in a row.
 	stream := fixture.open(t, validToken, fixture.resourceName)
 	first := recv(t, stream)
 	fixture.awaitWritten(t)
-	key := fixture.seedNackBudget(t, 20)
+	fixture.seedRejections(t, fixture.proxyID, 20)
 
 	if err := stream.Send(&discoveryv3.DiscoveryRequest{
 		ResourceNames: []string{fixture.resourceName},
@@ -570,12 +575,9 @@ func TestStreamAckResetsNackBudget(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-
-	// An acknowledgement clears the stream's budget, so a later rejection on
-	// the same stream is retried.
 	require.Eventually(t, func() bool {
-		_, ok := fixture.server.nacks.Load(key)
-		return !ok
+		record := fixture.record(fixture.proxyID)
+		return record.acked && record.attempts == 0
 	}, time.Second, 5*time.Millisecond)
 
 	if err := stream.Send(&discoveryv3.DiscoveryRequest{
@@ -589,6 +591,7 @@ func TestStreamAckResetsNackBudget(t *testing.T) {
 	if code := recvCode(t, stream); code != codes.Unavailable {
 		t.Fatalf("code = %v, want Unavailable", code)
 	}
+	require.Equal(t, 1, fixture.record(fixture.proxyID).attempts)
 }
 
 func TestStreamNackBeforeSubscriptionStillResubscribes(t *testing.T) {
@@ -760,10 +763,11 @@ func TestFirstNackCannotBumpAnotherEngine(t *testing.T) {
 	if code := recvCode(t, stream); code != codes.Unavailable {
 		t.Fatalf("code = %v, want Unavailable", code)
 	}
-	budgets := 0
-	fixture.server.nacks.Range(func(_, _ any) bool { budgets++; return true })
-	if budgets != 0 {
-		t.Fatal("an unauthorized NACK must not consume any retry budget")
+	fixture.server.deliveries.mu.Lock()
+	records := fixture.server.deliveries.order.Len()
+	fixture.server.deliveries.mu.Unlock()
+	if records != 0 {
+		t.Fatal("an unauthorized NACK must not write a delivery record")
 	}
 	if got := fixture.generation("victim-ns/victim-engine"); got != 0 {
 		t.Fatalf("generation = %d, want 0: an unauthorized NACK must not advance another Engine", got)
@@ -792,61 +796,49 @@ func TestNackDelayGrowsAndIsCapped(t *testing.T) {
 	}
 }
 
-func TestRecordNackLosesNoConcurrentAttempts(t *testing.T) {
-	fixture := newStreamFixture(t)
-	key := nackKey(fixture.resourceName, 1)
-	const workers = 64
-	var wg sync.WaitGroup
-	for range workers {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			fixture.server.recordNack(key, "sha256:v1")
-		}()
+// record returns a copy of the delivery record of the proxy with node ID
+// proxyID, or nil.
+func (f *streamFixture) record(proxyID string) *delivery {
+	key := proxyCacheKey(testNamespace+"/"+streamEngine, f.identity, proxyID)
+	f.server.deliveries.mu.Lock()
+	defer f.server.deliveries.mu.Unlock()
+	element, ok := f.server.deliveries.byKey[key]
+	if !ok {
+		return nil
 	}
-	wg.Wait()
-
-	raw, ok := fixture.server.nacks.Load(key)
-	require.True(t, ok)
-	require.Equal(t, workers, raw.(nackState).attempts)
+	record := *element.Value.(*delivery)
+	return &record
 }
 
-// seedNackBudget pre-loads the fixture's one subscribed stream's retry
-// accounting, the way resubscribeRejected would have tracked it, and returns
-// the stream's budget key.
-func (f *streamFixture) seedNackBudget(t *testing.T, attempts int) string {
+// awaitAcknowledged waits until the proxy with node ID proxyID has acknowledged
+// what it was last sent.
+func (f *streamFixture) awaitAcknowledged(t *testing.T, proxyID string) {
 	t.Helper()
-	var key string
-	f.server.streams.Range(func(_, value any) bool {
-		entry := value.(*serverStream)
-		if entry.session != nil && entry.resourceName == f.resourceName {
-			key = nackKey(entry.resourceName, entry.session.ID)
-			entry.mu.Lock()
-			entry.nackKey = key
-			entry.mu.Unlock()
-			f.server.nacks.Store(key, nackState{version: "sha256:v1", attempts: attempts})
-		}
-		return true
-	})
-	if key == "" {
-		t.Fatal("no subscribed stream found")
-	}
-	return key
+	require.Eventually(t, func() bool { return f.record(proxyID).acked }, 5*time.Second, 5*time.Millisecond)
 }
 
-func TestNackBudgetIsPerStream(t *testing.T) {
+// seedRejections gives the proxy with node ID proxyID, which has been sent a
+// configuration, a record of n rejections in a row.
+func (f *streamFixture) seedRejections(t *testing.T, proxyID string, n int) {
+	t.Helper()
+	require.NotNil(t, f.record(proxyID), "a rejection only counts for a proxy that was sent a configuration")
+	key := proxyCacheKey(testNamespace+"/"+streamEngine, f.identity, proxyID)
+	for range n {
+		f.server.deliveries.rejected(key, delivered{})
+	}
+}
+
+// A proxy's back-off is its own: another proxy's rejections must not stop, or
+// lengthen, its retry.
+func TestRejectionBackoffIsPerProxy(t *testing.T) {
 	fixture := newStreamFixture(t)
 	fixture.server.RetryDelay = 0
 	require.NoError(t, fixture.store.Replace(fixture.snapshot(t, "v1")))
 
-	// Stream A has already rejected the configuration many times; its
-	// accounting must not stop another stream's retry.
 	streamA := fixture.openAs(t, "proxy-a", fixture.resourceName)
 	_ = recv(t, streamA)
-	keyA := fixture.seedNackBudget(t, 100)
+	fixture.seedRejections(t, "proxy-a", 100)
 
-	// Stream B subscribes to the same resource: A's attempt count must not
-	// block B's retry.
 	streamB := fixture.openAs(t, "proxy-b", fixture.resourceName)
 	second := recv(t, streamB)
 	fixture.awaitWritten(t)
@@ -861,17 +853,8 @@ func TestNackBudgetIsPerStream(t *testing.T) {
 		t.Fatalf("code = %v, want Unavailable", code)
 	}
 	require.Eventually(t, func() bool { return fixture.generation(testNamespace+"/"+streamEngine) == 1 }, time.Second, 5*time.Millisecond)
-
-	// B's closed stream reclaims its budget entry; only A's open stream keeps
-	// its own.
-	require.Eventually(t, func() bool {
-		count := 0
-		fixture.server.nacks.Range(func(_, _ any) bool { count++; return true })
-		return count == 1
-	}, time.Second, 5*time.Millisecond)
-	if _, ok := fixture.server.nacks.Load(keyA); !ok {
-		t.Fatal("the open stream's budget entry must remain until it closes")
-	}
+	require.Equal(t, 1, fixture.record("proxy-b").attempts)
+	require.Equal(t, 100, fixture.record("proxy-a").attempts)
 }
 
 func TestStreamDoesNotSendAnEmptyResponseOnMiss(t *testing.T) {
@@ -1223,18 +1206,19 @@ func TestResubscribeRejectedReplacesThePendingRetry(t *testing.T) {
 
 	fixture.server.resubscribeRejected(entry, fixture.resourceName, "")
 	entry.mu.Lock()
+	require.NotNil(t, entry.retryTimer, "a later rejection must schedule a retry")
 	require.NotSame(t, first, entry.retryTimer, "a later rejection must schedule its own retry")
 	require.False(t, first.Stop(), "the replaced retry must not fire")
 	entry.cancelRetryLocked()
 	entry.mu.Unlock()
-	fixture.server.clearNack(entry)
 }
 
 // A retry resets the stream it was scheduled for while the stream is open, and
-// does nothing once the stream has closed.
+// does nothing once the stream has closed. The test runs the retry itself, where
+// its timer would, so that the stream is closed or open when it does.
 func TestRejectedRetryResetsOnlyAnOpenStream(t *testing.T) {
 	fixture := newStreamFixture(t)
-	fixture.server.RetryDelay = 10 * time.Millisecond
+	fixture.server.RetryDelay = time.Hour
 	open := func(id int64) (*serverStream, *StreamSession) {
 		session := fixture.streams.Register(t.Context(), fixture.resourceName, fixture.identity, validToken)
 		t.Cleanup(func() { fixture.streams.Unregister(session.ID) })
@@ -1244,12 +1228,13 @@ func TestRejectedRetryResetsOnlyAnOpenStream(t *testing.T) {
 		return entry, session
 	}
 
-	_, session := open(42)
+	opened, session := open(42)
+	fixture.server.runRejectedRetry(opened)
 	require.Eventually(t, func() bool { return context.Cause(session.Context()) == ErrResubscribe }, 5*time.Second, 5*time.Millisecond)
 
 	closed, session := open(43)
 	fixture.server.onStreamClosed(closed.streamID, nil)
-	time.Sleep(5 * fixture.server.RetryDelay)
+	fixture.server.runRejectedRetry(closed)
 	require.NoError(t, session.Context().Err(), "a closed stream must not be reset")
 }
 
@@ -1285,8 +1270,8 @@ func TestStreamParksRejections(t *testing.T) {
 			ErrorDetail:   status.New(codes.InvalidArgument, "rejected by Envoy").Proto(),
 		})
 	}
-	nacks := fixture.metrics.nacks.WithLabelValues("rejected")
-	require.Eventually(t, func() bool { return testutil.ToFloat64(nacks) == rejections }, 5*time.Second, 5*time.Millisecond)
+	// The first rejection is handled, and the others repeat it.
+	fixture.awaitRejections(t, 1, rejections-1)
 
 	expectNoResult(t, startRecv(stream))
 	fixture.server.streams.Range(func(_, value any) bool {
@@ -1298,6 +1283,7 @@ func TestStreamParksRejections(t *testing.T) {
 	})
 	require.Zero(t, fixture.watches(fixture.node(0)), "a rejection must not watch the Engine's snapshot")
 	require.Equal(t, 1, fixture.watches(parkedNode), "each rejection replaces the stream's parked watch")
+	require.True(t, fixture.retryPending(), "the stream stays parked while its retry waits")
 	require.Zero(t, testutil.ToFloat64(fixture.metrics.refusals.WithLabelValues(RefusalResponseBudget)))
 }
 
@@ -1335,8 +1321,8 @@ func TestStreamRejectionWakesOnNewContent(t *testing.T) {
 }
 
 // A proxy that reports a tag of the Engine's current content when it connects is
-// sent those bytes again, whichever process sent them first, so it keeps its
-// filter across a reconnect. Any other version gets the current tag.
+// answered with those bytes again, whichever process sent them first, so it keeps
+// its filter across a reconnect. Any other version gets the current tag.
 func TestStreamServesTheTagAProxyReports(t *testing.T) {
 	fixture := newStreamFixture(t)
 	require.NoError(t, fixture.store.Replace(fixture.snapshot(t, "v1")))
@@ -1356,12 +1342,9 @@ func TestStreamServesTheTagAProxyReports(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ctx := metadata.AppendToOutgoingContext(t.Context(), "authorization", "Bearer "+validToken)
-			stream, err := fixture.client.StreamExtensionConfigs(ctx)
-			require.NoError(t, err)
-			send(t, stream, &discoveryv3.DiscoveryRequest{
-				Node: &corev3.Node{Id: "reconnecting"}, ResourceNames: []string{fixture.resourceName}, VersionInfo: tt.version,
-			})
+			// Each case is a proxy of its own: a proxy that reconnects without
+			// acknowledging what it was sent is not sent that again.
+			stream := fixture.openClaiming(t, "reconnecting-"+tt.name, tt.version)
 			require.Equal(t, tt.want, recv(t, stream).GetVersionInfo())
 		})
 	}
@@ -1394,4 +1377,462 @@ func (f *streamFixture) renders() uint64 {
 	f.store.mu.RLock()
 	defer f.store.mu.RUnlock()
 	return f.store.engines[testNamespace+"/"+streamEngine].renders
+}
+
+// heldTags is how many tag snapshots the fixture's Engine holds.
+func (f *streamFixture) heldTags() int {
+	f.store.mu.RLock()
+	defer f.store.mu.RUnlock()
+	return len(f.store.engines[testNamespace+"/"+streamEngine].tags)
+}
+
+// openClaiming opens a stream of the proxy with node ID proxyID whose first
+// request reports version as the one the proxy last accepted.
+func (f *streamFixture) openClaiming(t *testing.T, proxyID, version string) extensionv3.ExtensionConfigDiscoveryService_StreamExtensionConfigsClient {
+	t.Helper()
+	ctx := metadata.AppendToOutgoingContext(t.Context(), "authorization", "Bearer "+validToken)
+	stream, err := f.client.StreamExtensionConfigs(ctx)
+	require.NoError(t, err)
+	send(t, stream, &discoveryv3.DiscoveryRequest{
+		Node: &corev3.Node{Id: proxyID}, ResourceNames: []string{f.resourceName}, VersionInfo: version,
+	})
+	return stream
+}
+
+// A proxy that connects again without having acknowledged what it was sent is
+// not sent that again, whether or not its rejection reached the server: Envoy
+// accepts bytes it rejected, when it is sent them again, without building them.
+// A proxy that acknowledged is sent the tag it reports.
+func TestStreamNeverResendsAnUnacknowledgedTag(t *testing.T) {
+	fixture := newStreamFixture(t)
+	require.NoError(t, fixture.store.Replace(fixture.snapshot(t, "v1")))
+
+	for gen := range uint64(3) {
+		stream := fixture.openAs(t, "proxy", fixture.resourceName)
+		require.Equal(t, fixture.wire("v1", gen), recv(t, stream).GetVersionInfo(), "connection %d", gen)
+	}
+
+	accepting := fixture.openClaiming(t, "accepting", "")
+	accepted := recv(t, accepting)
+	require.Equal(t, fixture.wire("v1", 2), accepted.GetVersionInfo(), "a proxy that was sent nothing is sent the current tag")
+	send(t, accepting, &discoveryv3.DiscoveryRequest{
+		ResourceNames: []string{fixture.resourceName}, VersionInfo: accepted.GetVersionInfo(), ResponseNonce: accepted.GetNonce(),
+	})
+	fixture.awaitAcknowledged(t, "accepting")
+	again := fixture.openClaiming(t, "accepting", accepted.GetVersionInfo())
+	require.Equal(t, fixture.wire("v1", 2), recv(t, again).GetVersionInfo())
+}
+
+// A rejection replayed on a new stream names no response; the tag the proxy was
+// last sent is the one it rejected.
+func TestStreamReplayedRejectionNamesTheTagItWasSent(t *testing.T) {
+	fixture := newStreamFixture(t)
+	fixture.server.RetryDelay = time.Hour
+	require.NoError(t, fixture.store.Replace(fixture.snapshot(t, "v1")))
+	first := fixture.openAs(t, "proxy", fixture.resourceName)
+	require.Equal(t, fixture.wire("v1", 0), recv(t, first).GetVersionInfo())
+	fixture.awaitWritten(t)
+
+	ctx := metadata.AppendToOutgoingContext(t.Context(), "authorization", "Bearer "+validToken)
+	replay, err := fixture.client.StreamExtensionConfigs(ctx)
+	require.NoError(t, err)
+	send(t, replay, &discoveryv3.DiscoveryRequest{
+		Node: &corev3.Node{Id: "proxy"}, ResourceNames: []string{fixture.resourceName},
+		ErrorDetail: status.New(codes.InvalidArgument, "rejected by Envoy").Proto(),
+	})
+	require.Eventually(t, func() bool { return fixture.generation(testNamespace+"/"+streamEngine) == 1 }, 5*time.Second, 5*time.Millisecond)
+	require.Equal(t, 1, fixture.record("proxy").attempts)
+}
+
+// A rejection of content the Engine no longer has does not wait out the retry
+// delay: the proxy is sent the new content at once.
+func TestStreamRejectionOfOldContentIsRetriedAtOnce(t *testing.T) {
+	fixture := newStreamFixture(t)
+	fixture.server.RetryDelay = time.Hour
+	require.NoError(t, fixture.store.Replace(fixture.snapshot(t, "v1")))
+	stream := fixture.open(t, validToken, fixture.resourceName)
+	first := recv(t, stream)
+	fixture.awaitWritten(t)
+	require.NoError(t, fixture.store.Replace(fixture.snapshot(t, "v2")))
+
+	results := startRecv(stream)
+	send(t, stream, &discoveryv3.DiscoveryRequest{
+		ResourceNames: []string{fixture.resourceName},
+		ResponseNonce: first.GetNonce(),
+		ErrorDetail:   status.New(codes.InvalidArgument, "rejected by Envoy").Proto(),
+	})
+	select {
+	case result := <-results:
+		require.Equal(t, codes.Unavailable, status.Code(result.err))
+	case <-time.After(5 * time.Second):
+		t.Fatal("the stream was not reset although the Engine has new content")
+	}
+	require.Equal(t, fixture.wire("v2", 1), recv(t, fixture.open(t, validToken, fixture.resourceName)).GetVersionInfo())
+}
+
+// A rejection of a response other than the last one sent on the stream is stale:
+// the proxy has been sent other bytes since, which neither a reset of the stream
+// nor a longer back-off answers. go-control-plane skips such a request too.
+func TestStreamIgnoresARejectionOfAnEarlierResponse(t *testing.T) {
+	fixture := newStreamFixture(t)
+	fixture.server.RetryDelay = time.Hour
+	require.NoError(t, fixture.store.Replace(fixture.snapshotWithContent(t, "v1")))
+	stream := fixture.open(t, validToken, fixture.resourceName)
+	first := recv(t, stream)
+	send(t, stream, &discoveryv3.DiscoveryRequest{
+		ResourceNames: []string{fixture.resourceName}, VersionInfo: first.GetVersionInfo(), ResponseNonce: first.GetNonce(),
+	})
+	fixture.awaitAcknowledged(t, fixture.proxyID)
+	require.NoError(t, fixture.store.Replace(fixture.snapshotWithContent(t, "v2")))
+	second := recv(t, stream)
+	require.NotEqual(t, first.GetNonce(), second.GetNonce())
+
+	// The rejection of the first response arrives after the second was pushed.
+	// Requests are handled in order: once the acknowledgement of the second has
+	// been, the rejection has.
+	send(t, stream, rejectionRequest(fixture.resourceName, first.GetNonce()))
+	send(t, stream, &discoveryv3.DiscoveryRequest{
+		ResourceNames: []string{fixture.resourceName}, VersionInfo: second.GetVersionInfo(), ResponseNonce: second.GetNonce(),
+	})
+	fixture.awaitAcknowledged(t, fixture.proxyID)
+	fixture.awaitRejections(t, 0, 1)
+	require.False(t, fixture.retryPending(), "the stream is not reset for a rejection it has moved past")
+	require.Zero(t, fixture.record(fixture.proxyID).attempts, "the back-off is not lengthened by it")
+	require.Zero(t, fixture.generation(testNamespace+"/"+streamEngine), "no tag is retired for it")
+
+	// The stream still receives new content.
+	require.NoError(t, fixture.store.Replace(fixture.snapshotWithContent(t, "v3")))
+	require.Equal(t, fixture.wire("v3", 0), recv(t, stream).GetVersionInfo())
+}
+
+// rejectionRequest is a proxy's rejection of the response with nonce.
+func rejectionRequest(resourceName, nonce string) *discoveryv3.DiscoveryRequest {
+	return &discoveryv3.DiscoveryRequest{
+		ResourceNames: []string{resourceName},
+		ResponseNonce: nonce,
+		ErrorDetail:   status.New(codes.InvalidArgument, "rejected by Envoy").Proto(),
+	}
+}
+
+// awaitRejections waits until the server has handled rejected rejections that were
+// not ignored, and ignored that were. Requests are handled in order, so the count
+// of the last tells when the ones before it have been.
+func (f *streamFixture) awaitRejections(t *testing.T, rejected, ignored int) {
+	t.Helper()
+	counted := func(reason string) float64 { return testutil.ToFloat64(f.metrics.nacks.WithLabelValues(reason)) }
+	require.Eventually(t, func() bool {
+		return counted("rejected") == float64(rejected) && counted("ignored") == float64(ignored)
+	}, 60*time.Second, 5*time.Millisecond, "%d rejections handled and %d ignored", rejected, ignored)
+}
+
+// A proxy that repeats a rejection is answered once: the retry that waits
+// answers the rest, so a stream cannot make the operator count, log and
+// reschedule it again and again, however many it sends.
+func TestStreamIgnoresARepeatedRejection(t *testing.T) {
+	fixture := newStreamFixture(t)
+	var logs logLines
+	fixture.server.Logger = logs.logger()
+	fixture.server.RetryDelay = time.Hour
+	require.NoError(t, fixture.store.Replace(fixture.snapshot(t, "v1")))
+	stream := fixture.open(t, validToken, fixture.resourceName)
+	first := recv(t, stream)
+	fixture.awaitWritten(t)
+
+	const rejections = 20000
+	for range rejections {
+		send(t, stream, rejectionRequest(fixture.resourceName, first.GetNonce()))
+	}
+	fixture.awaitRejections(t, 1, rejections-1)
+
+	require.Len(t, logs.with("resubscribing proxy"), 1, "one rejection is logged")
+	require.Contains(t, logs.with("resubscribing proxy")[0], `"proxy"="`+fixture.proxyID+`"`)
+	require.Equal(t, 1, fixture.record(fixture.proxyID).attempts, "counted")
+	require.Equal(t, uint64(1), fixture.generation(testNamespace+"/"+streamEngine), "and retired")
+	require.True(t, fixture.retryPending())
+
+	send(t, stream, &discoveryv3.DiscoveryRequest{
+		ResourceNames: []string{fixture.resourceName}, VersionInfo: first.GetVersionInfo(), ResponseNonce: first.GetNonce(),
+	})
+	fixture.awaitAcknowledged(t, fixture.proxyID)
+	require.Len(t, logs.with("accepted by proxy"), 1)
+	require.Contains(t, logs.with("accepted by proxy")[0], `"proxy"="`+fixture.proxyID+`"`)
+}
+
+// A stream that was sent no response has none for a rejection to name, whatever
+// nonce it carries: changing the nonce does not make a rejection new. The first
+// is, as the one replayed from an earlier stream is, and so is the rejection of a
+// response sent later, even when the nonce it carries was guessed.
+func TestStreamIgnoresRejectionsWithOtherNoncesBeforeAnyResponse(t *testing.T) {
+	fixture := newStreamFixture(t)
+	var logs logLines
+	fixture.server.Logger = logs.logger()
+	fixture.server.RetryDelay = time.Hour
+	require.NoError(t, fixture.store.Replace(fixture.snapshot(t, "v1")))
+	stream, err := fixture.client.StreamExtensionConfigs(metadata.AppendToOutgoingContext(t.Context(), "authorization", "Bearer "+validToken))
+	require.NoError(t, err)
+
+	// The first nonce go-control-plane gives a stream is "1".
+	const rejections = 20000
+	first := rejectionRequest(fixture.resourceName, "1")
+	first.Node = &corev3.Node{Id: fixture.proxyID}
+	send(t, stream, first)
+	for i := 1; i < rejections; i++ {
+		send(t, stream, rejectionRequest(fixture.resourceName, strconv.Itoa(i)))
+	}
+	fixture.awaitRejections(t, 1, rejections-1)
+	require.Len(t, logs.with("resubscribing proxy"), 1, "one rejection is logged")
+	require.True(t, fixture.retryPending())
+
+	// The response that is sent next is rejected like any other.
+	send(t, stream, &discoveryv3.DiscoveryRequest{ResourceNames: []string{fixture.resourceName}})
+	response := recv(t, stream)
+	require.Equal(t, "1", response.GetNonce())
+	send(t, stream, rejectionRequest(fixture.resourceName, response.GetNonce()))
+	fixture.awaitRejections(t, 2, rejections-1)
+	require.Len(t, logs.with("resubscribing proxy"), 2)
+}
+
+// ignoresRejection tells a rejection the stream has already answered, or that
+// answers no response it sent, from one that is new.
+func TestIgnoresRejection(t *testing.T) {
+	tests := []struct {
+		name        string
+		lastNonce   string // of the last response sent on the stream
+		retryWaits  bool
+		nackedNonce string // the last nonce when the retry was armed
+		nonce       string // of the rejection
+		want        bool
+	}{
+		{name: "a rejection of the last response", lastNonce: "2", nonce: "2"},
+		{name: "a rejection of an earlier response", lastNonce: "2", nonce: "1", want: true},
+		{name: "a rejection with no nonce after a response was sent", lastNonce: "2", want: true},
+		{name: "a rejection replayed on a new stream", nonce: ""},
+		{name: "a rejection of the last response again while its retry waits", lastNonce: "2", retryWaits: true, nackedNonce: "2", nonce: "2", want: true},
+		{name: "a rejection of a newer response while a retry waits", lastNonce: "3", retryWaits: true, nackedNonce: "2", nonce: "3"},
+		{name: "a rejection of the first response while a replayed rejection's retry waits", lastNonce: "1", retryWaits: true, nonce: "1"},
+		{name: "a rejection replayed again while its retry waits", retryWaits: true, want: true},
+		{name: "a rejection with another nonce on a stream sent no response, while a retry waits", retryWaits: true, nonce: "n1", want: true},
+		{name: "a rejection with a nonce on a stream sent no response, with no retry waiting", nonce: "n1"},
+		{name: "a rejection of the last response whose retry has run", lastNonce: "2", nackedNonce: "2", nonce: "2"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			entry := &serverStream{lastNonce: tt.lastNonce, nackedNonce: tt.nackedNonce}
+			if tt.retryWaits {
+				entry.retryTimer = time.NewTimer(time.Hour)
+				defer entry.retryTimer.Stop()
+			}
+			require.Equal(t, tt.want, entry.ignoresRejection(rejectionRequest("", tt.nonce)))
+		})
+	}
+}
+
+// A rejection replayed on a new stream names no response; the proxy rejected what
+// it was last sent, and when the Engine has other content since, the proxy is
+// sent it at once rather than after the back-off.
+func TestStreamReplayedRejectionOfOldContentIsRetriedAtOnce(t *testing.T) {
+	fixture := newStreamFixture(t)
+	fixture.server.RetryDelay = time.Hour
+	require.NoError(t, fixture.store.Replace(fixture.snapshot(t, "v1")))
+	first := fixture.openAs(t, "proxy", fixture.resourceName)
+	require.Equal(t, fixture.wire("v1", 0), recv(t, first).GetVersionInfo())
+	fixture.awaitWritten(t)
+	require.NoError(t, fixture.store.Replace(fixture.snapshot(t, "v2")))
+
+	ctx := metadata.AppendToOutgoingContext(t.Context(), "authorization", "Bearer "+validToken)
+	replay, err := fixture.client.StreamExtensionConfigs(ctx)
+	require.NoError(t, err)
+	send(t, replay, &discoveryv3.DiscoveryRequest{
+		Node: &corev3.Node{Id: "proxy"}, ResourceNames: []string{fixture.resourceName},
+		ErrorDetail: status.New(codes.InvalidArgument, "rejected by Envoy").Proto(),
+	})
+	select {
+	case result := <-startRecv(replay):
+		require.Equal(t, codes.Unavailable, status.Code(result.err))
+	case <-time.After(5 * time.Second):
+		t.Fatal("the stream was not reset although the Engine has new content")
+	}
+	require.Zero(t, fixture.generation(testNamespace+"/"+streamEngine), "bytes of content the Engine has left are not retired")
+}
+
+// A stale rejection after an acknowledgement is ignored without parking the stream:
+// the watch go-control-plane made for the acknowledgement does not know the nonce it
+// would skip the request by, and would be replaced by a parked one that nothing
+// resets, which leaves the stream without updates until it ends.
+func TestStreamKeepsItsWatchForAStaleRejectionAfterAnAcknowledgement(t *testing.T) {
+	fixture := newStreamFixture(t)
+	fixture.server.RetryDelay = time.Hour
+	require.NoError(t, fixture.store.Replace(fixture.snapshotWithContent(t, "v1")))
+	stream := fixture.open(t, validToken, fixture.resourceName)
+	first := recv(t, stream)
+	send(t, stream, &discoveryv3.DiscoveryRequest{
+		ResourceNames: []string{fixture.resourceName}, VersionInfo: first.GetVersionInfo(), ResponseNonce: first.GetNonce(),
+	})
+	fixture.awaitAcknowledged(t, fixture.proxyID)
+
+	send(t, stream, rejectionRequest(fixture.resourceName, "an earlier response"))
+	fixture.awaitRejections(t, 0, 1)
+	require.False(t, fixture.retryPending())
+	require.Equal(t, 1, fixture.watches(fixture.node(0)), "the stream still watches its snapshot")
+	require.Zero(t, fixture.watches(parkedNode), "and is not parked")
+
+	require.NoError(t, fixture.store.Replace(fixture.snapshotWithContent(t, "v2")))
+	require.Equal(t, fixture.wire("v2", 0), expectResult(t, startRecv(stream)).GetVersionInfo())
+}
+
+// The record of a proxy that was sent a tag and did not acknowledge it can be
+// evicted by another proxy's response, which advances the Engine, between the
+// proxy's lease and the check of its record. The check then finds nothing, and the
+// tag that was advanced past is the one the proxy may have rejected: it is not
+// served, and the lease is given back for the Engine's current tag.
+func TestLeaseForDoesNotServeATagTheEngineWasAdvancedPastMeanwhile(t *testing.T) {
+	fixture := newStreamFixture(t)
+	require.NoError(t, fixture.store.Replace(fixture.snapshot(t, "v1")))
+	engineKey := testNamespace + "/" + streamEngine
+	rejected := tag{epoch: fixture.store.epoch}
+	entry := &serverStream{engineKey: engineKey, proxyKey: "rejecting-proxy"}
+	records := fixture.server.deliveries
+	records.sent(entry.proxyKey, engineKey, "sha256:v1", rejected)
+
+	// leaseFor leases and then reads the records, which the test holds.
+	records.mu.Lock()
+	leased := make(chan tagLease, 1)
+	go func() {
+		lease, err := fixture.server.leaseFor(entry, "")
+		assert.NoError(t, err)
+		leased <- lease
+	}()
+	require.Eventually(t, func() bool { return fixture.heldTags() == 1 }, 5*time.Second, time.Millisecond)
+
+	// Another proxy's response drops the record, and the Engine moves on.
+	records.order.Remove(records.byKey[entry.proxyKey])
+	delete(records.byKey, entry.proxyKey)
+	require.True(t, fixture.store.Advance(engineKey, rejected))
+	records.mu.Unlock()
+
+	select {
+	case lease := <-leased:
+		require.Equal(t, tag{epoch: fixture.store.epoch, gen: 1}, lease.tag, "the tag the proxy may have rejected was not served")
+	case <-time.After(5 * time.Second):
+		t.Fatal("leaseFor did not return")
+	}
+	require.Equal(t, 1, fixture.heldTags(), "the lease on the tag that was advanced past was given back")
+}
+
+// A publication wakes the streams that wait on a rejection of other content. A
+// stream that rejected the content being published, which it can receive and
+// reject before the notice of its publication runs, keeps the delay its module
+// fetch needs.
+func TestWakeRejectedSparesAStreamThatRejectedTheContentPublished(t *testing.T) {
+	fixture := newStreamFixture(t)
+	engineKey := testNamespace + "/" + streamEngine
+	require.NoError(t, fixture.store.Replace(fixture.snapshotWithContent(t, "v2")))
+	woken := make(chan string, 2)
+	wait := func(id int64, version string) {
+		entry := &serverStream{streamID: id, retryEngine: engineKey, retryVersion: version}
+		entry.retryTimer = time.AfterFunc(time.Hour, func() { woken <- version })
+		t.Cleanup(func() { entry.retryTimer.Stop() })
+		fixture.server.streams.Store(id, entry)
+	}
+	wait(1, "sha256:v1")
+	wait(2, "sha256:v2")
+
+	fixture.server.wakeRejected(engineKey)
+	select {
+	case version := <-woken:
+		require.Equal(t, "sha256:v1", version, "the stream that rejected the earlier content is woken")
+	case <-time.After(5 * time.Second):
+		t.Fatal("the stream that rejected the earlier content was not woken")
+	}
+	select {
+	case version := <-woken:
+		t.Fatalf("the stream that rejected %s was woken", version)
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+// Content published while a rejection's retry is being scheduled is not missed:
+// either the retry was already waiting when the content arrived, and the content
+// ended its wait, or the scheduling saw the content. Either way the proxy does not
+// wait out the back-off.
+func TestResubscribeRejectedSeesContentPublishedWhileItSchedules(t *testing.T) {
+	fixture := newStreamFixture(t)
+	fixture.server.RetryDelay = time.Hour
+	engineKey := testNamespace + "/" + streamEngine
+	current := "v0"
+	require.NoError(t, fixture.store.Replace(fixture.snapshotWithContent(t, current)))
+	for i := range 300 {
+		proxyID := fmt.Sprintf("proxy-%d", i)
+		session := fixture.streams.Register(t.Context(), fixture.resourceName, fixture.identity, validToken)
+		entry := &serverStream{streamID: int64(i), session: session, identity: fixture.identity, proxyID: proxyID}
+		fixture.server.streams.Store(entry.streamID, entry)
+		fixture.server.deliveries.sent(proxyCacheKey(engineKey, fixture.identity, proxyID), engineKey, "sha256:"+current, tag{epoch: fixture.store.epoch})
+
+		next := fmt.Sprintf("v%d", i+1)
+		snapshot := fixture.snapshotWithContent(t, next)
+		published := make(chan struct{})
+		go func() {
+			defer close(published)
+			assert.NoError(t, fixture.store.Replace(snapshot))
+		}()
+		fixture.server.resubscribeRejected(entry, fixture.resourceName, "")
+		<-published
+		current = next
+
+		require.Eventually(t, func() bool { return context.Cause(session.Context()) == ErrResubscribe }, 5*time.Second, time.Millisecond, "proxy %d waited out the back-off", i)
+		fixture.server.streams.Delete(entry.streamID)
+		fixture.streams.Unregister(session.ID)
+	}
+}
+
+// Only a response writes a delivery record. Streams that send nothing but
+// rejections, each under a node ID of its own, fill no record table and so evict
+// no proxy's record: a proxy still has the tag it was sent on its record, and the
+// Engine does not move on for the records that would have been dropped.
+func TestStreamRejectionsUnderNewNodeIDsEvictNoRecords(t *testing.T) {
+	limits := DefaultLimits()
+	limits.StreamMaxLifetime = time.Hour
+	limits.MaxStreams = 16
+	fixture := newStreamFixtureWithLimits(t, limits)
+	fixture.server.RetryDelay = time.Hour
+	require.NoError(t, fixture.store.Replace(fixture.snapshot(t, "v1")))
+	engineKey := testNamespace + "/" + streamEngine
+	held := tag{epoch: fixture.store.epoch}
+	fixture.server.deliveries.sent("victim", engineKey, "sha256:v1", held)
+
+	nacks := fixture.metrics.nacks.WithLabelValues("rejected")
+	for i := range recordsPerStream*limits.MaxStreams + 1 {
+		cancel, _ := fixture.openRequest(t, &discoveryv3.DiscoveryRequest{
+			Node:          &corev3.Node{Id: fmt.Sprintf("churn-%d", i)},
+			ResourceNames: []string{fixture.resourceName},
+			ErrorDetail:   status.New(codes.InvalidArgument, "rejected by Envoy").Proto(),
+		})
+		require.Eventually(t, func() bool { return testutil.ToFloat64(nacks) == float64(i+1) }, 5*time.Second, time.Millisecond)
+		cancel()
+	}
+
+	require.True(t, fixture.server.deliveries.unacknowledged("victim", held), "the proxy's record is kept")
+	fixture.server.deliveries.mu.Lock()
+	records := fixture.server.deliveries.order.Len()
+	fixture.server.deliveries.mu.Unlock()
+	require.Equal(t, 1, records, "the rejections wrote no record")
+	require.Zero(t, fixture.generation(engineKey), "no record was dropped, so the Engine did not move on")
+	require.Zero(t, testutil.ToFloat64(fixture.metrics.refusals.WithLabelValues(RefusalResponseBudget)))
+}
+
+// Proxies that report no node ID are told apart by the pod their token is bound
+// to, so one's acknowledgement is not another's.
+func TestStreamProxiesWithoutNodeIDsAreTold(t *testing.T) {
+	fixture := newStreamFixture(t)
+	require.NoError(t, fixture.store.Replace(fixture.snapshot(t, "v1")))
+	for _, pod := range []string{"pod-a", "pod-b"} {
+		cancel, recvNext := fixture.openRequestAs(t, podToken(pod), &discoveryv3.DiscoveryRequest{ResourceNames: []string{fixture.resourceName}})
+		defer cancel()
+		_, err := recvNext()
+		require.NoError(t, err)
+	}
+
+	fixture.server.deliveries.mu.Lock()
+	defer fixture.server.deliveries.mu.Unlock()
+	require.Equal(t, 2, fixture.server.deliveries.order.Len())
 }

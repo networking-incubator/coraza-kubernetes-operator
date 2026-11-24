@@ -70,19 +70,6 @@ const (
 // published for it, so the cache never answers a request that names it.
 const parkedNode = "\x00parked"
 
-// nackState tracks retries for one stream's current version.
-type nackState struct {
-	version  string
-	attempts int
-}
-
-// nackKey scopes a retry budget to one stream. Every replica of a Gateway
-// subscribes to the same resource name, so a budget keyed by resource alone
-// lets one replica's exhausted budget block every other replica's retries.
-func nackKey(resourceName string, sessionID uint64) string {
-	return fmt.Sprintf("%s/%d", resourceName, sessionID)
-}
-
 // engineKeyFor returns the key of the Engine a resource name belongs to, or an
 // empty string while no authorization names one.
 func (s *Server) engineKeyFor(entry *serverStream, resourceName string) string {
@@ -136,6 +123,8 @@ type serverStream struct {
 	resourceName string
 	engineKey    string
 	proxyID      string
+	// proxyKey keys the proxy's delivery record; it is set once engineKey is.
+	proxyKey string
 	// lease is the tag snapshot the stream is served from.
 	lease *tagLease
 	// ackedVersion is the version the proxy last acknowledged on this stream.
@@ -144,15 +133,18 @@ type serverStream struct {
 	mu          sync.Mutex
 	lastVersion string
 	lastNonce   string
-	nackKey     string
 	requested   atomic.Bool
 	authTimer   *time.Timer
 	// retryTimer runs the retry of a rejected configuration after its delay,
-	// and retryEngine is the Engine it waits on; the timer is nil when no
-	// retry waits.
-	retryTimer  *time.Timer
-	retryEngine string
-	closed      bool
+	// retryEngine is the Engine it waits on, retryVersion the content version
+	// whose rejection it answers, and nackedNonce the nonce of the last response
+	// sent when it was armed, empty if none was; the timer is nil when no retry
+	// waits.
+	retryTimer   *time.Timer
+	retryEngine  string
+	retryVersion string
+	nackedNonce  string
+	closed       bool
 }
 
 // Server serves ECDS with go-control-plane's SnapshotCache and stream handler.
@@ -176,9 +168,10 @@ type Server struct {
 
 	srv xdsserver.Server
 
-	streams   sync.Map // int64 -> *serverStream
-	nacks     sync.Map // nackKey(resource, session) -> nackState
-	responses *responseBudget
+	streams sync.Map // int64 -> *serverStream
+	// deliveries records what each proxy was last sent and acknowledged.
+	deliveries *deliveries
+	responses  *responseBudget
 	// authSlots holds one token per request waiting for its token review.
 	authSlots chan struct{}
 	// permits holds one token per token review for a new stream in
@@ -211,6 +204,7 @@ func NewServer(store *SnapshotStore, auth *Authenticator, authz *AuthzIndex, str
 		Logger:       logr.Discard(),
 		RetryDelay:   2 * time.Second,
 		authDeadline: authenticationDeadline,
+		deliveries:   newDeliveries(store, recordsPerStream*limits.MaxStreams),
 		responses:    newResponseBudget(),
 		authSlots:    make(chan struct{}, max(1, limits.MaxStreams/authenticationShare)),
 		permits:      make(chan struct{}, max(1, limits.MaxStreams/authenticationShare)),
@@ -567,6 +561,11 @@ func (s *Server) onStreamRequest(streamID int64, req *discoveryv3.DiscoveryReque
 	pinRequestNode(entry, req)
 
 	if req.GetErrorDetail() != nil {
+		if entry.ignoresRejection(req) {
+			s.Metrics.Nack("ignored")
+			entry.keepWatch(req)
+			return nil
+		}
 		s.Metrics.Nack("rejected")
 		// A proxy that rejects a configuration because the remote module is not
 		// cached yet builds only bytes it has not received, and only when it
@@ -585,15 +584,14 @@ func (s *Server) onStreamRequest(streamID int64, req *discoveryv3.DiscoveryReque
 		}
 		// The cache answers a request whose version differs from its snapshot's
 		// with the full resource, and Envoy accepts the bytes it just rejected
-		// without building them. Park the rejection under a node the cache
-		// holds no snapshot for: it answers nothing, so a rejection spends none
-		// of the response budget, and the retry resets the stream.
+		// without building them. The request stays parked under the node no
+		// snapshot answers, so a rejection spends none of the response budget,
+		// and the retry resets the stream.
 		req.ResourceNames = []string{rejected}
-		req.Node.Id = parkedNode
 		// A NACK's version_info is the last version the proxy ACCEPTED, not the
-		// version it rejected. Prefer the last response on this stream and fall
-		// back to the currently published snapshot.
-		s.resubscribeRejected(entry, rejected, s.rejectedVersion(entry, req))
+		// version it rejected: the response nonce names the response on this
+		// stream, and a rejection replayed on a new stream names none.
+		s.resubscribeRejected(entry, rejected, entry.answered(req))
 		return nil
 	}
 
@@ -644,11 +642,14 @@ func (s *Server) onStreamRequest(streamID int64, req *discoveryv3.DiscoveryReque
 		s.Metrics.Ack()
 		// A pending retry is left to run: only stream close or a newer
 		// rejection replaces it.
-		s.clearNack(entry)
+		if version, acked, ok := parseWireVersion(entry.answered(req)); ok {
+			s.deliveries.acknowledged(entry.proxyKey, delivered{version: version, tag: acked})
+		}
 		// A proxy may repeat its acknowledgement; log each version once.
 		if req.GetVersionInfo() != entry.ackedVersion {
 			entry.ackedVersion = req.GetVersionInfo()
-			s.Logger.Info("ECDS configuration accepted by proxy", "resource", entry.resourceName, "version", req.GetVersionInfo())
+			s.Logger.Info("ECDS configuration accepted by proxy",
+				"resource", entry.resourceName, "proxy", entry.proxyID, "version", req.GetVersionInfo())
 		}
 	}
 	req.Node.Id = s.watchNode(entry, entry.engineKey, req.GetVersionInfo())
@@ -775,7 +776,8 @@ func pinRequestNode(entry *serverStream, req *discoveryv3.DiscoveryRequest) {
 		entry.proxyID = truncateUTF8(id, maxNodeIDBytes)
 	}
 	if entry.proxyID == "" {
-		entry.proxyID = entry.identity.Key() + "/" + entry.identity.UID
+		// shortcut: clients that report no Node.Id are told apart by the pod their token is bound to, and share a record by identity when it is not; require Node.Id to isolate them.
+		entry.proxyID = entry.identity.Key() + "/" + entry.identity.UID + "/" + entry.identity.PodUID
 	}
 	if req.Node == nil {
 		req.Node = &corev3.Node{}
@@ -799,13 +801,38 @@ func (s *Server) watchNode(entry *serverStream, engineKey, claim string) string 
 		entry.lease = nil
 	}
 	entry.engineKey = engineKey
-	lease, err := s.Store.Acquire(engineKey, claim)
+	entry.proxyKey = proxyCacheKey(engineKey, entry.identity, entry.proxyID)
+	lease, err := s.leaseFor(entry, claim)
 	if err != nil {
 		s.Logger.Error(err, "acquire snapshot", "engine", engineKey)
 		return parkedNode
 	}
 	entry.lease = &lease
 	return lease.node()
+}
+
+// leaseFor holds the tag snapshot the proxy is sent, which is never a tag the
+// proxy was sent and did not acknowledge: Envoy accepts bytes it rejected,
+// when it is sent them again, without building them, and a rejection may never
+// have reached this process. That tag is retired and the proxy gets the next.
+// A tag the proxy reported having accepted, and the Engine serves, is its own
+// word that it built it. Another proxy's response can evict this proxy's record,
+// which advances the Engine in the same step, between the lease and the check of
+// the record, which then finds nothing: the tag must still be the Engine's
+// current one afterwards.
+func (s *Server) leaseFor(entry *serverStream, claim string) (tagLease, error) {
+	for {
+		lease, err := s.Store.Acquire(entry.engineKey, claim)
+		if err != nil || lease.claimed {
+			return lease, err
+		}
+		if !s.deliveries.unacknowledged(entry.proxyKey, lease.tag) && s.Store.isCurrent(entry.engineKey, lease.tag) {
+			return lease, nil
+		}
+		s.Store.Release(lease)
+		s.Store.Advance(entry.engineKey, lease.tag)
+		claim = ""
+	}
 }
 
 // rejectedResourceName returns the resource a NACK refers to. Envoy may send
@@ -834,31 +861,30 @@ func (s *Server) rejectedResourceName(entry *serverStream, req *discoveryv3.Disc
 // completed. A rejection replaces a retry that still waits: the proxy has
 // rejected newer bytes since, and nothing else would retry them.
 func (s *Server) resubscribeRejected(entry *serverStream, resourceName, rejectedVersion string) {
-	if resourceName == "" || s.Store == nil || entry.session == nil {
+	if entry.session == nil {
 		return
 	}
 	engineKey := s.engineKeyFor(entry, resourceName)
 	if engineKey == "" {
 		return
 	}
-	// Envoy accepts the bytes it rejected, when it is sent them again, without
-	// building them: the next generation gives the proxy other bytes. A
-	// rejection replayed on a new stream names no response, so no tag.
-	version, rejected, tagged := parseWireVersion(rejectedVersion)
-	if tagged {
-		s.Store.Advance(engineKey, rejected)
-	} else {
-		version = rejectedVersion
-	}
+	entry.proxyKey = proxyCacheKey(engineKey, entry.identity, entry.proxyID)
 
-	// The budget is per stream: replicas of a Gateway must not spend each
-	// other's attempts. Giving up is not an option: a stranded pod stays
-	// fail-closed forever, and the entry is reclaimed on ACK and stream close.
-	key := nackKey(resourceName, entry.session.ID)
-	s.trackNack(entry, key)
-	state := s.recordNack(key, version)
+	// Giving up is not an option: a stranded pod stays fail-closed forever. The
+	// delay grows with the proxy's rejections in a row, across its streams, and
+	// ends with its next acknowledgement or other content than it rejected.
+	// The rejection names the response it answers. One replayed on a new stream
+	// names none: the proxy rejected what it was last sent.
+	version, t, _ := parseWireVersion(rejectedVersion)
+	attempts, rejected := s.deliveries.rejected(entry.proxyKey, delivered{version: version, tag: t})
+	// Envoy accepts the bytes it rejected, when it is sent them again, without
+	// building them: the next generation gives the proxy other bytes. Bytes of
+	// content the Engine has left are not sent again, and burn no generation.
+	if current, ok := s.Store.Get(engineKey); ok && current.Version == rejected.version {
+		s.Store.Advance(engineKey, rejected.tag)
+	}
 	s.Logger.Info("resubscribing proxy after rejected configuration",
-		"resource", resourceName, "version", rejectedVersion, "rejections", state.attempts)
+		"resource", resourceName, "proxy", entry.proxyID, "version", rejectedVersion, "rejections", attempts)
 
 	entry.mu.Lock()
 	defer entry.mu.Unlock()
@@ -866,35 +892,76 @@ func (s *Server) resubscribeRejected(entry *serverStream, resourceName, rejected
 		return
 	}
 	entry.cancelRetryLocked()
-	entry.retryEngine = engineKey
-	entry.retryTimer = time.AfterFunc(nackDelay(s.RetryDelay, state.attempts), func() { s.runRejectedRetry(entry) })
+	entry.retryEngine, entry.retryVersion, entry.nackedNonce = engineKey, rejected.version, entry.lastNonce
+	entry.retryTimer = time.AfterFunc(nackDelay(s.RetryDelay, attempts), func() { s.runRejectedRetry(entry) })
+	// The Engine may have new content since the response was sent: the proxy is
+	// sent it at once, as when the content changes while the retry waits. Asked
+	// once the retry waits, so that content published at any moment either finds
+	// the retry or is seen here.
+	if current, ok := s.Store.Get(engineKey); ok && rejected.version != "" && current.Version != rejected.version {
+		entry.retryTimer.Reset(0)
+	}
 }
 
-// runRejectedRetry resets the stream once the retry delay has elapsed. It takes
-// ownership of the waiting retry under entry.mu first, so a stream close or a
-// newer rejection can cancel it.
+// ignoresRejection reports whether a rejection adds nothing to what the stream
+// has done. A rejection of a response other than the last one sent on the stream
+// is stale, and go-control-plane skips it too: the proxy has been sent other bytes
+// since, which neither a reset of the stream nor a longer back-off should answer.
+// A rejection while a retry waits for the last response sent, or for none, is a
+// repeat of the one that armed it, whatever nonce it carries; it would be counted,
+// logged and rescheduled each time it is sent. The first rejection of a stream, as
+// one replayed from an earlier stream is, is new whatever its nonce.
+func (entry *serverStream) ignoresRejection(req *discoveryv3.DiscoveryRequest) bool {
+	nonce := req.GetResponseNonce()
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
+	if entry.lastNonce != "" && nonce != entry.lastNonce {
+		return true
+	}
+	return entry.retryTimer != nil && entry.nackedNonce == entry.lastNonce
+}
+
+// keepWatch leaves the stream's subscription as it is for an ignored rejection.
+// go-control-plane replaces the stream's watch with the one the request names,
+// and a watch it created after an acknowledgement does not know the nonce it
+// would otherwise skip the request by. Unless a retry waits for the stream to be
+// reset, the stream keeps its watch on its snapshot, as of the version last sent
+// so that nothing is sent again.
+func (entry *serverStream) keepWatch(req *discoveryv3.DiscoveryRequest) {
+	req.ResourceNames = []string{entry.resourceName}
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
+	if entry.retryTimer == nil && entry.lease != nil {
+		req.Node.Id, req.VersionInfo = entry.lease.node(), entry.lastVersion
+	}
+}
+
+// runRejectedRetry resets the stream once the retry delay has elapsed. A stream
+// that closed, or whose retry a newer rejection replaced, has no timer left.
 func (s *Server) runRejectedRetry(entry *serverStream) {
 	entry.mu.Lock()
-	if entry.closed || entry.retryTimer == nil {
-		entry.mu.Unlock()
-		return
-	}
+	waiting := entry.retryTimer != nil
 	entry.retryTimer = nil
-	_, registered := s.streams.Load(entry.streamID)
 	entry.mu.Unlock()
-	if registered {
+	if waiting {
 		s.Streams.ResetStream(entry.session.ID)
 	}
 }
 
-// wakeRejected runs the retry of every stream that waits on a rejection of the
-// Engine's configuration, now that the Engine has new content: the proxy
-// resubscribes and receives it instead of waiting out the retry delay.
+// wakeRejected runs the retry of every stream that waits on a rejection of other
+// content than the Engine has now, so that the proxy resubscribes and receives it
+// instead of waiting out the delay. A stream that rejected the Engine's content
+// keeps its delay, which its module fetch needs: it can receive and reject a
+// publication before the notice of that publication runs.
 func (s *Server) wakeRejected(engineKey string) {
+	current, ok := s.Store.Get(engineKey)
+	if !ok {
+		return
+	}
 	s.streams.Range(func(_, value any) bool {
 		entry := value.(*serverStream)
 		entry.mu.Lock()
-		if entry.retryTimer != nil && entry.retryEngine == engineKey {
+		if entry.retryTimer != nil && entry.retryEngine == engineKey && entry.retryVersion != current.Version {
 			entry.retryTimer.Reset(0)
 		}
 		entry.mu.Unlock()
@@ -911,9 +978,8 @@ func (entry *serverStream) cancelRetryLocked() {
 	}
 }
 
-// nackDelay doubles the base delay for every rejection after the first of the
-// same content, starting at the configured RetryDelay and capped at
-// nackRetryMaxDelay.
+// nackDelay doubles the base delay for every rejection in a row after the
+// first, starting at the configured RetryDelay and capped at nackRetryMaxDelay.
 func nackDelay(base time.Duration, attempt int) time.Duration {
 	if base <= 0 || attempt <= 1 {
 		return base
@@ -928,60 +994,10 @@ func nackDelay(base time.Duration, attempt int) time.Duration {
 	return delay
 }
 
-// trackNack records the stream's budget entry so its ACK and close can reclaim
-// it. A stream budgets one resource at a time; switching drops the previous
-// entry instead of leaking it.
-func (s *Server) trackNack(entry *serverStream, key string) {
-	entry.mu.Lock()
-	previous := entry.nackKey
-	entry.nackKey = key
-	entry.mu.Unlock()
-	if previous != "" && previous != key {
-		s.nacks.Delete(previous)
-	}
-}
-
-// clearNack drops the stream's budget entry on ACK or stream close so closed
-// streams cannot leak budget entries.
-func (s *Server) clearNack(entry *serverStream) {
-	entry.mu.Lock()
-	key := entry.nackKey
-	entry.nackKey = ""
-	entry.mu.Unlock()
-	if key != "" {
-		s.nacks.Delete(key)
-	}
-}
-
-// recordNack increments the retry attempt for key without losing concurrent
-// updates. Sync.Map has no atomic read-modify-write, so compare and swap in a
-// loop.
-func (s *Server) recordNack(key, version string) nackState {
-	for {
-		prev, ok := s.nacks.Load(key)
-		if !ok {
-			state := nackState{version: version, attempts: 1}
-			actual, loaded := s.nacks.LoadOrStore(key, state)
-			if !loaded {
-				return state
-			}
-			prev = actual
-		}
-		current := prev.(nackState)
-		state := nackState{version: version}
-		if current.version == version {
-			state = current
-		}
-		state.attempts++
-		if s.nacks.CompareAndSwap(key, prev, state) {
-			return state
-		}
-	}
-}
-
-// onStreamResponse records the version and nonce last sent on the stream. A
-// NACK identifies that response by nonce; its version_info is the previously
-// accepted version, so it cannot identify the rejected content by itself.
+// onStreamResponse records the version and nonce last sent on the stream, and
+// the version and tag in the proxy's delivery record. A NACK identifies that
+// response by nonce; its version_info is the previously accepted version, so it
+// cannot identify the rejected content by itself.
 func (s *Server) onStreamResponse(_ context.Context, streamID int64, _ *discoveryv3.DiscoveryRequest, resp *discoveryv3.DiscoveryResponse) {
 	raw, ok := s.streams.Load(streamID)
 	if !ok {
@@ -992,16 +1008,19 @@ func (s *Server) onStreamResponse(_ context.Context, streamID int64, _ *discover
 	entry.lastVersion = resp.GetVersionInfo()
 	entry.lastNonce = resp.GetNonce()
 	entry.mu.Unlock()
+	if version, sent, ok := parseWireVersion(resp.GetVersionInfo()); ok {
+		s.deliveries.sent(entry.proxyKey, entry.engineKey, version, sent)
+	}
 }
 
-// rejectedVersion returns the version the proxy is rejecting. Envoy sends the
-// previous accepted version in version_info, so the response nonce names the
-// response: it is the last one on this stream. A rejection replayed on a new
-// stream names none.
-func (s *Server) rejectedVersion(entry *serverStream, req *discoveryv3.DiscoveryRequest) string {
+// answered returns the version of the response a request answers: the last one
+// on the stream when the nonce says so. A NACK's version_info is the version the
+// proxy last accepted, so the nonce names the response it rejects; a rejection
+// replayed on a new stream names none, and neither does one with a stale nonce.
+func (entry *serverStream) answered(req *discoveryv3.DiscoveryRequest) string {
 	entry.mu.Lock()
 	defer entry.mu.Unlock()
-	if entry.lastVersion != "" && entry.lastNonce != "" && req.GetResponseNonce() == entry.lastNonce {
+	if entry.lastNonce != "" && req.GetResponseNonce() == entry.lastNonce {
 		return entry.lastVersion
 	}
 	return ""
@@ -1027,7 +1046,6 @@ func (s *Server) onStreamClosed(streamID int64, _ *corev3.Node) {
 	entry.cancelRetryLocked()
 	s.streams.Delete(streamID)
 	entry.mu.Unlock()
-	s.clearNack(entry)
 	if entry.lease != nil {
 		s.Store.Release(*entry.lease)
 		entry.lease = nil
