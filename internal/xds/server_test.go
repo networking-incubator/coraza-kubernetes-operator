@@ -227,8 +227,27 @@ func (f *streamFixture) openAs(t *testing.T, proxyID string, names ...string) ex
 	return f.open(t, validToken, names...)
 }
 
-func (f *streamFixture) proxyKey(proxyID string) string {
-	return proxyCacheKey(testNamespace+"/"+streamEngine, f.identity, proxyID)
+// wire is the xDS version of a snapshot version sent under this process's tag
+// of generation gen.
+func (f *streamFixture) wire(version string, gen uint64) string {
+	return wireVersion("sha256:"+version, tag{epoch: f.store.epoch, gen: gen})
+}
+
+// node is the cache node of the Engine's tag snapshot of generation gen.
+func (f *streamFixture) node(gen uint64) string {
+	return tagNode(testNamespace+"/"+streamEngine, tag{epoch: f.store.epoch, gen: gen})
+}
+
+// vmID is the VM ID the Engine's snapshot carries under the tag of generation gen.
+func (f *streamFixture) vmID(gen uint64) string {
+	return "coraza-engine-uid." + tag{epoch: f.store.epoch, gen: gen}.String()
+}
+
+// generation is the generation of an Engine's current tag.
+func (f *streamFixture) generation(engineKey string) uint64 {
+	f.store.mu.RLock()
+	defer f.store.mu.RUnlock()
+	return f.store.engines[engineKey].gen
 }
 
 func responseVMID(t *testing.T, response *discoveryv3.DiscoveryResponse) string {
@@ -307,8 +326,8 @@ func TestStreamServesOneResourceWithMonotonicNonce(t *testing.T) {
 		t.Fatal(err)
 	}
 	first := recv(t, stream)
-	if first.GetVersionInfo() != "sha256:v1" {
-		t.Fatalf("version_info = %q, want sha256:v1", first.GetVersionInfo())
+	if first.GetVersionInfo() != fixture.wire("v1", 0) {
+		t.Fatalf("version_info = %q, want %q", first.GetVersionInfo(), fixture.wire("v1", 0))
 	}
 	if first.GetNonce() != "1" {
 		t.Fatalf("nonce = %q, want 1", first.GetNonce())
@@ -329,7 +348,7 @@ func TestStreamServesOneResourceWithMonotonicNonce(t *testing.T) {
 
 	require.NoError(t, fixture.store.Replace(fixture.snapshot(t, "v2")))
 	second := recv(t, stream)
-	if second.GetVersionInfo() != "sha256:v2" || second.GetNonce() != "2" {
+	if second.GetVersionInfo() != fixture.wire("v2", 0) || second.GetNonce() != "2" {
 		t.Fatalf("second response = version %q nonce %q", second.GetVersionInfo(), second.GetNonce())
 	}
 }
@@ -374,11 +393,12 @@ func TestStreamNackAfterAckUsesRejectedVersion(t *testing.T) {
 
 	require.NoError(t, fixture.store.Replace(fixture.snapshot(t, "v2")))
 	second := recv(t, stream)
-	if second.GetVersionInfo() != "sha256:v2" {
-		t.Fatalf("version_info = %q, want sha256:v2", second.GetVersionInfo())
+	if second.GetVersionInfo() != fixture.wire("v2", 0) {
+		t.Fatalf("version_info = %q, want %q", second.GetVersionInfo(), fixture.wire("v2", 0))
 	}
 
-	// Envoy's NACK carries the previous ACCEPTED version, not the rejected one.
+	// Envoy's NACK carries the previous ACCEPTED version, not the rejected one:
+	// the response nonce names the tag it rejected.
 	if err := stream.Send(&discoveryv3.DiscoveryRequest{
 		ResourceNames: []string{fixture.resourceName},
 		VersionInfo:   first.GetVersionInfo(),
@@ -387,10 +407,7 @@ func TestStreamNackAfterAckUsesRejectedVersion(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	require.Eventually(t, func() bool {
-		cached, err := fixture.store.cache.GetSnapshot(fixture.proxyKey("test-proxy"))
-		return err == nil && cached.GetVersion(resource.ExtensionConfigType) == "sha256:v2.retry1"
-	}, time.Second, 5*time.Millisecond)
+	require.Eventually(t, func() bool { return fixture.generation(testNamespace+"/"+streamEngine) == 1 }, time.Second, 5*time.Millisecond)
 }
 
 func TestStreamNackRepublishesUnderNewVersion(t *testing.T) {
@@ -410,51 +427,40 @@ func TestStreamNackRepublishesUnderNewVersion(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	serveVersion := func() string {
-		stream := fixture.open(t, validToken, fixture.resourceName)
-		return recv(t, stream).GetVersionInfo()
-	}
-	cachedVersion := func() string {
-		cached, err := fixture.store.cache.GetSnapshot(fixture.proxyKey("test-proxy"))
-		if err != nil {
-			return ""
-		}
-		return cached.GetVersion(resource.ExtensionConfigType)
-	}
+	engine := testNamespace + "/" + streamEngine
 
 	// A cold proxy rejects the configuration because the remote module is not
-	// cached. Envoy never re-applies a version it rejected, so the operator
-	// publishes a derived version and closes the stream for a resubscribe.
+	// cached. Envoy never builds bytes it rejected, so the next generation gives
+	// the proxy other bytes, and the stream is closed for a resubscribe.
 	stream := fixture.open(t, validToken, fixture.resourceName)
 	first := recv(t, stream)
-	if got := first.GetVersionInfo(); got != "sha256:v1" {
-		t.Fatalf("version_info = %q, want sha256:v1", got)
+	if got := first.GetVersionInfo(); got != fixture.wire("v1", 0) {
+		t.Fatalf("version_info = %q, want %q", got, fixture.wire("v1", 0))
 	}
 	nack(stream, first)
 	_ = recvCode(t, stream)
-	require.Eventually(t, func() bool { return cachedVersion() == "sha256:v1.retry1" }, time.Second, 5*time.Millisecond)
-	if got := serveVersion(); got != "sha256:v1.retry1" {
-		t.Fatalf("resubscribed version = %q, want sha256:v1.retry1", got)
-	}
-
-	// A second rejection bumps again, and the accepted version never changes so
-	// the publication loop still coalesces.
+	require.Eventually(t, func() bool { return fixture.generation(engine) == 1 }, time.Second, 5*time.Millisecond)
 	stream = fixture.open(t, validToken, fixture.resourceName)
 	second := recv(t, stream)
-	if got := second.GetVersionInfo(); got != "sha256:v1.retry1" {
-		t.Fatalf("version_info = %q, want sha256:v1.retry1", got)
+	if got := second.GetVersionInfo(); got != fixture.wire("v1", 1) {
+		t.Fatalf("resubscribed version = %q, want %q", got, fixture.wire("v1", 1))
 	}
+
+	// A second rejection advances the generation again, and the accepted
+	// content version never changes so the publication loop still coalesces.
 	nack(stream, second)
 	_ = recvCode(t, stream)
-	require.Eventually(t, func() bool { return cachedVersion() == "sha256:v1.retry2" }, time.Second, 5*time.Millisecond)
+	require.Eventually(t, func() bool { return fixture.generation(engine) == 2 }, time.Second, 5*time.Millisecond)
 
-	snapshot, ok := fixture.store.Get(testNamespace + "/" + streamEngine)
+	snapshot, ok := fixture.store.Get(engine)
 	require.True(t, ok)
 	if snapshot.Version != "sha256:v1" {
 		t.Fatalf("accepted version = %q, want sha256:v1", snapshot.Version)
 	}
 }
 
+// A rejection moves only the proxy that rejected on to the next tag: a proxy
+// that accepted the configuration keeps its tag, and is sent nothing.
 func TestStreamNackRetryIsScopedToRejectingProxy(t *testing.T) {
 	fixture := newStreamFixture(t)
 	fixture.server.RetryDelay = 0
@@ -465,8 +471,8 @@ func TestStreamNackRetryIsScopedToRejectingProxy(t *testing.T) {
 	acking := fixture.openAs(t, "proxy-acking", fixture.resourceName)
 	accepted := recv(t, acking)
 	fixture.awaitWritten(t)
-	require.Equal(t, "sha256:v1", accepted.GetVersionInfo())
-	require.Equal(t, "coraza-engine-uid", responseVMID(t, accepted))
+	require.Equal(t, fixture.wire("v1", 0), accepted.GetVersionInfo())
+	require.Equal(t, fixture.vmID(0), responseVMID(t, accepted))
 
 	require.NoError(t, acking.Send(&discoveryv3.DiscoveryRequest{
 		ResourceNames: []string{fixture.resourceName},
@@ -481,29 +487,24 @@ func TestStreamNackRetryIsScopedToRejectingProxy(t *testing.T) {
 	if code := recvCode(t, rejecting); code != codes.Unavailable {
 		t.Fatalf("rejecting stream code = %v, want Unavailable", code)
 	}
+	require.Eventually(t, func() bool { return fixture.generation(testNamespace+"/"+streamEngine) == 1 }, time.Second, 5*time.Millisecond)
 
-	proxyKey := fixture.proxyKey("proxy-rejecting")
-	require.Eventually(t, func() bool {
-		cached, err := fixture.store.cache.GetSnapshot(proxyKey)
-		return err == nil && cached.GetVersion(resource.ExtensionConfigType) == "sha256:v1.retry1"
-	}, time.Second, 5*time.Millisecond)
+	// The accepted tag's snapshot is kept for the proxy that holds it.
+	baseVersion, baseBytes := servedAt(t, fixture.store, fixture.node(0))
+	require.Equal(t, fixture.wire("v1", 0), baseVersion)
+	require.Equal(t, fixture.vmID(0), vmIDOf(t, baseBytes))
 
-	base, err := fixture.store.cache.GetSnapshot(testNamespace + "/" + streamEngine)
-	require.NoError(t, err)
-	require.Equal(t, "sha256:v1", base.GetVersion(resource.ExtensionConfigType))
-	baseResource := base.GetResources(resource.ExtensionConfigType)[fixture.resourceName].(*corev3.TypedExtensionConfig)
-	var baseWasm wasmhttp.Wasm
-	require.NoError(t, baseResource.TypedConfig.UnmarshalTo(&baseWasm))
-	require.Equal(t, "coraza-engine-uid", baseWasm.GetConfig().GetVmConfig().GetVmId())
-
-	// A shared-cache retry would push a new response to this already-ACKing watch.
+	// Moving the generation on would push a new tag to this already-ACKing watch.
 	ackingUpdates := startRecv(acking)
 	expectNoResult(t, ackingUpdates)
 
 	retry := fixture.openAs(t, "proxy-rejecting", fixture.resourceName)
 	retried := recv(t, retry)
-	require.Equal(t, "sha256:v1.retry1", retried.GetVersionInfo())
-	require.Equal(t, "coraza-engine-uid.retry1", responseVMID(t, retried))
+	require.Equal(t, fixture.wire("v1", 1), retried.GetVersionInfo())
+	require.Equal(t, fixture.vmID(1), responseVMID(t, retried))
+	next, err := fixture.store.cache.GetSnapshot(fixture.node(1))
+	require.NoError(t, err, "the resubscribe is served the next generation's snapshot")
+	require.Equal(t, fixture.wire("v1", 1), next.GetVersion(resource.ExtensionConfigType))
 
 	require.Eventually(t, func() bool {
 		count := 0
@@ -517,10 +518,10 @@ func TestStreamNackRetryIsScopedToRejectingProxy(t *testing.T) {
 	}))
 	retryUpdates := startRecv(retry)
 	require.NoError(t, fixture.store.Replace(fixture.snapshot(t, "v2")))
-	for _, streamUpdates := range []<-chan recvResult{ackingUpdates, retryUpdates} {
+	for gen, streamUpdates := range []<-chan recvResult{ackingUpdates, retryUpdates} {
 		updated := expectResult(t, streamUpdates)
-		require.Equal(t, "sha256:v2", updated.GetVersionInfo())
-		require.Equal(t, "coraza-engine-uid", responseVMID(t, updated))
+		require.Equal(t, fixture.wire("v2", uint64(gen)), updated.GetVersionInfo())
+		require.Equal(t, fixture.vmID(uint64(gen)), responseVMID(t, updated))
 	}
 }
 
@@ -543,41 +544,12 @@ func TestStreamNackRetryContinuesAfterManyRejections(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// The retry ladder continues: the stream is reset and a derived version
-	// is published for the resubscribe.
+	// The retry ladder continues: the stream is reset and the generation
+	// advances for the resubscribe.
 	if code := recvCode(t, stream); code != codes.Unavailable {
 		t.Fatalf("code = %v, want Unavailable", code)
 	}
-	require.Eventually(t, func() bool {
-		cached, err := fixture.store.cache.GetSnapshot(fixture.proxyKey("test-proxy"))
-		return err == nil && cached.GetVersion(resource.ExtensionConfigType) == "sha256:v1.retry1"
-	}, time.Second, 5*time.Millisecond)
-}
-
-func TestStreamNackRepublishFailureKeepsStream(t *testing.T) {
-	fixture := newStreamFixture(t)
-	fixture.server.RetryDelay = 0
-	// A resource that is not a decodable WASM config cannot be retried.
-	snapshot := fixture.snapshot(t, "v1")
-	snapshot.Resource = &corev3.TypedExtensionConfig{Name: fixture.resourceName}
-	require.NoError(t, fixture.store.Replace(snapshot))
-
-	stream := fixture.open(t, validToken, fixture.resourceName)
-	first := recv(t, stream)
-	if err := stream.Send(&discoveryv3.DiscoveryRequest{
-		ResourceNames: []string{fixture.resourceName},
-		ResponseNonce: first.GetNonce(),
-		ErrorDetail:   status.New(codes.InvalidArgument, "rejected by Envoy").Proto(),
-	}); err != nil {
-		t.Fatal(err)
-	}
-
-	expectNoResult(t, startRecv(stream))
-	cached, err := fixture.store.cache.GetSnapshot(testNamespace + "/" + streamEngine)
-	require.NoError(t, err)
-	if got := cached.GetVersion(resource.ExtensionConfigType); got != "sha256:v1" {
-		t.Fatalf("cached version = %q, want sha256:v1 (retry must not publish)", got)
-	}
+	require.Eventually(t, func() bool { return fixture.generation(testNamespace+"/"+streamEngine) == 1 }, time.Second, 5*time.Millisecond)
 }
 
 func TestStreamAckResetsNackBudget(t *testing.T) {
@@ -665,10 +637,6 @@ func TestStreamNackWithoutResourceNamesStillResubscribes(t *testing.T) {
 	if code := recvCode(t, stream); code != codes.Unavailable {
 		t.Fatalf("code = %v, want Unavailable", code)
 	}
-	require.Eventually(t, func() bool {
-		cached, err := fixture.store.cache.GetSnapshot(fixture.proxyKey("test-proxy"))
-		return err == nil && cached.GetVersion(resource.ExtensionConfigType) == "sha256:v1.retry1"
-	}, time.Second, 5*time.Millisecond)
 }
 
 func TestStreamRejectsWildcardAndMultipleResources(t *testing.T) {
@@ -766,7 +734,7 @@ func TestFirstAckCannotWatchAnotherEngine(t *testing.T) {
 	if code := recvCode(t, stream); code != codes.InvalidArgument {
 		t.Fatalf("code = %v, want InvalidArgument", code)
 	}
-	require.Zero(t, fixture.watches("victim-ns/victim-engine"))
+	require.Zero(t, fixture.watches(tagNode("victim-ns/victim-engine", tag{epoch: fixture.store.epoch})))
 }
 
 func TestFirstNackCannotBumpAnotherEngine(t *testing.T) {
@@ -797,10 +765,8 @@ func TestFirstNackCannotBumpAnotherEngine(t *testing.T) {
 	if budgets != 0 {
 		t.Fatal("an unauthorized NACK must not consume any retry budget")
 	}
-	cached, err := fixture.store.cache.GetSnapshot("victim-ns/victim-engine")
-	require.NoError(t, err)
-	if got := cached.GetVersion(resource.ExtensionConfigType); got != "sha256:victim-v1" {
-		t.Fatalf("cached version = %q, want sha256:victim-v1", got)
+	if got := fixture.generation("victim-ns/victim-engine"); got != 0 {
+		t.Fatalf("generation = %d, want 0: an unauthorized NACK must not advance another Engine", got)
 	}
 }
 
@@ -894,10 +860,7 @@ func TestNackBudgetIsPerStream(t *testing.T) {
 	if code := recvCode(t, streamB); code != codes.Unavailable {
 		t.Fatalf("code = %v, want Unavailable", code)
 	}
-	require.Eventually(t, func() bool {
-		cached, err := fixture.store.cache.GetSnapshot(fixture.proxyKey("proxy-b"))
-		return err == nil && cached.GetVersion(resource.ExtensionConfigType) == "sha256:v1.retry1"
-	}, time.Second, 5*time.Millisecond)
+	require.Eventually(t, func() bool { return fixture.generation(testNamespace+"/"+streamEngine) == 1 }, time.Second, 5*time.Millisecond)
 
 	// B's closed stream reclaims its budget entry; only A's open stream keeps
 	// its own.
@@ -920,8 +883,8 @@ func TestStreamDoesNotSendAnEmptyResponseOnMiss(t *testing.T) {
 
 	require.NoError(t, fixture.store.Replace(fixture.snapshot(t, "v1")))
 	response := expectResult(t, pending)
-	if response.GetVersionInfo() != "sha256:v1" {
-		t.Fatalf("version_info = %q, want sha256:v1", response.GetVersionInfo())
+	if response.GetVersionInfo() != fixture.wire("v1", 0) {
+		t.Fatalf("version_info = %q, want %q", response.GetVersionInfo(), fixture.wire("v1", 0))
 	}
 }
 
@@ -1252,67 +1215,42 @@ func TestResubscribeRejectedReplacesThePendingRetry(t *testing.T) {
 	fixture.server.RetryDelay = time.Hour
 	entry := &serverStream{streamID: 41, session: &StreamSession{ID: 41}}
 
-	fixture.server.resubscribeRejected(entry, fixture.resourceName, "sha256:v1")
+	fixture.server.resubscribeRejected(entry, fixture.resourceName, "")
 	entry.mu.Lock()
 	first := entry.retryTimer
 	entry.mu.Unlock()
 	require.NotNil(t, first)
 
-	fixture.server.resubscribeRejected(entry, fixture.resourceName, "sha256:v2")
+	fixture.server.resubscribeRejected(entry, fixture.resourceName, "")
 	entry.mu.Lock()
 	require.NotSame(t, first, entry.retryTimer, "a later rejection must schedule its own retry")
 	require.False(t, first.Stop(), "the replaced retry must not fire")
-	require.Equal(t, "sha256:v2", entry.retry.base)
 	entry.cancelRetryLocked()
 	entry.mu.Unlock()
 	fixture.server.clearNack(entry)
 }
 
-// TestRejectedRetryDoesNotRunAfterClose proves stream close cancels the pending
-// retry and a late callback cannot bump the shared snapshot afterwards.
-func TestRejectedRetryDoesNotRunAfterClose(t *testing.T) {
+// A retry resets the stream it was scheduled for while the stream is open, and
+// does nothing once the stream has closed.
+func TestRejectedRetryResetsOnlyAnOpenStream(t *testing.T) {
 	fixture := newStreamFixture(t)
-	require.NoError(t, fixture.store.Replace(fixture.snapshot(t, "v1")))
-	fixture.server.RetryDelay = time.Hour
-	entry := &serverStream{streamID: 42, session: &StreamSession{ID: 42}}
-	fixture.server.streams.Store(int64(42), entry)
-	fixture.server.resubscribeRejected(entry, fixture.resourceName, "")
+	fixture.server.RetryDelay = 10 * time.Millisecond
+	open := func(id int64) (*serverStream, *StreamSession) {
+		session := fixture.streams.Register(t.Context(), fixture.resourceName, fixture.identity, validToken)
+		t.Cleanup(func() { fixture.streams.Unregister(session.ID) })
+		entry := &serverStream{streamID: id, session: session}
+		fixture.server.streams.Store(id, entry)
+		fixture.server.resubscribeRejected(entry, fixture.resourceName, "")
+		return entry, session
+	}
 
-	fixture.server.onStreamClosed(42, nil)
-	entry.mu.Lock()
-	require.Nil(t, entry.retry)
-	require.Nil(t, entry.retryTimer)
-	entry.mu.Unlock()
+	_, session := open(42)
+	require.Eventually(t, func() bool { return context.Cause(session.Context()) == ErrResubscribe }, 5*time.Second, 5*time.Millisecond)
 
-	// Simulate a callback that had already passed its scheduling check.
-	proxyKey := proxyCacheKey(testNamespace+"/"+streamEngine, Identity{}, "")
-	fixture.server.runRejectedRetry(entry)
-	_, err := fixture.store.cache.GetSnapshot(proxyKey)
-	require.Error(t, err, "a closed stream must not publish a retry snapshot for the proxy either")
-}
-
-// TestRejectedRetryBumpsWhenActive proves the active path still republishes.
-func TestRejectedRetryBumpsWhenActive(t *testing.T) {
-	fixture := newStreamFixture(t)
-	require.NoError(t, fixture.store.Replace(fixture.snapshot(t, "v1")))
-	entry := &serverStream{streamID: 43, session: &StreamSession{ID: 43}}
-	fixture.server.streams.Store(int64(43), entry)
-	proxyKey := proxyCacheKey(testNamespace+"/"+streamEngine, Identity{}, "")
-	entry.mu.Lock()
-	entry.retry = &rejectedRetry{resourceName: fixture.resourceName, proxyKey: proxyKey, base: "sha256:v1", attempt: 1}
-	entry.mu.Unlock()
-
-	fixture.server.runRejectedRetry(entry)
-
-	version, err := fixture.store.CurrentVersion(fixture.resourceName)
-	require.NoError(t, err)
-	require.Equal(t, "sha256:v1", version)
-	retryVersion, err := fixture.store.CurrentVersionFor(fixture.resourceName, proxyKey)
-	require.NoError(t, err)
-	require.Equal(t, "sha256:v1.retry1", retryVersion)
-	entry.mu.Lock()
-	require.Nil(t, entry.retry)
-	entry.mu.Unlock()
+	closed, session := open(43)
+	fixture.server.onStreamClosed(closed.streamID, nil)
+	time.Sleep(5 * fixture.server.RetryDelay)
+	require.NoError(t, session.Context().Err(), "a closed stream must not be reset")
 }
 
 // retryPending reports whether a stream waits out the delay of a retry.
@@ -1322,7 +1260,7 @@ func (f *streamFixture) retryPending() bool {
 		entry := value.(*serverStream)
 		entry.mu.Lock()
 		defer entry.mu.Unlock()
-		pending = pending || entry.retry != nil
+		pending = pending || entry.retryTimer != nil
 		return true
 	})
 	return pending
@@ -1358,7 +1296,7 @@ func TestStreamParksRejections(t *testing.T) {
 		require.Equal(t, first.GetNonce(), entry.lastNonce, "the cache must not have sent another response")
 		return true
 	})
-	require.Zero(t, fixture.watches(testNamespace+"/"+streamEngine), "a rejection must not watch the Engine's snapshot")
+	require.Zero(t, fixture.watches(fixture.node(0)), "a rejection must not watch the Engine's snapshot")
 	require.Equal(t, 1, fixture.watches(parkedNode), "each rejection replaces the stream's parked watch")
 	require.Zero(t, testutil.ToFloat64(fixture.metrics.refusals.WithLabelValues(RefusalResponseBudget)))
 }
@@ -1391,5 +1329,69 @@ func TestStreamRejectionWakesOnNewContent(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("the stream was not reset by new content")
 	}
-	require.Equal(t, "sha256:v2", recv(t, fixture.open(t, validToken, fixture.resourceName)).GetVersionInfo())
+	// The rejected tag was retired, so the proxy receives the new content under
+	// the next generation.
+	require.Equal(t, fixture.wire("v2", 1), recv(t, fixture.open(t, validToken, fixture.resourceName)).GetVersionInfo())
+}
+
+// A proxy that reports a tag of the Engine's current content when it connects is
+// sent those bytes again, whichever process sent them first, so it keeps its
+// filter across a reconnect. Any other version gets the current tag.
+func TestStreamServesTheTagAProxyReports(t *testing.T) {
+	fixture := newStreamFixture(t)
+	require.NoError(t, fixture.store.Replace(fixture.snapshot(t, "v1")))
+	require.True(t, fixture.store.Advance(testNamespace+"/"+streamEngine, tag{epoch: fixture.store.epoch}))
+	elsewhere := wireVersion("sha256:v1", tag{epoch: otherProcessEpoch, gen: 6})
+	tests := []struct {
+		name    string
+		version string
+		want    string
+	}{
+		{name: "a tag of another process", version: elsewhere, want: elsewhere},
+		{name: "an earlier tag of this process", version: fixture.wire("v1", 0), want: fixture.wire("v1", 0)},
+		{name: "no version", want: fixture.wire("v1", 1)},
+		{name: "the tag of other content", version: wireVersion("sha256:v0", tag{epoch: otherProcessEpoch}), want: fixture.wire("v1", 1)},
+		{name: "a bare content version", version: "sha256:v1", want: fixture.wire("v1", 1)},
+		{name: "a retry version of an earlier release", version: "sha256:v1.retry2", want: fixture.wire("v1", 1)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := metadata.AppendToOutgoingContext(t.Context(), "authorization", "Bearer "+validToken)
+			stream, err := fixture.client.StreamExtensionConfigs(ctx)
+			require.NoError(t, err)
+			send(t, stream, &discoveryv3.DiscoveryRequest{
+				Node: &corev3.Node{Id: "reconnecting"}, ResourceNames: []string{fixture.resourceName}, VersionInfo: tt.version,
+			})
+			require.Equal(t, tt.want, recv(t, stream).GetVersionInfo())
+		})
+	}
+}
+
+// A stream that ends gives its tag snapshot back, which is dropped when no
+// other stream holds it and the Engine has moved on.
+func TestStreamCloseReleasesItsTagSnapshot(t *testing.T) {
+	fixture := newStreamFixture(t)
+	require.NoError(t, fixture.store.Replace(fixture.snapshot(t, "v1")))
+	elsewhere := tag{epoch: otherProcessEpoch, gen: 6}
+	cancel, recvNext := fixture.openRequest(t, &discoveryv3.DiscoveryRequest{
+		Node: &corev3.Node{Id: "leaving"}, ResourceNames: []string{fixture.resourceName}, VersionInfo: wireVersion("sha256:v1", elsewhere),
+	})
+	_, err := recvNext()
+	require.NoError(t, err)
+	node := heldTag{tag: elsewhere, render: fixture.renders()}.node(testNamespace + "/" + streamEngine)
+	_, err = fixture.store.cache.GetSnapshot(node)
+	require.NoError(t, err)
+
+	cancel()
+	require.Eventually(t, func() bool {
+		_, err := fixture.store.cache.GetSnapshot(node)
+		return err != nil
+	}, 5*time.Second, 5*time.Millisecond)
+}
+
+// renders is how many times content was published for the fixture's Engine.
+func (f *streamFixture) renders() uint64 {
+	f.store.mu.RLock()
+	defer f.store.mu.RUnlock()
+	return f.store.engines[testNamespace+"/"+streamEngine].renders
 }

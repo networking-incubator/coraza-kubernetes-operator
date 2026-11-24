@@ -18,14 +18,11 @@ package xds
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"net"
 	"net/http"
 	"net/netip"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -48,8 +45,6 @@ import (
 const (
 	authorizationHeader        = "authorization"
 	invalidSubscriptionMessage = "invalid subscription"
-	// retryVersionSuffix marks a republished configuration.
-	retryVersionSuffix = ".retry"
 
 	// nackRetryMaxDelay caps the exponential NACK backoff. The cap exists so
 	// a persistently rejected configuration keeps a steady retry cadence
@@ -81,12 +76,6 @@ type nackState struct {
 	attempts int
 }
 
-// rejectedRetry is a rejected configuration waiting out its retry delay.
-type rejectedRetry struct {
-	engineKey, resourceName, proxyKey, base string
-	attempt                                 int
-}
-
 // nackKey scopes a retry budget to one stream. Every replica of a Gateway
 // subscribes to the same resource name, so a budget keyed by resource alone
 // lets one replica's exhausted budget block every other replica's retries.
@@ -94,52 +83,13 @@ func nackKey(resourceName string, sessionID uint64) string {
 	return fmt.Sprintf("%s/%d", resourceName, sessionID)
 }
 
-func proxyCacheKey(engineKey string, identity Identity, proxyID string) string {
-	if proxyID == "" {
-		// shortcut: clients without a stable Node.Id share retries by identity; require Node.Id to isolate them.
-		proxyID = identity.Key() + "/" + identity.UID
+// engineKeyFor returns the key of the Engine a resource name belongs to, or an
+// empty string while no authorization names one.
+func (s *Server) engineKeyFor(entry *serverStream, resourceName string) string {
+	if entry.engineKey == "" {
+		entry.engineKey, _ = s.Authz.EngineKey(resourceName)
 	}
-	key := fmt.Sprintf("%s\x00%s\x00%s\x00%s", engineKey, identity.Key(), identity.UID, proxyID)
-	sum := sha256.Sum256([]byte(key))
-	return engineKey + "\x00proxy:" + hex.EncodeToString(sum[:])
-}
-
-func (s *Server) proxyCacheKeyFor(entry *serverStream, resourceName string) string {
-	engineKey := entry.engineKey
-	if engineKey == "" {
-		var ok bool
-		engineKey, ok = s.Authz.EngineKey(resourceName)
-		if !ok {
-			return ""
-		}
-	}
-	if entry.proxyKey == "" || entry.engineKey != engineKey {
-		entry.engineKey = engineKey
-		entry.proxyKey = proxyCacheKey(engineKey, entry.identity, entry.proxyID)
-	}
-	return entry.proxyKey
-}
-
-// retryBase strips the retry suffix from a version.
-func retryBase(version string) string {
-	if i := strings.Index(version, retryVersionSuffix); i > 0 {
-		return version[:i]
-	}
-	return version
-}
-
-// retryAttempt returns the retry number encoded in a version, or 0 for an
-// accepted version.
-func retryAttempt(version string) int {
-	i := strings.Index(version, retryVersionSuffix)
-	if i <= 0 {
-		return 0
-	}
-	attempt, err := strconv.Atoi(version[i+len(retryVersionSuffix):])
-	if err != nil || attempt < 0 {
-		return 0
-	}
-	return attempt
+	return entry.engineKey
 }
 
 // lifecycleKey carries the stream's cancel function from the interceptor into
@@ -186,8 +136,8 @@ type serverStream struct {
 	resourceName string
 	engineKey    string
 	proxyID      string
-	proxyKey     string
-	proxyBound   bool
+	// lease is the tag snapshot the stream is served from.
+	lease *tagLease
 	// ackedVersion is the version the proxy last acknowledged on this stream.
 	ackedVersion string
 
@@ -197,11 +147,12 @@ type serverStream struct {
 	nackKey     string
 	requested   atomic.Bool
 	authTimer   *time.Timer
-	// retry is the rejected-configuration retry waiting out its delay, and
-	// retryTimer the timer that runs it; both are nil when no retry waits.
-	retry      *rejectedRetry
-	retryTimer *time.Timer
-	closed     bool
+	// retryTimer runs the retry of a rejected configuration after its delay,
+	// and retryEngine is the Engine it waits on; the timer is nil when no
+	// retry waits.
+	retryTimer  *time.Timer
+	retryEngine string
+	closed      bool
 }
 
 // Server serves ECDS with go-control-plane's SnapshotCache and stream handler.
@@ -642,7 +593,7 @@ func (s *Server) onStreamRequest(streamID int64, req *discoveryv3.DiscoveryReque
 		// A NACK's version_info is the last version the proxy ACCEPTED, not the
 		// version it rejected. Prefer the last response on this stream and fall
 		// back to the currently published snapshot.
-		s.resubscribeRejected(entry, rejected, s.rejectedVersion(entry, req, rejected))
+		s.resubscribeRejected(entry, rejected, s.rejectedVersion(entry, req))
 		return nil
 	}
 
@@ -685,7 +636,7 @@ func (s *Server) onStreamRequest(streamID int64, req *discoveryv3.DiscoveryReque
 			s.Metrics.AuthFailure("unauthorized")
 			return status.Error(codes.Unavailable, "authorization is not ready")
 		}
-		req.Node.Id = s.watchNode(entry, name, engineKey, req.GetVersionInfo())
+		req.Node.Id = s.watchNode(entry, engineKey, req.GetVersionInfo())
 		return nil
 	}
 
@@ -694,14 +645,13 @@ func (s *Server) onStreamRequest(streamID int64, req *discoveryv3.DiscoveryReque
 		// A pending retry is left to run: only stream close or a newer
 		// rejection replaces it.
 		s.clearNack(entry)
-		s.ackProxyRetry(entry, req.GetVersionInfo())
 		// A proxy may repeat its acknowledgement; log each version once.
 		if req.GetVersionInfo() != entry.ackedVersion {
 			entry.ackedVersion = req.GetVersionInfo()
 			s.Logger.Info("ECDS configuration accepted by proxy", "resource", entry.resourceName, "version", req.GetVersionInfo())
 		}
 	}
-	req.Node.Id = s.watchNode(entry, name, entry.engineKey, req.GetVersionInfo())
+	req.Node.Id = s.watchNode(entry, entry.engineKey, req.GetVersionInfo())
 	return nil
 }
 
@@ -832,39 +782,30 @@ func pinRequestNode(entry *serverStream, req *discoveryv3.DiscoveryRequest) {
 	} else {
 		proto.Reset(req.Node)
 	}
-	req.Node.Id = entry.engineKey
-	if entry.proxyBound {
-		req.Node.Id = entry.proxyKey
-	}
+	// No snapshot answers this node; a request names the node it watches.
+	req.Node.Id = parkedNode
 }
 
-func (s *Server) ackProxyRetry(entry *serverStream, version string) {
-	if entry.proxyBound && s.Store != nil {
-		s.Store.AckRejected(entry.proxyKey, version)
-	}
-}
-
-func (s *Server) watchNode(entry *serverStream, resourceName, engineKey, version string) string {
-	proxyKey := proxyCacheKey(engineKey, entry.identity, entry.proxyID)
-	if entry.proxyKey != proxyKey && entry.proxyBound && s.Store != nil {
-		s.Store.ReleaseRejectedRetry(entry.proxyKey)
-		entry.proxyBound = false
+// watchNode returns the cache node a stream watches its Engine on: the node of
+// the tag snapshot it is served from. The first request of a stream reports the
+// version the proxy last accepted, which the store serves again when it is a tag
+// of the Engine's current content.
+func (s *Server) watchNode(entry *serverStream, engineKey, claim string) string {
+	if lease := entry.lease; lease != nil {
+		if lease.engineKey == engineKey {
+			return lease.node()
+		}
+		s.Store.Release(*lease)
+		entry.lease = nil
 	}
 	entry.engineKey = engineKey
-	entry.proxyKey = proxyKey
-	if entry.proxyBound {
-		return proxyKey
+	lease, err := s.Store.Acquire(engineKey, claim)
+	if err != nil {
+		s.Logger.Error(err, "acquire snapshot", "engine", engineKey)
+		return parkedNode
 	}
-	if s.Store != nil {
-		bound, err := s.Store.BindRejectedRetry(resourceName, proxyKey, version)
-		if err != nil {
-			s.Logger.Error(err, "bind proxy retry snapshot", "resource", resourceName)
-		} else if bound {
-			entry.proxyBound = true
-			return proxyKey
-		}
-	}
-	return engineKey
+	entry.lease = &lease
+	return lease.node()
 }
 
 // rejectedResourceName returns the resource a NACK refers to. Envoy may send
@@ -886,84 +827,64 @@ func (s *Server) rejectedResourceName(entry *serverStream, req *discoveryv3.Disc
 }
 
 // resubscribeRejected schedules the retry of a rejected configuration: once the
-// delay has passed, a derived version of it is published for the proxy and the
-// stream is reset so the proxy resubscribes. A cold proxy rejects the first
-// push because the remote module is not cached yet, and Envoy never asks for
-// that resource again on its own; the reconnect gives it the configuration once
-// the fetch has completed. A rejection replaces a retry that still waits: the
-// proxy has rejected newer bytes since, and nothing else would retry them.
+// delay has passed the stream is reset, so the proxy resubscribes and is sent
+// the Engine's current tag. A cold proxy rejects the first push because the
+// remote module is not cached yet, and Envoy never asks for that resource again
+// on its own; the reconnect gives it the configuration once the fetch has
+// completed. A rejection replaces a retry that still waits: the proxy has
+// rejected newer bytes since, and nothing else would retry them.
 func (s *Server) resubscribeRejected(entry *serverStream, resourceName, rejectedVersion string) {
 	if resourceName == "" || s.Store == nil || entry.session == nil {
 		return
 	}
-	proxyKey := s.proxyCacheKeyFor(entry, resourceName)
-	if proxyKey == "" {
+	engineKey := s.engineKeyFor(entry, resourceName)
+	if engineKey == "" {
 		return
 	}
-	// The retry ladder belongs to this proxy. A reconnect reuses its derived
-	// version without advancing retries for other replicas.
-	version := rejectedVersion
-	if current, err := s.Store.CurrentVersionFor(resourceName, proxyKey); err == nil {
-		version = current
+	// Envoy accepts the bytes it rejected, when it is sent them again, without
+	// building them: the next generation gives the proxy other bytes. A
+	// rejection replayed on a new stream names no response, so no tag.
+	version, rejected, tagged := parseWireVersion(rejectedVersion)
+	if tagged {
+		s.Store.Advance(engineKey, rejected)
+	} else {
+		version = rejectedVersion
 	}
-	base := retryBase(version)
-	attempt := retryAttempt(version) + 1
 
 	// The budget is per stream: replicas of a Gateway must not spend each
-	// other's attempts. Retries of the same content carry a derived version;
-	// count them against the version the Engine accepted. Giving up is not an
-	// option: a stranded pod stays fail-closed forever, and the entry is
-	// reclaimed on ACK and stream close.
+	// other's attempts. Giving up is not an option: a stranded pod stays
+	// fail-closed forever, and the entry is reclaimed on ACK and stream close.
 	key := nackKey(resourceName, entry.session.ID)
 	s.trackNack(entry, key)
-	state := s.recordNack(key, base)
+	state := s.recordNack(key, version)
 	s.Logger.Info("resubscribing proxy after rejected configuration",
-		"resource", resourceName, "version", rejectedVersion, "attempt", attempt, "rejections", state.attempts)
+		"resource", resourceName, "version", rejectedVersion, "rejections", state.attempts)
 
-	// Envoy never re-applies a version it rejected, and the remote module fetch
-	// it started needs to finish first: publish a derived version and close the
-	// stream so the proxy resubscribes and applies it from the code cache.
 	entry.mu.Lock()
 	defer entry.mu.Unlock()
 	if entry.closed {
 		return
 	}
 	entry.cancelRetryLocked()
-	entry.retry = &rejectedRetry{engineKey: entry.engineKey, resourceName: resourceName, proxyKey: proxyKey, base: base, attempt: attempt}
-	entry.retryTimer = time.AfterFunc(nackDelay(s.RetryDelay, attempt), func() { s.runRejectedRetry(entry) })
+	entry.retryEngine = engineKey
+	entry.retryTimer = time.AfterFunc(nackDelay(s.RetryDelay, state.attempts), func() { s.runRejectedRetry(entry) })
 }
 
-// runRejectedRetry publishes a proxy-scoped retry once the delay elapses. It
-// takes ownership of the waiting retry under entry.mu first, so a stream close
-// or a newer rejection can cancel it without publishing after closure.
+// runRejectedRetry resets the stream once the retry delay has elapsed. It takes
+// ownership of the waiting retry under entry.mu first, so a stream close or a
+// newer rejection can cancel it.
 func (s *Server) runRejectedRetry(entry *serverStream) {
 	entry.mu.Lock()
-	retry := entry.retry
-	if entry.closed || retry == nil {
+	if entry.closed || entry.retryTimer == nil {
 		entry.mu.Unlock()
 		return
 	}
-	entry.retry, entry.retryTimer = nil, nil
-	// Keep entry.mu while checking registration and bumping. onStreamClosed
-	// takes the same lock before it marks the entry closed and removes it, so a
-	// retry either completes while the stream is still registered or is
-	// cancelled; it cannot mutate a proxy snapshot after closure.
-	if _, ok := s.streams.Load(entry.streamID); !ok {
-		entry.mu.Unlock()
-		return
-	}
-	err := s.Store.BumpRejected(retry.resourceName, retry.proxyKey, retry.base, retry.attempt)
-	if errors.Is(err, errSnapshotAdvanced) {
-		// A newer snapshot supersedes the retry, and a parked stream is never
-		// sent it: the proxy resubscribes to receive it.
-		err = nil
-	}
+	entry.retryTimer = nil
+	_, registered := s.streams.Load(entry.streamID)
 	entry.mu.Unlock()
-	if err != nil {
-		s.Logger.Error(err, "republish rejected configuration", "resource", retry.resourceName)
-		return
+	if registered {
+		s.Streams.ResetStream(entry.session.ID)
 	}
-	s.Streams.ResetStream(entry.session.ID)
 }
 
 // wakeRejected runs the retry of every stream that waits on a rejection of the
@@ -973,7 +894,7 @@ func (s *Server) wakeRejected(engineKey string) {
 	s.streams.Range(func(_, value any) bool {
 		entry := value.(*serverStream)
 		entry.mu.Lock()
-		if entry.retry != nil && entry.retry.engineKey == engineKey {
+		if entry.retryTimer != nil && entry.retryEngine == engineKey {
 			entry.retryTimer.Reset(0)
 		}
 		entry.mu.Unlock()
@@ -986,14 +907,13 @@ func (s *Server) wakeRejected(engineKey string) {
 func (entry *serverStream) cancelRetryLocked() {
 	if entry.retryTimer != nil {
 		entry.retryTimer.Stop()
+		entry.retryTimer = nil
 	}
-	entry.retry, entry.retryTimer = nil, nil
 }
 
-// nackDelay doubles the base delay for every retry rung of the same content,
-// starting at the configured RetryDelay. A rung, not the per-stream budget,
-// sets the backoff: each retry closes the stream, so the proxy's published
-// version survives reconnect and records how often the content was rejected.
+// nackDelay doubles the base delay for every rejection after the first of the
+// same content, starting at the configured RetryDelay and capped at
+// nackRetryMaxDelay.
 func nackDelay(base time.Duration, attempt int) time.Duration {
 	if base <= 0 || attempt <= 1 {
 		return base
@@ -1075,29 +995,16 @@ func (s *Server) onStreamResponse(_ context.Context, streamID int64, _ *discover
 }
 
 // rejectedVersion returns the version the proxy is rejecting. Envoy sends the
-// previous accepted version in version_info, so use the response nonce first and
-// fall back to the live snapshot for a NACK replayed on a fresh stream.
-func (s *Server) rejectedVersion(entry *serverStream, req *discoveryv3.DiscoveryRequest, resourceName string) string {
+// previous accepted version in version_info, so the response nonce names the
+// response: it is the last one on this stream. A rejection replayed on a new
+// stream names none.
+func (s *Server) rejectedVersion(entry *serverStream, req *discoveryv3.DiscoveryRequest) string {
 	entry.mu.Lock()
-	lastVersion, lastNonce := entry.lastVersion, entry.lastNonce
-	entry.mu.Unlock()
-	if lastVersion != "" && lastNonce != "" && req.GetResponseNonce() == lastNonce {
-		return lastVersion
+	defer entry.mu.Unlock()
+	if entry.lastVersion != "" && entry.lastNonce != "" && req.GetResponseNonce() == entry.lastNonce {
+		return entry.lastVersion
 	}
-	// This store read on the request path relies on the cache not blocking in a
-	// response send; re-check that assumption when go-control-plane is bumped.
-	if s.Store == nil || resourceName == "" {
-		return ""
-	}
-	proxyKey := s.proxyCacheKeyFor(entry, resourceName)
-	if proxyKey == "" {
-		return ""
-	}
-	version, err := s.Store.CurrentVersionFor(resourceName, proxyKey)
-	if err != nil {
-		return ""
-	}
-	return version
+	return ""
 }
 
 func (s *Server) onStreamClosed(streamID int64, _ *corev3.Node) {
@@ -1118,13 +1025,12 @@ func (s *Server) onStreamClosed(streamID int64, _ *corev3.Node) {
 		entry.authTimer.Stop()
 	}
 	entry.cancelRetryLocked()
-	proxyKey, proxyBound := entry.proxyKey, entry.proxyBound
-	entry.proxyBound = false
 	s.streams.Delete(streamID)
 	entry.mu.Unlock()
 	s.clearNack(entry)
-	if proxyBound && s.Store != nil {
-		s.Store.ReleaseRejectedRetry(proxyKey)
+	if entry.lease != nil {
+		s.Store.Release(*entry.lease)
+		entry.lease = nil
 	}
 }
 

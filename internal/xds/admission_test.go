@@ -39,7 +39,6 @@ import (
 	"time"
 
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
-	wasmhttp "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/wasm/v3"
 	discoveryv3 "github.com/envoyproxy/go-control-plane/envoy/service/discovery/v3"
 	extensionv3 "github.com/envoyproxy/go-control-plane/envoy/service/extension/v3"
 	"github.com/prometheus/client_golang/prometheus"
@@ -53,9 +52,7 @@ import (
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/structpb"
-	"google.golang.org/protobuf/types/known/wrapperspb"
 	authv1 "k8s.io/api/authentication/v1"
 
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/assets"
@@ -486,7 +483,7 @@ func TestListenerResetsPeerThatStopsReading(t *testing.T) {
 
 	time.Sleep(3 * limits.WriteTimeout)
 	require.NoError(t, fixture.store.Replace(fixture.snapshot(t, "v2")))
-	require.Equal(t, "sha256:v2", recv(t, healthy).GetVersionInfo())
+	require.Equal(t, fixture.wire("v2", 0), recv(t, healthy).GetVersionInfo())
 }
 
 func TestListenerResetsZeroWindowAssetRequest(t *testing.T) {
@@ -573,22 +570,14 @@ func TestListenerClosesConnectionThatStopsReading(t *testing.T) {
 	t.Logf("a TCP-stalled connection released its %d stream slots after %v", limits.MaxStreams, time.Since(started))
 
 	stream := fixture.open(t, validToken, fixture.resourceName)
-	require.Equal(t, "sha256:v1", recv(t, stream).GetVersionInfo())
+	require.Equal(t, fixture.wire("v1", 0), recv(t, stream).GetVersionInfo())
 }
 
 // largeSnapshot is fixture's snapshot carrying size bytes of plugin
 // configuration.
 func (f *streamFixture) largeSnapshot(t *testing.T, version string, size int) *Snapshot {
 	t.Helper()
-	snapshot := f.snapshot(t, version)
-	var wasm wasmhttp.Wasm
-	require.NoError(t, snapshot.Resource.TypedConfig.UnmarshalTo(&wasm))
-	configuration, err := anypb.New(wrapperspb.String(strings.Repeat("r", size)))
-	require.NoError(t, err)
-	wasm.Config.Configuration = configuration
-	snapshot.Resource.TypedConfig, err = anypb.New(&wasm)
-	require.NoError(t, err)
-	return snapshot
+	return withConfiguration(t, f.snapshot(t, version), size)
 }
 
 // throttledConn reads at most bytesPerSecond.
@@ -631,7 +620,7 @@ func TestListenerDeliversLargeResponseToSlowReader(t *testing.T) {
 	send(t, stream, &discoveryv3.DiscoveryRequest{ResourceNames: []string{fixture.resourceName}})
 	response := recv(t, stream)
 	t.Logf("a %d MiB configuration reached a 2 MiB/s reader in %v", proto.Size(response)>>20, time.Since(started))
-	require.Equal(t, "sha256:v1", response.GetVersionInfo())
+	require.Equal(t, fixture.wire("v1", 0), response.GetVersionInfo())
 	require.Zero(t, testutil.ToFloat64(fixture.metrics.refusals.WithLabelValues(RefusalWriteTimeout)))
 }
 
@@ -818,14 +807,14 @@ func TestListenerRevocationEndsResponseInFlight(t *testing.T) {
 			if queued {
 				// Acknowledge v1 so a watch opens, then publish v2: the watch
 				// answers and v2 waits behind v1.
-				node := testNamespace + "/" + streamEngine
+				node := fixture.node(0)
 				watches := func() int64 {
 					if info := fixture.store.cache.GetStatusInfo(node); info != nil {
 						return int64(info.GetNumWatches())
 					}
 					return 0
 				}
-				client.data(id, grpcFrame(t, &discoveryv3.DiscoveryRequest{ResourceNames: []string{fixture.resourceName}, VersionInfo: "sha256:v1", ResponseNonce: "1"}), h2MaxReadFrameSize)
+				client.data(id, grpcFrame(t, &discoveryv3.DiscoveryRequest{ResourceNames: []string{fixture.resourceName}, VersionInfo: fixture.wire("v1", 0), ResponseNonce: "1"}), h2MaxReadFrameSize)
 				require.Eventually(t, func() bool { return watches() == 1 }, 5*time.Second, time.Millisecond, "the acknowledgement must open a watch")
 				require.NoError(t, fixture.store.Replace(fixture.largeSnapshot(t, "v2", 4<<20)))
 				// The server records a response just before sending it, so v2
@@ -841,7 +830,7 @@ func TestListenerRevocationEndsResponseInFlight(t *testing.T) {
 					})
 					return version
 				}
-				require.Eventually(t, func() bool { return sending() == "sha256:v2" }, 5*time.Second, time.Millisecond, "v2 must reach the send path")
+				require.Eventually(t, func() bool { return sending() == fixture.wire("v2", 0) }, 5*time.Second, time.Millisecond, "v2 must reach the send path")
 				require.NotZero(t, fixture.responseWriting(), "v1 must still be being written")
 				require.Less(t, client.received.Load(), int64(4<<20), "v1 must still be being written")
 			}
@@ -947,6 +936,8 @@ func TestListenerBoundsMessagesAheadOfHandler(t *testing.T) {
 	require.Eventually(t, func() bool { return fixture.registeredStreams() == 1 }, 5*time.Second, 10*time.Millisecond)
 	// gRPC hands the first response over without waiting for it to be
 	// written; the handler blocks sending the second.
+	// The server answers an acknowledgement by its nonce, whatever version it
+	// reports; a short one keeps the repeated messages within the window.
 	ack := grpcFrame(t, &discoveryv3.DiscoveryRequest{ResourceNames: []string{fixture.resourceName}, VersionInfo: "sha256:v1", ResponseNonce: "1"})
 	client.data(id, ack, h2MaxReadFrameSize)
 	time.Sleep(200 * time.Millisecond)
