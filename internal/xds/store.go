@@ -50,6 +50,10 @@ type SnapshotStore struct {
 	// resolves a subscription without scanning every Engine.
 	resources map[string]string
 	nextSeq   uint64
+	// onChange is called, outside the lock, once Replace has published a
+	// version the Engine did not have, so that streams waiting out a rejection
+	// of the old configuration can pick the new one up at once.
+	onChange func(engineKey string)
 }
 
 type proxySnapshot struct {
@@ -77,6 +81,13 @@ func NewSnapshotStore() *SnapshotStore {
 		byEngine:  make(map[string]map[string]*proxySnapshot),
 		resources: make(map[string]string),
 	}
+}
+
+// setOnChange registers the function Replace calls for a new version.
+func (s *SnapshotStore) setOnChange(fn func(engineKey string)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.onChange = fn
 }
 
 // trackProxyLocked registers a proxy in the global and per-Engine indexes.
@@ -121,15 +132,26 @@ func (s *SnapshotStore) Replace(snapshot *Snapshot) error {
 		return fmt.Errorf("build snapshot: %w", err)
 	}
 	key := namespacedNameKey(snapshot.Namespace, snapshot.EngineName)
+	// Registered first, so it runs after the deferred unlock below.
+	var notify func(string)
+	defer func() {
+		if notify != nil {
+			notify(key)
+		}
+	}()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := s.cache.SetSnapshot(context.Background(), key, compiled); err != nil {
 		return err
 	}
+	old, existed := s.meta[key]
 	// A UID change republishes under a new resource name; drop the old index
 	// entry so it cannot shadow another Engine's name.
-	if old, ok := s.meta[key]; ok && old.ResourceName != snapshot.ResourceName {
+	if existed && old.ResourceName != snapshot.ResourceName {
 		delete(s.resources, old.ResourceName)
+	}
+	if !existed || old.Version != snapshot.Version {
+		notify = s.onChange
 	}
 	s.meta[key] = *snapshot
 	s.resources[snapshot.ResourceName] = key
@@ -148,7 +170,7 @@ func (s *SnapshotStore) Replace(snapshot *Snapshot) error {
 }
 
 // errSnapshotAdvanced reports a rejected-configuration retry that a newer
-// snapshot supersedes.
+// snapshot supersedes, or that has no snapshot to retry.
 var errSnapshotAdvanced = errors.New("snapshot advanced")
 
 // BumpRejected publishes a derived snapshot for one proxy so Envoy re-applies a
@@ -162,7 +184,7 @@ func (s *SnapshotStore) BumpRejected(resourceName, proxyKey, acceptedVersion str
 
 	key, meta, ok := s.snapshotForResourceLocked(resourceName)
 	if !ok {
-		return fmt.Errorf("no snapshot for resource %q", resourceName)
+		return fmt.Errorf("%w: no snapshot for resource %q", errSnapshotAdvanced, resourceName)
 	}
 	if proxyKey == "" || proxyKey == key {
 		return errors.New("a distinct proxy cache key is required")

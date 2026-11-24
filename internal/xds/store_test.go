@@ -248,6 +248,33 @@ func TestSnapshotStoreReindexesOnResourceNameChange(t *testing.T) {
 	assert.NoError(t, store.BumpRejected("coraza.waf.ns.engine.uid-2", proxyKey, "sha256:v2", 1))
 }
 
+// Streams waiting out a rejection are told about a version the Engine did not
+// have, and only about that: the first publication and new content, not the same
+// content again. The store's lock is released when they are told.
+func TestSnapshotStoreNotifiesWhenTheVersionChanges(t *testing.T) {
+	store := NewSnapshotStore()
+	var notified []string
+	store.setOnChange(func(engineKey string) {
+		_, ok := store.Get(engineKey)
+		assert.True(t, ok)
+		notified = append(notified, engineKey)
+	})
+	replace := func(version string) {
+		t.Helper()
+		require.NoError(t, store.Replace(&Snapshot{
+			Namespace:  "ns",
+			EngineName: "engine",
+			Version:    version,
+			Resource:   &corev3.TypedExtensionConfig{Name: "resource"},
+		}))
+	}
+
+	replace("v1")
+	replace("v1")
+	replace("v2")
+	assert.Equal(t, []string{"ns/engine", "ns/engine"}, notified)
+}
+
 func TestSnapshotStoreRejectsEmptySnapshot(t *testing.T) {
 	store := NewSnapshotStore()
 	assert.Error(t, store.Replace(nil))
