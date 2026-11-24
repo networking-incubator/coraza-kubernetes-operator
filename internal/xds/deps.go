@@ -84,6 +84,7 @@ func NewDependencies(config Config) (*Dependencies, error) {
 	}
 
 	store := NewSnapshotStore()
+	store.Logger = logger.WithName("xds-store")
 	var streams *StreamRegistry
 	authz := NewAuthzIndex(config.Reader, config.APIReader, limits.AuthorizationMaxStaleness, func(resourceName string) {
 		// streams is assigned below, before any goroutine can revoke.

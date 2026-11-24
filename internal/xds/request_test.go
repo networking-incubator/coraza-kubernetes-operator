@@ -74,7 +74,7 @@ func TestStreamRefusesForeignTypeURLs(t *testing.T) {
 	}
 
 	require.Zero(t, fixture.watches(""), "requests with a foreign type URL must not retain watches")
-	require.Zero(t, fixture.watches(testNamespace+"/"+streamEngine))
+	require.Zero(t, fixture.watches(fixture.node(0)))
 	require.Equal(t, float64(requests), testutil.ToFloat64(fixture.metrics.refusals.WithLabelValues(RefusalInvalidRequest)))
 	fixture.requireNoStreams(t)
 }
@@ -98,7 +98,7 @@ func TestStreamAckWithForeignVersionSendsNothing(t *testing.T) {
 	expectNoResult(t, updates)
 
 	require.NoError(t, fixture.store.Replace(fixture.snapshot(t, "v2")))
-	require.Equal(t, "sha256:v2", expectResult(t, updates).GetVersionInfo())
+	require.Equal(t, fixture.wire("v2", 0), expectResult(t, updates).GetVersionInfo())
 }
 
 // An identity authorized for nothing is refused before it takes a registry
@@ -216,8 +216,8 @@ func TestStreamKeepsOnlyPinnedNode(t *testing.T) {
 	_, err = recvNext()
 	require.NoError(t, err)
 
-	node := fixture.store.cache.GetStatusInfo(testNamespace + "/" + streamEngine).GetNode()
-	require.Equal(t, testNamespace+"/"+streamEngine, node.GetId())
+	node := fixture.store.cache.GetStatusInfo(fixture.node(0)).GetNode()
+	require.Equal(t, fixture.node(0), node.GetId())
 	require.Nil(t, node.GetMetadata())
 	require.Empty(t, node.GetCluster())
 }
@@ -318,7 +318,7 @@ func TestStreamFirstNackRetrySupersededByNewerSnapshot(t *testing.T) {
 	require.Equal(t, codes.Unavailable, recvCode(t, stream), "the stream must be resubscribed")
 
 	resubscribed := fixture.open(t, validToken, fixture.resourceName)
-	require.Equal(t, "sha256:v2", recv(t, resubscribed).GetVersionInfo())
+	require.Equal(t, fixture.wire("v2", 0), recv(t, resubscribed).GetVersionInfo())
 }
 
 // A NACK that names no resource is resolved to the one fresh grant, ignoring

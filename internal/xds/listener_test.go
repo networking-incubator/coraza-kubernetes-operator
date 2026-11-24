@@ -549,7 +549,7 @@ func TestListenerKeepsAdmittedConnectionsUnderFlood(t *testing.T) {
 
 	require.NoError(t, fixture.store.Replace(fixture.snapshot(t, "v2")))
 	for _, stream := range streams {
-		require.Equal(t, "sha256:v2", recv(t, stream).GetVersionInfo())
+		require.Equal(t, fixture.wire("v2", 0), recv(t, stream).GetVersionInfo())
 	}
 }
 
@@ -582,7 +582,7 @@ func TestListenerClosesConnectionWithoutStream(t *testing.T) {
 	require.NoError(t, err, "the server must close the connection")
 
 	require.NoError(t, fixture.store.Replace(fixture.snapshot(t, "v2")))
-	require.Equal(t, "sha256:v2", recv(t, stream).GetVersionInfo())
+	require.Equal(t, fixture.wire("v2", 0), recv(t, stream).GetVersionInfo())
 }
 
 // The module downloads in full over HTTP/2 and HTTP/1.1.

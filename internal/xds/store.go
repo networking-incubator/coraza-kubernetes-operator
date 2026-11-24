@@ -18,68 +18,246 @@ package xds
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
-	"sort"
+	"strconv"
+	"strings"
 	"sync"
+	"sync/atomic"
+	"weak"
 
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	wasmhttp "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/wasm/v3"
 	cachetypes "github.com/envoyproxy/go-control-plane/pkg/cache/types"
 	cachev3 "github.com/envoyproxy/go-control-plane/pkg/cache/v3"
 	"github.com/envoyproxy/go-control-plane/pkg/resource/v3"
+	"github.com/go-logr/logr"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/known/anypb"
 	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/ecds/render"
 )
 
-// SnapshotStore publishes one shared ECDS snapshot per Engine and isolated
-// retry snapshots per proxy into go-control-plane's SnapshotCache.
+// tag tells one delivery of an Engine's configuration from another. Every
+// resource the store serves carries one in its xDS version and in its WASM VM
+// ID, so a proxy that rejected a configuration is never sent the same bytes
+// again, which Envoy would accept without building them. The epoch is random
+// per process and the generation advances within it, so no two processes send
+// the same tag. The accepted-configuration records and the readiness checks
+// compare content versions, which never carry a tag.
+type tag struct {
+	epoch string
+	gen   uint64
+}
+
+func (t tag) String() string { return t.epoch + "-" + strconv.FormatUint(t.gen, 10) }
+
+// wireVersion is the xDS version of an Engine's content sent under a tag.
+func wireVersion(version string, t tag) string { return version + "." + t.String() }
+
+// tagNode is the cache node of one tag snapshot of an Engine.
+func tagNode(engineKey string, t tag) string { return engineKey + "\x00tag:" + t.String() }
+
+// epochBytes is the size of the random epoch, which a tag writes in hexadecimal.
+const epochBytes = 8
+
+// parseWireVersion splits a version a proxy reports into the content version
+// and the tag it carries. The version is a client string, so it is accepted
+// only in the form wireVersion writes, with no other digits or letters in the
+// tag: bare content hashes and the retry versions of earlier releases are not.
+func parseWireVersion(wire string) (version string, t tag, ok bool) {
+	version, rest, found := strings.CutLast(wire, ".")
+	if !found || version == "" {
+		return "", tag{}, false
+	}
+	epoch, gen, found := strings.Cut(rest, "-")
+	if !found || len(epoch) != 2*epochBytes {
+		return "", tag{}, false
+	}
+	if raw, err := hex.DecodeString(epoch); err != nil || hex.EncodeToString(raw) != epoch {
+		return "", tag{}, false
+	}
+	n, err := strconv.ParseUint(gen, 10, 64)
+	if err != nil || strconv.FormatUint(n, 10) != gen {
+		return "", tag{}, false
+	}
+	return version, tag{epoch: epoch, gen: n}, true
+}
+
+// content is an Engine's rendered configuration, decoded once. The resource of
+// every tag is rendered from it when a response is marshaled, so a tag holds no
+// bytes of its own: the plugin configuration is megabytes of rules, and every tag
+// shares the one copy.
+type content struct {
+	version string
+	name    string
+	// template is the WASM configuration without its two configuration fields.
+	template *wasmhttp.Wasm
+	// pluginConfiguration and vmConfiguration are those fields. They are shared
+	// by every rendering and never modified.
+	pluginConfiguration *anypb.Any
+	vmConfiguration     *anypb.Any
+
+	// log tells a rendering that failed. What decoded encodes, so none should:
+	// it is logged once for the content, however many tags and responses it spoils.
+	log    logr.Logger
+	failed atomic.Bool
+}
+
+// newContent decodes the snapshot's resource. It fails for one that cannot carry
+// a tag.
+func newContent(snapshot *Snapshot, log logr.Logger) (*content, error) {
+	var wasm wasmhttp.Wasm
+	if err := snapshot.Resource.GetTypedConfig().UnmarshalTo(&wasm); err != nil {
+		return nil, fmt.Errorf("decode WASM configuration: %w", err)
+	}
+	plugin := wasm.GetConfig()
+	vm := plugin.GetVmConfig()
+	if vm == nil {
+		return nil, errors.New("WASM configuration has no VM")
+	}
+	c := &content{
+		version:             snapshot.Version,
+		name:                snapshot.Resource.GetName(),
+		template:            &wasm,
+		pluginConfiguration: plugin.Configuration,
+		vmConfiguration:     vm.Configuration,
+		log:                 log,
+	}
+	plugin.Configuration, vm.Configuration = nil, nil
+	return c, nil
+}
+
+// render returns the content's resource under a tag: the same resource with the
+// tag in its VM ID, sharing the configuration with every other rendering. A
+// failed rendering is a resource without its configuration, which a proxy
+// rejects instead of applying part of one.
+func (c *content) render(t tag) *corev3.TypedExtensionConfig {
+	wasm := proto.Clone(c.template).(*wasmhttp.Wasm)
+	plugin := wasm.GetConfig()
+	plugin.Configuration = c.pluginConfiguration
+	vm := plugin.GetVmConfig()
+	vm.Configuration = c.vmConfiguration
+	vm.VmId += "." + t.String()
+	typed := &anypb.Any{}
+	if err := anypb.MarshalFrom(typed, wasm, proto.MarshalOptions{Deterministic: true}); err != nil {
+		if c.failed.CompareAndSwap(false, true) {
+			c.log.Error(err, "Failed to render ECDS resource", "resource", c.name, "version", c.version, "tag", t.String())
+		}
+		return &corev3.TypedExtensionConfig{Name: c.name}
+	}
+	return &corev3.TypedExtensionConfig{Name: c.name, TypedConfig: typed}
+}
+
+// tagResource is an Engine's resource under one tag, as the cache holds it: a few
+// words, rendered when a response is marshaled. go-control-plane keeps what it
+// marshals for the response only, so no snapshot holds the bytes.
+type tagResource struct {
+	content *content
+	tag     tag
+
+	mu sync.Mutex
+	// rendered is the rendering the responses in flight marshal. It is weak:
+	// responses that overlap, as when many proxies are sent the same tag at once,
+	// share one rendering, and none is kept once they are done.
+	rendered weak.Pointer[corev3.TypedExtensionConfig]
+}
+
+// GetName is the resource's ECDS name, which the cache indexes it by.
+func (r *tagResource) GetName() string { return r.content.name }
+
+// ProtoReflect renders the resource, unless a response in flight has rendered it.
+func (r *tagResource) ProtoReflect() protoreflect.Message {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	rendered := r.rendered.Value()
+	if rendered == nil {
+		rendered = r.content.render(r.tag)
+		r.rendered = weak.Make(rendered)
+	}
+	return rendered.ProtoReflect()
+}
+
+// SnapshotStore publishes each Engine's configuration into go-control-plane's
+// SnapshotCache as tag snapshots: one per tag a stream holds, shared by the
+// streams that hold it. A tag snapshot is a few words, so the tags in use cost
+// no more than the streams, however many distinct tags the proxies report.
 type SnapshotStore struct {
+	// Logger tells what the store could not do, which should not happen.
+	Logger logr.Logger
+
 	cache cachev3.SnapshotCache
+	epoch string
 
 	mu      sync.RWMutex
-	meta    map[string]Snapshot
-	proxies map[string]*proxySnapshot
-	// byEngine indexes proxies per Engine key so eviction and Replace touch
-	// only that Engine's proxies instead of scanning the whole store.
-	byEngine map[string]map[string]*proxySnapshot
-	// resources indexes ECDS resource name to Engine key so the request path
-	// resolves a subscription without scanning every Engine.
-	resources map[string]string
-	nextSeq   uint64
+	engines map[string]*engineState
 	// onChange is called, outside the lock, once Replace has published a
 	// version the Engine did not have, so that streams waiting out a rejection
 	// of the old configuration can pick the new one up at once.
 	onChange func(engineKey string)
 }
 
-type proxySnapshot struct {
-	engineKey    string
-	active       int
-	retryUnacked bool
-	// seq orders inactive retry snapshots for eviction.
-	seq uint64
+// engineState is one Engine's published content and the tags streams hold.
+type engineState struct {
+	// meta is the published snapshot, without its resource, which content
+	// replaces. content is nil until the Engine is published.
+	meta    Snapshot
+	content *content
+	// gen is the generation of the Engine's current tag.
+	gen uint64
+	// renders counts the times content was published.
+	renders uint64
+	// tags maps what streams hold to the number of leases on it. The cache holds
+	// a snapshot of each at its node, once the Engine is published.
+	tags map[heldTag]int
 }
 
-// maxInactiveRetryProxies bounds how many disconnected, unacknowledged retry
-// snapshots one Engine retains. A subscriber that NACKs under distinct proxy
-// keys and never returns must not grow the store without bound. An evicted
-// proxy is not stranded: on its next NACK the server falls back to the
-// Engine's shared version (CurrentVersionFor) and the retry ladder restarts,
-// exactly like a proxy whose retry was purged by a content change.
-const maxInactiveRetryProxies = 32
+func (e *engineState) published() bool { return e.content != nil }
+
+// heldTag is what a stream holds: a tag and, for a tag another process minted,
+// the publication it was held in. Publishing sends the holders of such a tag this
+// process's own, so a proxy that reports the tag afterwards must not share their
+// snapshot: it is replayed the bytes it reported from one of its own.
+type heldTag struct {
+	tag    tag
+	render uint64
+}
+
+// node is the cache node of the snapshot held.
+func (h heldTag) node(engineKey string) string {
+	if h.render == 0 {
+		return tagNode(engineKey, h.tag)
+	}
+	return tagNode(engineKey, h.tag) + "\x00" + strconv.FormatUint(h.render, 10)
+}
+
+// tagLease is a stream's hold on one tag snapshot.
+type tagLease struct {
+	engineKey string
+	// eng is the state the lease was taken from: a deleted Engine's lease must
+	// not release a snapshot of its successor, which is another state.
+	eng *engineState
+	heldTag
+	// claimed is whether the version the proxy reported chose the tag, whose
+	// snapshot carries exactly the bytes it reported.
+	claimed bool
+}
+
+func (l tagLease) node() string { return l.heldTag.node(l.engineKey) }
 
 // NewSnapshotStore returns an empty snapshot store.
 func NewSnapshotStore() *SnapshotStore {
+	var epoch [epochBytes]byte
+	_, _ = rand.Read(epoch[:])
 	return &SnapshotStore{
-		cache:     cachev3.NewSnapshotCache(false, cachev3.IDHash{}, nil),
-		meta:      make(map[string]Snapshot),
-		proxies:   make(map[string]*proxySnapshot),
-		byEngine:  make(map[string]map[string]*proxySnapshot),
-		resources: make(map[string]string),
+		Logger:  logr.Discard(),
+		cache:   cachev3.NewSnapshotCache(false, cachev3.IDHash{}, nil),
+		epoch:   hex.EncodeToString(epoch[:]),
+		engines: make(map[string]*engineState),
 	}
 }
 
@@ -90,370 +268,221 @@ func (s *SnapshotStore) setOnChange(fn func(engineKey string)) {
 	s.onChange = fn
 }
 
-// trackProxyLocked registers a proxy in the global and per-Engine indexes.
-func (s *SnapshotStore) trackProxyLocked(proxyKey string, proxy *proxySnapshot) {
-	s.proxies[proxyKey] = proxy
-	engine := s.byEngine[proxy.engineKey]
-	if engine == nil {
-		engine = make(map[string]*proxySnapshot)
-		s.byEngine[proxy.engineKey] = engine
-	}
-	engine[proxyKey] = proxy
+func (s *SnapshotStore) currentLocked(eng *engineState) tag {
+	return tag{epoch: s.epoch, gen: eng.gen}
 }
 
-// untrackProxyLocked removes a proxy from both indexes.
-func (s *SnapshotStore) untrackProxyLocked(proxyKey string) {
-	proxy, ok := s.proxies[proxyKey]
-	if !ok {
-		return
+// engineLocked returns the Engine's state, creating it unpublished.
+func (s *SnapshotStore) engineLocked(engineKey string) *engineState {
+	eng := s.engines[engineKey]
+	if eng == nil {
+		eng = &engineState{tags: make(map[heldTag]int)}
+		s.engines[engineKey] = eng
 	}
-	delete(s.proxies, proxyKey)
-	engine := s.byEngine[proxy.engineKey]
-	if engine == nil {
-		return
-	}
-	delete(engine, proxyKey)
-	if len(engine) == 0 {
-		delete(s.byEngine, proxy.engineKey)
-	}
+	return eng
 }
 
-// Replace publishes an Engine snapshot. The cache key is the Engine key, not
-// the ECDS resource name, so it survives a UID change and can be deleted by
-// namespace/name.
+// tagSnapshot is the cache snapshot of content sent under a tag.
+func tagSnapshot(c *content, sent tag) (cachev3.ResourceSnapshot, error) {
+	snapshot, err := cachev3.NewSnapshot(wireVersion(c.version, sent), map[resource.Type][]cachetypes.Resource{
+		resource.ExtensionConfigType: {&tagResource{content: c, tag: sent}},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("build snapshot: %w", err)
+	}
+	return snapshot, nil
+}
+
+// Replace publishes an Engine's configuration under every tag a stream holds.
+// The cache key of a tag snapshot is derived from the Engine key, not the ECDS
+// resource name, so it survives a UID change and can be deleted by
+// namespace/name. A Version that is already published is the same content and
+// is not decoded again.
 func (s *SnapshotStore) Replace(snapshot *Snapshot) error {
 	if snapshot == nil || snapshot.Resource == nil {
 		return errors.New("snapshot and resource are required")
 	}
-	compiled, err := cachev3.NewSnapshot(snapshot.Version, map[resource.Type][]cachetypes.Resource{
-		resource.ExtensionConfigType: {snapshot.Resource},
-	})
-	if err != nil {
-		return fmt.Errorf("build snapshot: %w", err)
-	}
 	key := namespacedNameKey(snapshot.Namespace, snapshot.EngineName)
-	// Registered first, so it runs after the deferred unlock below.
-	var notify func(string)
-	defer func() {
-		if notify != nil {
-			notify(key)
-		}
-	}()
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if err := s.cache.SetSnapshot(context.Background(), key, compiled); err != nil {
+	meta := *snapshot
+	meta.Resource = nil
+	if s.refreshUnchanged(key, meta) {
+		return nil
+	}
+	c, err := newContent(snapshot, s.Logger)
+	if err != nil {
 		return err
 	}
-	old, existed := s.meta[key]
-	// A UID change republishes under a new resource name; drop the old index
-	// entry so it cannot shadow another Engine's name.
-	if existed && old.ResourceName != snapshot.ResourceName {
-		delete(s.resources, old.ResourceName)
+	notify, err := s.publish(key, meta, c)
+	if notify != nil {
+		notify(key)
 	}
-	if !existed || old.Version != snapshot.Version {
+	return err
+}
+
+// refreshUnchanged records a snapshot of the content already published, as when
+// only the inputs a proxy does not see changed, and reports whether it did.
+func (s *SnapshotStore) refreshUnchanged(key string, meta Snapshot) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	eng := s.engines[key]
+	if eng == nil || !eng.published() || eng.meta.Version != meta.Version {
+		return false
+	}
+	eng.meta = meta
+	return true
+}
+
+// publish installs the content at every tag a stream holds, and only then
+// records it as the Engine's, so that a publication that failed is tried again.
+// A tag another process minted is not sent new content: that process may send the
+// proxy the same tag with the same bytes, which Envoy would accept without building
+// them if the proxy rejected them here. The proxies that hold it are sent this
+// process's current tag instead, from the snapshot of the streams that hold that
+// tag. It returns the function to call, once the lock is released, when the Engine
+// has a version it did not have.
+func (s *SnapshotStore) publish(key string, meta Snapshot, c *content) (func(string), error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	eng := s.engineLocked(key)
+	eng.renders++
+	current := s.currentLocked(eng)
+	built := make(map[tag]cachev3.ResourceSnapshot)
+	for h := range eng.tags {
+		sent := h.tag
+		if h.tag.epoch != s.epoch {
+			sent = current
+		}
+		snapshot, ok := built[sent]
+		if !ok {
+			var err error
+			if snapshot, err = tagSnapshot(c, sent); err != nil {
+				return nil, err
+			}
+			built[sent] = snapshot
+		}
+		if err := s.cache.SetSnapshot(context.Background(), h.node(key), snapshot); err != nil {
+			return nil, err
+		}
+	}
+	var notify func(string)
+	if !eng.published() || eng.meta.Version != meta.Version {
 		notify = s.onChange
 	}
-	s.meta[key] = *snapshot
-	s.resources[snapshot.ResourceName] = key
-	for proxyKey, proxy := range s.byEngine[key] {
-		proxy.retryUnacked = false
-		if proxy.active == 0 {
-			s.cache.ClearSnapshot(proxyKey)
-			s.untrackProxyLocked(proxyKey)
-			continue
-		}
-		if err := s.cache.SetSnapshot(context.Background(), proxyKey, compiled); err != nil {
-			return fmt.Errorf("update proxy snapshot %q: %w", proxyKey, err)
-		}
-	}
-	return nil
+	eng.meta, eng.content = meta, c
+	return notify, nil
 }
 
-// errSnapshotAdvanced reports a rejected-configuration retry that a newer
-// snapshot supersedes, or that has no snapshot to retry.
-var errSnapshotAdvanced = errors.New("snapshot advanced")
-
-// BumpRejected publishes a derived snapshot for one proxy so Envoy re-applies a
-// rejected typed configuration without changing the Engine's shared snapshot.
-// acceptedVersion must still be the current snapshot version; a concurrent
-// Replace with newer content makes the retry stale: it is skipped and
-// errSnapshotAdvanced returned.
-func (s *SnapshotStore) BumpRejected(resourceName, proxyKey, acceptedVersion string, attempt int) error {
+// Acquire holds the tag snapshot an Engine's stream is served from, and returns
+// the lease to give back. A proxy reports the version it last accepted: when
+// that is a tag of the Engine's current content, the first request of its stream
+// is answered with exactly those bytes again, whichever process sent them, a full
+// response that Envoy skips building, so the proxy keeps its filter when it moves
+// to another replica or the operator restarts. Otherwise it is served the
+// Engine's current tag. The report is a client string, but a tag costs a few
+// words and lasts as long as the stream that holds it, so every report of the
+// current content is honoured, except a generation this process has not reached.
+func (s *SnapshotStore) Acquire(engineKey, claim string) (tagLease, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-
-	key, meta, ok := s.snapshotForResourceLocked(resourceName)
-	if !ok {
-		return fmt.Errorf("%w: no snapshot for resource %q", errSnapshotAdvanced, resourceName)
-	}
-	if proxyKey == "" || proxyKey == key {
-		return errors.New("a distinct proxy cache key is required")
-	}
-	// An empty version cannot identify the rejected snapshot (for example a
-	// first-message NACK); retrying the current snapshot is safe because it
-	// cannot restore older content.
-	if acceptedVersion != "" && meta.Version != acceptedVersion {
-		return fmt.Errorf("%w: resource %q from %q to %q", errSnapshotAdvanced, resourceName, acceptedVersion, meta.Version)
-	}
-	proxy := s.proxies[proxyKey]
-	if proxy != nil && proxy.engineKey != key {
-		return fmt.Errorf("proxy cache key %q belongs to another Engine", proxyKey)
-	}
-
-	compiled, err := rejectedSnapshot(meta, attempt)
-	if err != nil {
-		return err
-	}
-	if err := s.cache.SetSnapshot(context.Background(), proxyKey, compiled); err != nil {
-		return err
-	}
-	if proxy == nil {
-		proxy = &proxySnapshot{engineKey: key, seq: s.nextSeq}
-		s.nextSeq++
-		s.trackProxyLocked(proxyKey, proxy)
-	} else {
-		// A repeated NACK refreshes the proxy's eviction order, so a proxy
-		// that keeps rejecting is never evicted as old while it is the
-		// active troublemaker.
-		proxy.seq = s.nextSeq
-		s.nextSeq++
-	}
-	proxy.retryUnacked = true
-	s.evictInactiveRetriesLocked(key)
-	return nil
-}
-
-// evictInactiveRetriesLocked drops the oldest disconnected, unacknowledged
-// retry snapshots of one Engine beyond maxInactiveRetryProxies. Connected
-// proxies and recent disconnects keep their snapshots; an evicted proxy
-// restarts the retry ladder on its next NACK, which is why the eviction is
-// safe. Only that Engine's proxies are examined, so a NACK does not scan the
-// whole store.
-func (s *SnapshotStore) evictInactiveRetriesLocked(engineKey string) {
-	engine := s.byEngine[engineKey]
-	if engine == nil {
-		return
-	}
-	retained := 0
-	candidates := make([]string, 0, len(engine))
-	for proxyKey, proxy := range engine {
-		if proxy.active > 0 || !proxy.retryUnacked {
-			continue
-		}
-		retained++
-		candidates = append(candidates, proxyKey)
-	}
-	if retained <= maxInactiveRetryProxies {
-		return
-	}
-	sort.Slice(candidates, func(i, j int) bool {
-		return engine[candidates[i]].seq < engine[candidates[j]].seq
-	})
-	for _, proxyKey := range candidates[:retained-maxInactiveRetryProxies] {
-		s.cache.ClearSnapshot(proxyKey)
-		s.untrackProxyLocked(proxyKey)
-	}
-}
-
-func rejectedSnapshot(meta Snapshot, attempt int) (cachev3.ResourceSnapshot, error) {
-	retried := proto.Clone(meta.Resource).(*corev3.TypedExtensionConfig)
-	var wasm wasmhttp.Wasm
-	if err := retried.TypedConfig.UnmarshalTo(&wasm); err != nil {
-		return nil, fmt.Errorf("decode rejected WASM configuration: %w", err)
-	}
-	vm := wasm.GetConfig().GetVmConfig()
-	if vm == nil {
-		return nil, errors.New("rejected WASM configuration has no VM")
-	}
-	// Envoy remembers the typed-config hash even after a NACK, so a version-only
-	// retry is skipped and the filter is never created. Changing the VM ID makes
-	// the typed config differ and Envoy instantiates it from the fetched module.
-	// shortcut: the VM ID doubles as a typed-config generation marker; drop this
-	// once Envoy retries failed filter creations on its own.
-	vm.VmId = fmt.Sprintf("%s.retry%d", vm.VmId, attempt)
-	typed, err := anypb.New(&wasm)
-	if err != nil {
-		return nil, fmt.Errorf("encode retry WASM configuration: %w", err)
-	}
-	retried.TypedConfig = typed
-	compiled, err := cachev3.NewSnapshot(fmt.Sprintf("%s.retry%d", meta.Version, attempt), map[resource.Type][]cachetypes.Resource{
-		resource.ExtensionConfigType: {retried},
-	})
-	if err != nil {
-		return nil, fmt.Errorf("build retry snapshot: %w", err)
-	}
-	return compiled, nil
-}
-
-// BindRejectedRetry attaches a stream to its retry snapshot. A reconnect after
-// an accepted retry can recreate the derived resource from its version_info.
-func (s *SnapshotStore) BindRejectedRetry(resourceName, proxyKey, version string) (bool, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	key, meta, ok := s.snapshotForResourceLocked(resourceName)
-	if !ok {
-		return false, nil
-	}
-	proxy := s.proxies[proxyKey]
-	if proxy != nil && proxy.engineKey != key {
-		return false, fmt.Errorf("proxy cache key %q belongs to another Engine", proxyKey)
-	}
-	if proxy != nil {
-		cached, err := s.cache.GetSnapshot(proxyKey)
+	eng := s.engineLocked(engineKey)
+	held, claimed := s.wantLocked(eng, claim)
+	if _, ok := eng.tags[held]; !ok && eng.published() {
+		snapshot, err := tagSnapshot(eng.content, held.tag)
 		if err == nil {
-			cachedVersion := cached.GetVersion(resource.ExtensionConfigType)
-			if retryAttempt(cachedVersion) > 0 && retryBase(cachedVersion) == meta.Version {
-				proxy.active++
-				return true, nil
-			}
+			err = s.cache.SetSnapshot(context.Background(), held.node(engineKey), snapshot)
+		}
+		if err != nil {
+			return tagLease{}, err
 		}
 	}
-	attempt := retryAttempt(version)
-	if attempt == 0 || retryBase(version) != meta.Version {
-		return false, nil
-	}
-	compiled, err := rejectedSnapshot(meta, attempt)
-	if err != nil {
-		return false, err
-	}
-	if err := s.cache.SetSnapshot(context.Background(), proxyKey, compiled); err != nil {
-		return false, err
-	}
-	if proxy == nil {
-		proxy = &proxySnapshot{engineKey: key, seq: s.nextSeq}
-		s.nextSeq++
-		s.trackProxyLocked(proxyKey, proxy)
-	}
-	proxy.active++
-	return true, nil
+	eng.tags[held]++
+	return tagLease{engineKey: engineKey, eng: eng, heldTag: held, claimed: claimed}, nil
 }
 
-// CurrentVersionFor returns a proxy's current retry version when present, or
-// the Engine's accepted version otherwise.
-func (s *SnapshotStore) CurrentVersionFor(resourceName, proxyKey string) (string, error) {
+// wantLocked is what a stream is served: the tag the proxy reported when it is a
+// tag of the Engine's current content that this process could have sent, held for
+// the current publication if another process minted it, the Engine's current tag
+// otherwise.
+func (s *SnapshotStore) wantLocked(eng *engineState, claim string) (held heldTag, claimed bool) {
+	version, reported, ok := parseWireVersion(claim)
+	if ok && eng.published() && version == eng.meta.Version && (reported.epoch != s.epoch || reported.gen <= eng.gen) {
+		held = heldTag{tag: reported}
+		if reported.epoch != s.epoch {
+			held.render = eng.renders
+		}
+		return held, true
+	}
+	return heldTag{tag: s.currentLocked(eng)}, false
+}
+
+// Release gives back a lease, and drops the tag snapshot when no stream holds it.
+func (s *SnapshotStore) Release(lease tagLease) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	eng := s.engines[lease.engineKey]
+	held := lease.heldTag
+	if eng == nil || eng != lease.eng || eng.tags[held] == 0 {
+		return
+	}
+	eng.tags[held]--
+	if eng.tags[held] > 0 {
+		return
+	}
+	delete(eng.tags, held)
+	s.cache.ClearSnapshot(lease.node())
+	if !eng.published() && len(eng.tags) == 0 {
+		delete(s.engines, lease.engineKey)
+	}
+}
+
+// Advance moves the Engine on to the next generation when its current tag is
+// from, and reports whether it did. A proxy that rejected a tag, or may have, is
+// then sent a tag with other bytes; several proxies that reject the same tag
+// advance the generation once.
+func (s *SnapshotStore) Advance(engineKey string, from tag) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	eng := s.engines[engineKey]
+	if eng == nil || from != s.currentLocked(eng) {
+		return false
+	}
+	eng.gen++
+	return true
+}
+
+// isCurrent reports whether t is the Engine's current tag.
+func (s *SnapshotStore) isCurrent(engineKey string, t tag) bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-
-	key, meta, ok := s.snapshotForResourceLocked(resourceName)
-	if !ok {
-		return "", fmt.Errorf("no snapshot for resource %q", resourceName)
-	}
-	if proxy := s.proxies[proxyKey]; proxy != nil && proxy.engineKey == key {
-		if cached, err := s.cache.GetSnapshot(proxyKey); err == nil {
-			version := cached.GetVersion(resource.ExtensionConfigType)
-			if retryAttempt(version) > 0 && retryBase(version) == meta.Version {
-				return version, nil
-			}
-		}
-	}
-	cached, err := s.cache.GetSnapshot(key)
-	if err != nil {
-		return "", err
-	}
-	return cached.GetVersion(resource.ExtensionConfigType), nil
+	eng := s.engines[engineKey]
+	return eng != nil && t == s.currentLocked(eng)
 }
 
-// AckRejected marks a proxy's derived version as accepted.
-func (s *SnapshotStore) AckRejected(proxyKey, version string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	proxy := s.proxies[proxyKey]
-	if proxy == nil || retryAttempt(version) == 0 {
-		return
-	}
-	cached, err := s.cache.GetSnapshot(proxyKey)
-	if err == nil && cached.GetVersion(resource.ExtensionConfigType) == version {
-		proxy.retryUnacked = false
-	}
-}
-
-// ReleaseRejectedRetry drops a stream's reference to a proxy retry snapshot.
-func (s *SnapshotStore) ReleaseRejectedRetry(proxyKey string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	proxy := s.proxies[proxyKey]
-	if proxy == nil {
-		return
-	}
-	engineKey := proxy.engineKey
-	if proxy.active > 0 {
-		proxy.active--
-	}
-	if proxy.active == 0 {
-		// A proxy that just disconnected is the most recent disconnect: its
-		// snapshot should outlive older inactive retries.
-		proxy.seq = s.nextSeq
-		s.nextSeq++
-	}
-	if proxy.active == 0 && !proxy.retryUnacked {
-		s.cache.ClearSnapshot(proxyKey)
-		s.untrackProxyLocked(proxyKey)
-	}
-	// Disconnects can push an Engine over the inactive-retry bound too; a
-	// burst of proxies that NACK and leave must not wait for the next NACK
-	// to be reclaimed.
-	s.evictInactiveRetriesLocked(engineKey)
-}
-
-func (s *SnapshotStore) snapshotForResourceLocked(resourceName string) (string, Snapshot, bool) {
-	// Indexed lookup: the request path (subscriptions and ACKs) must not scan
-	// every Engine under the lock.
-	key, ok := s.resources[resourceName]
-	if !ok {
-		return "", Snapshot{}, false
-	}
-	snapshot, ok := s.meta[key]
-	if !ok {
-		return "", Snapshot{}, false
-	}
-	return key, snapshot, true
-}
-
-// DeleteEngine removes an Engine's snapshot and any open watches.
+// DeleteEngine removes an Engine's snapshots and any open watches.
 func (s *SnapshotStore) DeleteEngine(namespace, engineName string) {
 	key := namespacedNameKey(namespace, engineName)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.cache.ClearSnapshot(key)
-	delete(s.resources, s.meta[key].ResourceName)
-	delete(s.meta, key)
-	for proxyKey := range s.byEngine[key] {
-		s.cache.ClearSnapshot(proxyKey)
-		s.untrackProxyLocked(proxyKey)
+	eng := s.engines[key]
+	if eng == nil {
+		return
 	}
-	delete(s.byEngine, key)
+	for h := range eng.tags {
+		s.cache.ClearSnapshot(h.node(key))
+	}
+	delete(s.engines, key)
 }
 
-// CurrentVersion returns the Engine's shared ECDS version for a resource.
-func (s *SnapshotStore) CurrentVersion(resourceName string) (string, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	key, _, ok := s.snapshotForResourceLocked(resourceName)
-	if !ok {
-		return "", fmt.Errorf("no snapshot for resource %q", resourceName)
-	}
-	cached, err := s.cache.GetSnapshot(key)
-	if err != nil {
-		return "", err
-	}
-	return cached.GetVersion(resource.ExtensionConfigType), nil
-}
-
-// Get returns the published version for an Engine key ("namespace/name").
+// Get returns the published snapshot for an Engine key ("namespace/name"),
+// without its resource.
 func (s *SnapshotStore) Get(engineKey string) (*Snapshot, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	meta, ok := s.meta[engineKey]
-	if !ok {
+	eng := s.engines[engineKey]
+	if eng == nil || !eng.published() {
 		return nil, false
 	}
-	if _, err := s.cache.GetSnapshot(engineKey); err != nil {
-		return nil, false
-	}
-	out := meta
+	out := eng.meta
 	return &out, true
 }
 
@@ -470,7 +499,9 @@ func namespacedNameKey(namespace, name string) string {
 const resourceNamePrefix = "coraza.waf."
 
 // Snapshot is one immutable published Engine configuration. Callers must not
-// mutate any field after Replace hands it to the store.
+// mutate any field after Replace hands it to the store. Version identifies the
+// content: Replace reads the Resource of a Version it has not published, and
+// does not keep it, so Get returns the Snapshot without one.
 type Snapshot struct {
 	ResourceName string
 	Namespace    string
