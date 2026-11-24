@@ -55,7 +55,13 @@ See [Configuring Failure Policies]({{< relref "configuring-failure-policies" >}}
 
 ## Rule Set Delivery
 
-Rules are delivered to the Gateway over ECDS, and the operator pushes updates as soon as they are accepted. The Gateway does not poll. The `spec.ruleSetCacheServer` field is retained for API compatibility but is ignored.
+The operator delivers accepted rule updates to the Gateway over ECDS. Engine
+`Ready=True` reflects operator acceptance, not confirmation that the Gateway has
+applied the update. Gateway pods apply updates without restarting when the plugin
+successfully parses and compiles them. If the plugin rejects an update because it
+cannot parse or compile it, the proxy keeps its previously applied configuration
+or, if none was applied, its bootstrap policy. See the
+[ECDS Plugin Contract]({{< relref "../reference/ecds-plugin-contract#runtime-configuration-json" >}}).
 
 ## Selecting the WASM Module
 

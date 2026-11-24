@@ -162,27 +162,6 @@ spec:
                 required:
                 - name
                 type: object
-              ruleSetCacheServer:
-                description: |-
-                  ruleSetCacheServer is deprecated and ignored. The operator distributes
-                  rules through ECDS and does not start the legacy HTTP rule server, so
-                  this field has no effect.
-                minProperties: 0
-                properties:
-                  pollIntervalSeconds:
-                    default: 15
-                    description: |-
-                      pollIntervalSeconds specifies how often the WAF should check for
-                      configuration updates. The value is specified in seconds.
-
-                      When omitted, this means the user has no opinion and the platform
-                      will choose a reasonable default, which is subject to change over time.
-                      The current default is 15 seconds.
-                    format: int32
-                    maximum: 3600
-                    minimum: 1
-                    type: integer
-                type: object
               target:
                 description: |-
                   target identifies the workload that the Engine protects. The operator

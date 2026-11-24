@@ -36,7 +36,6 @@ import (
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/assets"
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/ecds/render"
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/rulesets/assemble"
-	"github.com/networking-incubator/coraza-kubernetes-operator/internal/rulesets/cache"
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/rulesets/validation"
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/xds"
 	"github.com/networking-incubator/coraza-kubernetes-operator/test/utils"
@@ -610,7 +609,6 @@ func TestEngineReconciler_KeepsAcceptedConfigurationWhenRuleDataIsMissing(t *tes
 		Client:   k8sClient,
 		Scheme:   scheme,
 		Recorder: utils.NewTestRecorder(),
-		Cache:    cache.NewRuleSetCache(),
 	}
 	_, err := ruleSetReconciler.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(&ruleSet)})
 	require.NoError(t, err)
@@ -789,7 +787,6 @@ func TestEngineReconciler_KeepsAcceptedConfigurationOnInvalidEdit(t *testing.T) 
 				Client:     k8sClient,
 				Scheme:     scheme,
 				Recorder:   utils.NewTestRecorder(),
-				Cache:      cache.NewRuleSetCache(),
 				RulePolicy: tt.policy,
 			}).Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(ruleSet)})
 			require.NoError(t, err)
@@ -856,7 +853,6 @@ func TestEngineReconciler_ClearsAcceptedConfigurationWhenRecreatedRuleSetIsDegra
 		Client:   k8sClient,
 		Scheme:   scheme,
 		Recorder: utils.NewTestRecorder(),
-		Cache:    cache.NewRuleSetCache(),
 	}
 	_, err = ruleSetReconciler.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(recreated)})
 	require.NoError(t, err)

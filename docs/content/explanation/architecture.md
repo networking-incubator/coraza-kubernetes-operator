@@ -2,17 +2,19 @@
 title: "Architecture"
 linkTitle: "Architecture"
 weight: 10
-description: "How the operator's two controllers, shared cache, and data flow work together."
+description: "How the operator validates rules, attaches Engines, and publishes accepted configurations."
 ---
 
-The Coraza Kubernetes Operator uses a two-controller architecture with a shared in-memory cache to deliver firewall rules to WASM plugins running in Envoy sidecars.
+The Coraza Kubernetes Operator validates rule resources, attaches Engines to Gateways, and publishes accepted WAF configurations to Envoy over ECDS.
 
 ## High-Level Overview
 
-The operator manages two custom resources:
+The operator manages four custom resources:
 
-- **RuleSet** -- Aggregates SecLang from **RuleSource** resources (and optional **RuleData** for `@pmFromFile` files) and compiles them into a cached, validated ruleset.
-- **Engine** -- Attaches a RuleSet to one or more Gateways by deploying a Coraza WASM plugin into Envoy.
+- **RuleSource** -- Stores SecLang rule text and reports per-fragment validation status.
+- **RuleData** -- Stores data files referenced by rules such as `@pmFromFile`.
+- **RuleSet** -- Orders RuleSources and optional RuleData, validates the assembled rules, and records the accepted content hash.
+- **Engine** -- Attaches a RuleSet-backed Coraza WASM filter to a Gateway.
 
 The data flows through these components:
 
@@ -20,16 +22,28 @@ The data flows through these components:
 RuleSource / RuleData
        |
        v
-RuleSetReconciler  --compile and validate-->  ECDS resource (per Engine)
-                                                    |
-                                                    v
-                                   EnvoyFilter + WASM plugin in Envoy
-                                                    |
-                                                    v
-                                            Traffic filtering
+RuleSetReconciler --validate--> accepted RuleSet status
+                                      |
+                                      v
+EngineReconciler --render--> EnvoyFilter + accepted Engine configuration
+                                      |
+                                      v
+PublicationReconciler --publish--> ECDS snapshot
+                                      |
+                                      v
+                          WASM filter in Envoy
+                                      |
+                                      v
+                             Traffic filtering
 ```
 
-## Two Controllers
+## Controllers
+
+### RuleSourceReconciler
+
+The RuleSource controller validates each rule fragment with Coraza and records
+whether it is valid, invalid, or skipped. Aggregate RuleSet validation remains
+authoritative for rules that depend on RuleData or other fragments.
 
 ### RuleSetReconciler
 
@@ -50,16 +64,23 @@ The Engine controller watches Engine resources, their referenced RuleSets, Gatew
 
 1. Verifies that the referenced RuleSet is in a Ready state.
 2. Discovers Gateway pods that match the Engine's target name (via the GEP-1762 label selector).
-3. Creates or updates an Istio EnvoyFilter that inserts the WASM filter and publishes the accepted RuleSet over ECDS (see [Istio WASM Integration]({{< relref "/explanation/istio-wasm-integration" >}})).
+3. Creates or updates an Istio EnvoyFilter that inserts the WASM filter and points it at the accepted ECDS resource (see [Istio WASM Integration]({{< relref "/explanation/istio-wasm-integration" >}})).
 4. Creates a NetworkPolicy to allow Gateway pods to reach the operator's ECDS listener.
 5. Authorizes the Gateway's ECDS subscription: the Gateway authenticates with its own pod ServiceAccount token (validated by TokenReview), and the operator maps that ServiceAccount to the Engine's target Gateway.
 6. Updates the Engine status with matched Gateways and conditions.
 
 Dataplane `coraza_waf_*` metrics use Istio OpenTelemetry access logs and a platform-owned central collector. For an observability-enabled Engine, the reconciler creates the Gateway-scoped Telemetry; it does not create OTC sidecars or patch Gateways for telemetry inject.
 
+### PublicationReconciler
+
+Each operator replica reconstructs accepted Engine configurations from Kubernetes
+resources and status, verifies their hashes, publishes matching snapshots to its
+local xDS store, and authorizes Gateway pod ServiceAccounts. It does not write
+status.
+
 ## ECDS and Asset Serving
 
-The active delivery path is ECDS, not the legacy HTTP rule server. The operator serves ECDS and the digest-addressed WASM asset route on one TLS listener (port 18080 by default). The retained `/rules` cache-server implementation is not started in the default deployment.
+The operator serves ECDS and the digest-addressed WASM asset route on one TLS listener (port 18080 by default).
 
 The ECDS serving plane is built per replica. It reconstructs accepted content from Kubernetes state, verifies the accepted hashes, and serves only matching snapshots. See [Istio WASM Integration]({{< relref "/explanation/istio-wasm-integration" >}}) for the transport and attachment details.
 
@@ -67,11 +88,9 @@ The ECDS path does not depend on CKO-created ServiceEntry or DestinationRule res
 
 ## Controller Manager
 
-Both controllers are initialized in a shared controller manager (`internal/controller/manager.go`). The manager provides:
+The reconcilers are initialized in a shared controller manager (`internal/controller/manager.go`). The manager provides:
 
-- A shared Kubernetes client and cache.
+- A shared Kubernetes client and informer cache.
 - Leader election support for high availability.
 - Health and readiness probes.
 - The metrics endpoint.
-
-The RuleSetCache instance is created once and shared between both controllers.

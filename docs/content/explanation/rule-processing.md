@@ -2,7 +2,7 @@
 title: "Rule Processing"
 linkTitle: "Rule Processing"
 weight: 20
-description: "How rules are aggregated, compiled, validated, and cached."
+description: "How rules are aggregated, compiled, validated, accepted, and published."
 ---
 
 This page explains the lifecycle of firewall rules from **RuleSource** / **RuleData** to enforcement in the WASM plugin.

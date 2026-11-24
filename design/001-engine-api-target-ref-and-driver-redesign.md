@@ -2,12 +2,11 @@
 
 ## Problem Statement
 
-The Engine CRD couples three independent concerns under a deeply nested path
+The initial Engine CRD coupled two independent concerns under a deeply nested path
 (`spec.driver.istio.wasm`):
 
 1. **What to protect** (workload selection via label selectors)
 2. **How to deploy the WAF** (WASM plugin image, pull secrets)
-3. **How to poll for rule updates** (cache server config)
 
 This creates several issues:
 
@@ -22,10 +21,6 @@ This creates several issues:
   (OpenShift Router, sidecar proxies, dynamic modules) would require parallel
   nesting or awkward reshuffling.
 
-- **Cross-cutting config is buried in driver-specific types.** The cache server
-  poll interval is not specific to WASM or Istio; it applies to any mechanism
-  that dynamically loads rules.
-
 ## Design
 
 ### Separation of concerns
@@ -36,7 +31,6 @@ The new API splits the Engine spec into orthogonal sections:
 spec
  +-- ruleSet           (what rules to apply)
  +-- target         (what to protect — required)
- +-- ruleSetCacheServer (how to poll for rule updates)
  +-- driver            (how to deploy the WAF filter — optional)
  +-- failurePolicy     (behavior on WAF errors)
 ```
@@ -56,9 +50,6 @@ spec:
     type: Gateway
     name: my-gateway       # must be a valid DNS label (RFC 1035, max 63 chars)
     provider: Istio        # identifies the infrastructure provider (default: Istio)
-
-  ruleSetCacheServer:
-    pollIntervalSeconds: 15
 
   driver:                  # optional; defaults to wasm
     type: wasm
@@ -87,13 +78,7 @@ maximum. This is enforced both at admission (CEL `format.dns1035Label()`) and
 at runtime (defense-in-depth guard in `targetLabelSelector()`), preventing
 silent WAF bypass from names that would produce unmatchable label selectors.
 
-**2. `ruleSetCacheServer` moves to top-level spec**
-
-Cache polling is not driver-specific. A dynamic module driver would use the
-same cache server mechanism. Moving it out of the driver config avoids
-duplication across driver types.
-
-**3. `driver` becomes optional with a `type` discriminator**
+**2. `driver` becomes optional with a `type` discriminator**
 
 Instead of `driver.istio.wasm` (three levels of nesting), the driver is now
 `driver.type: wasm` + `driver.wasm: {...}` (two levels). The Istio service mesh
@@ -101,10 +86,9 @@ integration is an implementation detail inferred from `target.type: Gateway`,
 not a user-facing choice.
 
 When `driver` is omitted entirely, the operator defaults to `wasm`. This means
-the simplest possible Engine only needs `ruleSet`, `target`, and
-`ruleSetCacheServer`.
+the simplest possible Engine only needs `ruleSet` and `target`.
 
-**4. `mode` and `status.gateways` removed**
+**3. `mode` and `status.gateways` removed**
 
 The `mode` field was always `gateway` and is now implied by `target.type`.
 The `status.gateways` list was needed when a label selector could match multiple
@@ -139,8 +123,6 @@ spec:
             gateway.networking.k8s.io/gateway-name: my-gw
         image: oci://ghcr.io/corazawaf/coraza-proxy-wasm
         imagePullSecret: registry-creds
-        ruleSetCacheServer:
-          pollIntervalSeconds: 30
 ```
 
 ### After
@@ -152,8 +134,6 @@ spec:
   target:
     type: Gateway
     name: my-gw
-  ruleSetCacheServer:
-    pollIntervalSeconds: 30
   driver:
     type: wasm
     wasm:

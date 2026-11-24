@@ -26,16 +26,6 @@ The operator manager binary accepts the following command-line flags. When deplo
 | `--metrics-cert-name` | `tls.crt` | Filename of the metrics certificate. |
 | `--metrics-cert-key` | `tls.key` | Filename of the metrics private key. |
 
-### RuleSet Cache
-
-These flags are accepted for backward compatibility but ignored: the legacy HTTP rule cache server is not started and rules are delivered over ECDS. They have no effect on rule delivery.
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--cache-gc-interval` | `5m` | Ignored. |
-| `--cache-max-age` | `24h` | Ignored. |
-| `--cache-max-size` | `104857600` (100 MB) | Ignored. |
-
 ### xDS Serving
 
 The operator serves Envoy Configuration Discovery Service (ECDS) streams and the WASM asset over one TLS listener.

@@ -33,7 +33,8 @@ Deploy and configure firewall engines through simple custom resources.
 
 {{% blocks/feature icon="fa-file-code" title="RuleSet API" %}}
 Aggregate **RuleSource** and optional **RuleData** objects into a **RuleSet**.
-Rules are compiled, validated, and cached before being served to engines.
+Rules are compiled and validated before accepted configurations are published to
+engines over ECDS.
 {{% /blocks/feature %}}
 
 {{% blocks/feature icon="fa-sync-alt" title="Live Rule Updates" %}}

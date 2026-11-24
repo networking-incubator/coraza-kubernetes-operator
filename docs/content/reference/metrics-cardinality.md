@@ -14,21 +14,6 @@ for counters by Prometheus convention).
 
 ## Control-Plane Metrics (operator /metrics on :8443)
 
-### Cache Server (existing - `internal/rulesets/cache/metrics.go`)
-
-| Metric | Type | Labels | Worst-case series/cluster | Notes |
-|--------|------|--------|--------------------------|-------|
-| `coraza_cache_server_requests_total` | counter | `handler`, `method`, `code` | ~6 | `handler` ∈ {`rules`, `latest`} |
-| `coraza_cache_server_request_duration_seconds` | histogram | `handler`, `method`, `code` | ~6 × 12 buckets (11 + +Inf) | |
-| `coraza_cache_server_in_flight_requests` | gauge | `handler` | ~2 | |
-| `coraza_cache_size_bytes` | gauge | (none) | 1 | |
-| `coraza_cache_instances` | gauge | (none) | 1 | |
-| `coraza_cache_total_entries` | gauge | (none) | 1 | |
-| `coraza_cache_config_max_size_bytes` | gauge | (none) | 1 | |
-| `coraza_cache_gc_pruned_entries_total` | counter | `reason` | 2 | `reason` ∈ {`age`, `size`} |
-| `coraza_cache_gc_size_limit_exceeded_total` | counter | (none) | 1 | |
-| `coraza_cache_server_auth_failures_total` | counter | (none) | 1 | Authentication failures on cache server |
-
 ### Controller Observability (PR #397 - `internal/controller/metrics.go`)
 
 > **Note:** The metrics in this section are defined in `internal/controller/metrics.go` (merged via PR #397).
@@ -50,10 +35,9 @@ for counters by Prometheus convention).
 | `coraza_ruledata_condition` | gauge | `namespace`, `name`, `condition` | 1 per referenced RuleData (Ready) | |
 | `coraza_ruledatas` | gauge | `namespace` | 1 per namespace | Refreshed on RuleSet reconcile and RuleData watch events |
 | `coraza_rulesource_validations_total` | counter | `namespace`, `outcome` | 3 per namespace (valid/invalid/skipped) | Incremented once per status transition, not per informer resync |
-| `coraza_ruleset_validations_total` | counter | `namespace`, `outcome` | 2 per namespace (valid/invalid) | `valid` recorded after successful cache; `invalid` on degrade transition |
+| `coraza_ruleset_validations_total` | counter | `namespace`, `outcome` | 2 per namespace (valid/invalid) | `valid` recorded after successful aggregate validation; `invalid` on degrade transition |
 | `coraza_rulesource_validation_duration_seconds` | histogram | `namespace`, `outcome` | 2 × 13 per namespace (valid/invalid) | `skipped` increments the counter only; 11 buckets + sum + count |
-| `coraza_ruleset_validation_duration_seconds` | histogram | `namespace`, `outcome` | 2 × 13 per namespace | PMFromFile, rule text checks and aggregate parse; excludes status patches and cache writes |
-| `coraza_cache_set_duration_seconds` | histogram | `namespace` | 1 × 10 per namespace | Recorded once per cache transition; excludes resync and unchanged content |
+| `coraza_ruleset_validation_duration_seconds` | histogram | `namespace`, `outcome` | 2 × 13 per namespace | Aggregate validation; excludes status patches and unsupported-rule checks |
 
 ### xDS Serving Plane (`internal/xds/metrics.go`)
 
@@ -88,10 +72,9 @@ for the full list.
 50 referenced RuleData × (1 info + 1 condition)                    =  100 RuleData series
 50 RuleData in 5 namespaces: 5 namespace aggregates                =    5 series
 Validation counters: 5 ns × (3 rulesource + 2 ruleset outcomes)    =   25 series
-Validation histograms: 5 ns × (2×13 rulesource + 2×13 ruleset + 10 cache) =  310 series
-Cache server: ~99 series (incl. auth failures counter)
-                                                                   ─────────────────
-Total coraza_* operator series:                                   ~1704
+Validation histograms: 5 ns × (2×13 rulesource + 2×13 ruleset)    =  260 series
+                                                                     ─────────────────
+Total coraza_* operator series:                                   ~1555
 ```
 
 Well within the 5,000 series budget.
@@ -197,18 +180,3 @@ metrics:
 
 This is useful when controller-runtime built-ins are already collected by a
 cluster-wide scrape job and you want to avoid duplication.
-
-**Example 3 - drop high-cardinality cache histogram (keep only counter + gauge):**
-
-```yaml
-metrics:
-  serviceMonitor:
-    metricRelabelings:
-      - sourceLabels: [__name__]
-        regex: 'coraza_cache_server_request_duration_seconds.*'
-        action: drop
-```
-
-The histogram generates ~84 series (6 label combinations × 14 series each: n explicit buckets + 1 `+Inf` bucket + `_count` + `_sum`). Dropping it
-reduces operator-side series by ~84 while retaining the counter for request rate
-calculations.

@@ -42,7 +42,6 @@ import (
 	wafv1alpha1 "github.com/networking-incubator/coraza-kubernetes-operator/api/v1alpha1"
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/ecds/render"
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/rulesets/assemble"
-	"github.com/networking-incubator/coraza-kubernetes-operator/internal/rulesets/cache"
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/rulesets/validation"
 	"github.com/networking-incubator/coraza-kubernetes-operator/test/utils"
 )
@@ -240,7 +239,6 @@ func TestRuleSetReconciler_BoundsContentBeforeAssembly(t *testing.T) {
 		Client:   k8sClient,
 		Scheme:   scheme,
 		Recorder: utils.NewFakeRecorder(),
-		Cache:    cache.NewRuleSetCache(),
 	}
 	nn := client.ObjectKeyFromObject(ruleSet)
 	_, err := reconcileRuleSetWithRuleSources(ctx, t, nn, reconciler)
@@ -304,7 +302,6 @@ func TestLoadersCountOnlyMergedRuleData(t *testing.T) {
 		Client:   k8sClient,
 		Scheme:   scheme,
 		Recorder: utils.NewTestRecorder(),
-		Cache:    cache.NewRuleSetCache(),
 	})
 	require.NoError(t, err)
 	require.NoError(t, k8sClient.Get(ctx, client.ObjectKeyFromObject(ruleSet), ruleSet))
@@ -409,7 +406,6 @@ func TestContentPastDeliveryLimitKeepsServingAcceptedContent(t *testing.T) {
 				Client:   k8sClient,
 				Scheme:   scheme,
 				Recorder: utils.NewTestRecorder(),
-				Cache:    cache.NewRuleSetCache(),
 			})
 			require.NoError(t, err)
 			var current wafv1alpha1.RuleSet
@@ -448,7 +444,6 @@ func TestRuleSetReconciler_RefusesRulesPastTheLimit(t *testing.T) {
 		Client:   k8sClient,
 		Scheme:   scheme,
 		Recorder: utils.NewFakeRecorder(),
-		Cache:    cache.NewRuleSetCache(),
 		MaxRules: 3,
 	}
 	_, err := reconcileRuleSetWithRuleSources(ctx, t, client.ObjectKeyFromObject(ruleSet), reconciler)
@@ -489,7 +484,6 @@ func TestRuleSetReconciler_DoesNotRecompileRejectedContent(t *testing.T) {
 		Client:   k8sClient,
 		Scheme:   scheme,
 		Recorder: utils.NewFakeRecorder(),
-		Cache:    cache.NewRuleSetCache(),
 	}
 	nn := client.ObjectKeyFromObject(ruleSet)
 	degradedMessage := func() string {
@@ -643,7 +637,6 @@ func TestRuleSetReconciler_RefusesContentThatCompressesPastTheLimit(t *testing.T
 		Client:   k8sClient,
 		Scheme:   scheme,
 		Recorder: utils.NewFakeRecorder(),
-		Cache:    cache.NewRuleSetCache(),
 	}
 	nn := client.ObjectKeyFromObject(ruleSet)
 	degradedMessage := func() string {
@@ -693,7 +686,6 @@ func TestRuleSetReconciler_BoundsCompileErrors(t *testing.T) {
 		Client:   k8sClient,
 		Scheme:   scheme,
 		Recorder: utils.NewFakeRecorder(),
-		Cache:    cache.NewRuleSetCache(),
 	}
 	nn := client.ObjectKeyFromObject(ruleSet)
 	_, err := reconcileRuleSetWithRuleSources(ctx, t, nn, reconciler)

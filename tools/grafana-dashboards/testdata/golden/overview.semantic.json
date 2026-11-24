@@ -36,7 +36,7 @@
       "title": "Engines not ready",
       "gridPos": {
         "h": 4,
-        "w": 4,
+        "w": 6,
         "x": 0,
         "y": 4
       },
@@ -50,8 +50,8 @@
       "title": "RuleSets not ready",
       "gridPos": {
         "h": 4,
-        "w": 4,
-        "x": 4,
+        "w": 6,
+        "x": 6,
         "y": 4
       },
       "exprs": [
@@ -64,8 +64,8 @@
       "title": "RuleSources degraded",
       "gridPos": {
         "h": 4,
-        "w": 4,
-        "x": 8,
+        "w": 6,
+        "x": 12,
         "y": 4
       },
       "exprs": [
@@ -78,40 +78,12 @@
       "title": "Reconcile error ratio",
       "gridPos": {
         "h": 4,
-        "w": 4,
-        "x": 12,
+        "w": 6,
+        "x": 18,
         "y": 4
       },
       "exprs": [
         "(sum(rate(controller_runtime_reconcile_errors_total{controller=~\"ruleset|engine|rulesource\"}[5m])) / sum(rate(controller_runtime_reconcile_total{controller=~\"ruleset|engine|rulesource\"}[5m]))) and sum(rate(controller_runtime_reconcile_total{controller=~\"ruleset|engine|rulesource\"}[5m])) \u003e 0"
-      ]
-    },
-    {
-      "id": 7,
-      "type": "stat",
-      "title": "Cache utilization",
-      "gridPos": {
-        "h": 4,
-        "w": 4,
-        "x": 16,
-        "y": 4
-      },
-      "exprs": [
-        "(coraza_cache_size_bytes / coraza_cache_config_max_size_bytes) and coraza_cache_config_max_size_bytes \u003e 0"
-      ]
-    },
-    {
-      "id": 8,
-      "type": "stat",
-      "title": "Cache hit ratio",
-      "gridPos": {
-        "h": 4,
-        "w": 4,
-        "x": 20,
-        "y": 4
-      },
-      "exprs": [
-        "coraza:cache_hit_ratio:rate5m"
       ]
     },
     {
@@ -252,145 +224,6 @@
       ]
     },
     {
-      "id": 19,
-      "type": "row",
-      "title": "Cache server — RED",
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 40
-      }
-    },
-    {
-      "id": 20,
-      "type": "timeseries",
-      "title": "Request rate",
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 41
-      },
-      "exprs": [
-        "sum by (handler, code) (rate(coraza_cache_server_requests_total[5m]))"
-      ]
-    },
-    {
-      "id": 21,
-      "type": "timeseries",
-      "title": "Errors \u0026 auth failures",
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 41
-      },
-      "exprs": [
-        "rate(coraza_cache_server_auth_failures_total[5m])",
-        "sum(rate(coraza_cache_server_requests_total{code=~\"5..\"}[5m]))"
-      ]
-    },
-    {
-      "id": 22,
-      "type": "timeseries",
-      "title": "Request latency",
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 49
-      },
-      "exprs": [
-        "histogram_quantile(0.50, sum by (le, handler) (rate(coraza_cache_server_request_duration_seconds_bucket[5m])))",
-        "histogram_quantile(0.99, sum by (le, handler) (rate(coraza_cache_server_request_duration_seconds_bucket[5m])))"
-      ]
-    },
-    {
-      "id": 23,
-      "type": "timeseries",
-      "title": "In-flight requests",
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 49
-      },
-      "exprs": [
-        "coraza_cache_server_in_flight_requests"
-      ]
-    },
-    {
-      "id": 24,
-      "type": "row",
-      "title": "Cache server — USE",
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 56
-      }
-    },
-    {
-      "id": 25,
-      "type": "timeseries",
-      "title": "Cache size vs limit",
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 57
-      },
-      "exprs": [
-        "coraza_cache_config_max_size_bytes",
-        "coraza_cache_size_bytes"
-      ]
-    },
-    {
-      "id": 26,
-      "type": "timeseries",
-      "title": "GC prune rate",
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 57
-      },
-      "exprs": [
-        "sum by (reason) (rate(coraza_cache_gc_pruned_entries_total[15m]))"
-      ]
-    },
-    {
-      "id": 27,
-      "type": "timeseries",
-      "title": "Cache instances \u0026 entries",
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 65
-      },
-      "exprs": [
-        "coraza_cache_instances",
-        "coraza_cache_total_entries"
-      ]
-    },
-    {
-      "id": 28,
-      "type": "timeseries",
-      "title": "Cache Put duration",
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 65
-      },
-      "exprs": [
-        "histogram_quantile(0.50, sum by (le, namespace) (rate(coraza_cache_set_duration_seconds_bucket[5m])))",
-        "histogram_quantile(0.99, sum by (le, namespace) (rate(coraza_cache_set_duration_seconds_bucket[5m])))"
-      ]
-    },
-    {
       "id": 29,
       "type": "row",
       "title": "Kubernetes API \u0026 workqueue",
@@ -398,7 +231,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 72
+        "y": 40
       }
     },
     {
@@ -409,7 +242,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 73
+        "y": 41
       },
       "exprs": [
         "sum by (verb, resource) (rate(rest_client_requests_total[5m]))"
@@ -423,7 +256,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 73
+        "y": 41
       },
       "exprs": [
         "sum by (code) (rate(rest_client_requests_total{code!~\"2..\"}[5m]))"
@@ -437,7 +270,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 81
+        "y": 49
       },
       "exprs": [
         "histogram_quantile(0.50, sum by (le, verb) (rate(rest_client_request_duration_seconds_bucket[5m])))",
@@ -452,7 +285,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 81
+        "y": 49
       },
       "exprs": [
         "sum by (name) (rate(workqueue_retries_total{name=~\"ruleset|engine|rulesource\"}[5m]))"
@@ -466,7 +299,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 89
+        "y": 57
       },
       "exprs": [
         "workqueue_longest_running_processor_seconds{name=~\"ruleset|engine|rulesource\"}"
@@ -480,7 +313,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 89
+        "y": 57
       },
       "exprs": [
         "workqueue_unfinished_work_seconds{name=~\"ruleset|engine|rulesource\"}"
@@ -494,7 +327,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 96
+        "y": 64
       }
     },
     {
@@ -505,7 +338,7 @@
         "h": 6,
         "w": 12,
         "x": 0,
-        "y": 97
+        "y": 65
       },
       "exprs": [
         "coraza_engines"
@@ -522,7 +355,7 @@
         "h": 6,
         "w": 12,
         "x": 12,
-        "y": 97
+        "y": 65
       },
       "exprs": [
         "coraza_rulesets"
@@ -539,7 +372,7 @@
         "h": 6,
         "w": 12,
         "x": 0,
-        "y": 103
+        "y": 71
       },
       "exprs": [
         "coraza_rulesources"
@@ -556,7 +389,7 @@
         "h": 6,
         "w": 12,
         "x": 12,
-        "y": 103
+        "y": 71
       },
       "exprs": [
         "coraza_ruledatas"

@@ -10,16 +10,16 @@ The coraza-kubernetes-operator is split into two distinct planes:
 |  (Kubernetes operator)           |      |  (WAF driver in Envoy / Gateway)   |
 |                                  |      |                                    |
 |  - Watches CRD state             |      |  - Intercepts HTTP requests        |
-|  - Manages rule cache server     |      |  - Executes Coraza WAF evaluation  |
+|  - Serves accepted config via ECDS|      |  - Executes Coraza WAF evaluation  |
 |  - Reconciles Engine/RuleSet     |      |  - Emits structured WAF JSON logs  |
-|  - Applies WasmPlugin/SSA        |      |  - Optional legacy waf_filter_*    |
+|  - Applies EnvoyFilter/SSA       |      |  - Optional legacy waf_filter_*    |
 |                                  |      |                                    |
 |  Metrics: operator internals     |      |  Contract metrics: THIS document  |
 |  (controller-runtime defaults)   |      |  (coraza_waf_* via central ALS)    |
 +----------------------------------+      +------------------------------------+
 ```
 
-The operator (control plane) exposes its own metrics - reconcile durations, queue depths, cache hit rates - via the standard controller-runtime metrics endpoint, collected by the ServiceMonitor Helm template.
+The operator (control plane) exposes its own metrics - reconcile durations, queue depths, and in-memory cache gauges - via the standard controller-runtime metrics endpoint, collected by the ServiceMonitor Helm template.
 
 This document defines the **data-plane contract**: the `coraza_waf_*` Prometheus metric names and labels that must be available end-to-end. The data-plane structured-log path is structured logs -> OpenTelemetry Collector -> Prometheus; the central ALS path is Istio ALS -> platform-owned collector -> Prometheus (see "Central Istio ALS path" below). Neither is an operator path: the operator does not emit or transport `coraza_waf_*` series itself. Drivers MAY also emit the same series directly (for example via Envoy stats).
 

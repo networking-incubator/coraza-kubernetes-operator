@@ -116,13 +116,6 @@ type EngineSpec struct {
 	// +default="fail"
 	FailurePolicy FailurePolicy `json:"failurePolicy,omitempty"`
 
-	// ruleSetCacheServer is deprecated and ignored. The operator distributes
-	// rules through ECDS and does not start the legacy HTTP rule server, so
-	// this field has no effect.
-	//
-	// +optional
-	RuleSetCacheServer *RuleSetCacheServerConfig `json:"ruleSetCacheServer,omitempty"`
-
 	// observability configures WAF dataplane observability independently of the
 	// driver used to deploy the Engine. The operator translates this intent into
 	// driver-specific settings.

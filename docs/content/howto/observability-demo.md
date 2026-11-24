@@ -39,7 +39,7 @@ Open [http://localhost:3000](http://localhost:3000):
 
 Dashboards appear under folder **Coraza WAF**:
 
-- **Coraza Operator — Overview** — health summary, validation rates/latency, reconciliation, cache RED/USE, Kubernetes API & workqueue
+- **Coraza Operator — Overview** — health summary, validation rates/latency, reconciliation, Kubernetes API & workqueue
 - **Coraza Operator — Resources** — per-namespace CR drill-down with condition tables
 
 Run `make observability.grafana.url` to print credentials and dashboard UIDs.
@@ -48,16 +48,15 @@ Run `make observability.grafana.url` to print credentials and dashboard UIDs.
 
 | Section | What to look for |
 |---------|------------------|
-| Health summary | Recording-rule stats (engines/rulesets not ready, cache hit ratio). **Cache hit ratio** covers the legacy rules cache, which the ECDS path never reads, so it shows no data. |
+| Health summary | Recording-rule counts for not-ready Engines and RuleSets, degraded RuleSources, and the reconcile error ratio. |
 | Validation | `coraza_*_validations_total` rates and latency — spikes on bad rule edits |
-| Cache RED / USE | Request rates, auth failures, size vs limit, cache Put duration |
 | Kubernetes API & workqueue | `rest_client_*` pressure and controller queue retries |
 
 ## What `make observability.demo` does
 
 1. **`observability.prometheus.deploy`** — installs [kube-prometheus-stack](https://github.com/prometheus-community/helm-charts/tree/main/charts/kube-prometheus-stack) in `monitoring`, configures Grafana dashboard sidecar (`searchNamespace: ALL`), and grants Prometheus RBAC to scrape the operator's authenticated `/metrics` endpoint.
 2. **`observability.operator.monitoring`** — Helm upgrade enabling `metrics.serviceMonitor`, `metrics.prometheusRule`, and `metrics.grafanaDashboard` with labels matching the Prometheus release.
-3. **`observability.demo.workload`** — applies `config/samples` into `integration-tests` and sends HTTP traffic through `coraza-gateway` to populate cache and CR metrics.
+3. **`observability.demo.workload`** — applies `config/samples` into `integration-tests` and sends HTTP traffic through `coraza-gateway` to exercise the sample WAF and generate metrics.
 
 Prometheus/Grafana config: `config/observability/`. Demo orchestration is `make observability.*`; only traffic seeding uses `hack/observability/seed-traffic.sh`.
 
@@ -166,13 +165,6 @@ EOF
 
 Apply a RuleSource with invalid SecLang syntax (validation may mark it degraded and
 drive reconcile errors depending on timing).
-
-### CorazaCacheSizeHigh
-
-Populate the cache with many distinct RuleSets or temporarily reduce the operator
-`--cache-max-size` manager flag (not yet exposed as a Helm value) to approach the
-configured limit. Monitor `coraza_cache_size_bytes / coraza_cache_config_max_size_bytes`
-on the Overview dashboard.
 
 ## Cleanup
 

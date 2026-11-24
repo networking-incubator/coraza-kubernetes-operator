@@ -20,11 +20,9 @@ package controller
 import (
 	"fmt"
 
-	"k8s.io/client-go/kubernetes"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/metrics"
 
-	"github.com/networking-incubator/coraza-kubernetes-operator/internal/rulesets/cache"
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/rulesets/validation"
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/xds"
 )
@@ -42,18 +40,18 @@ import (
 // +kubebuilder:rbac:groups=authentication.k8s.io,resources=tokenreviews,verbs=create
 // +kubebuilder:rbac:groups=authorization.k8s.io,resources=subjectaccessreviews,verbs=create
 
+// ECDS authorization resolves Gateway workload ServiceAccounts through the API reader.
+// +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=get
+
 // -----------------------------------------------------------------------------
 // Manager - Vars
 // -----------------------------------------------------------------------------
 
-// DefaultRuleSetCacheServerPort is the default port number for the RuleSet
-// cache server.
-const DefaultRuleSetCacheServerPort = 18080
+// DefaultXDSListenPort is the default port for the ECDS listener.
+const DefaultXDSListenPort = 18080
 
 // Deps carries the manager-wide dependencies shared by controllers.
 type Deps struct {
-	KubeClient        kubernetes.Interface
-	RuleSetCache      *cache.RuleSetCache
 	IstioRevision     string
 	OperatorNamespace string
 	ECDSConfig        ECDSConfig
@@ -84,7 +82,6 @@ func SetupControllers(mgr ctrl.Manager, deps Deps) error {
 		Client:     mgr.GetClient(),
 		Scheme:     mgr.GetScheme(),
 		Recorder:   mgr.GetEventRecorder("ruleset-controller"),
-		Cache:      deps.RuleSetCache,
 		Metrics:    corazaMetrics,
 		RulePolicy: deps.RulePolicy,
 		Limits:     xdsLimits,
@@ -106,7 +103,6 @@ func SetupControllers(mgr ctrl.Manager, deps Deps) error {
 		Scheme:            mgr.GetScheme(),
 		Recorder:          mgr.GetEventRecorder("engine-controller"),
 		Metrics:           corazaMetrics,
-		kubeClient:        deps.KubeClient,
 		istioRevision:     deps.IstioRevision,
 		xdsConfig:         deps.ECDSConfig,
 		assetBaseURL:      deps.AssetBaseURL,

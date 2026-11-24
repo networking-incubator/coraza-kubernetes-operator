@@ -141,28 +141,6 @@ func (s *Scenario) ExpectServiceAccountExists(namespace, name string) {
 	}, DefaultTimeout, DefaultInterval, "ServiceAccount %s/%s should exist", namespace, name)
 }
 
-// ExpectCacheClientSAExists polls until a cache client ServiceAccount exists
-// for the given engine (matched by app.kubernetes.io/instance label).
-// Returns the discovered ServiceAccount name.
-func (s *Scenario) ExpectCacheClientSAExists(namespace, engineName string) string {
-	s.T.Helper()
-	s.T.Logf("Waiting for cache client ServiceAccount for engine %s/%s", namespace, engineName)
-	var saName string
-	require.Eventually(s.T, func() bool {
-		list, err := s.F.KubeClient.CoreV1().ServiceAccounts(namespace).List(
-			s.T.Context(), metav1.ListOptions{
-				LabelSelector: "app.kubernetes.io/component=cache-client,app.kubernetes.io/instance=" + engineName,
-			},
-		)
-		if err != nil || len(list.Items) == 0 {
-			return false
-		}
-		saName = list.Items[0].Name
-		return true
-	}, DefaultTimeout, DefaultInterval, "cache client SA for engine %s/%s should exist", namespace, engineName)
-	return saName
-}
-
 // ExpectResourceGone polls until the specified resource no longer exists.
 func (s *Scenario) ExpectResourceGone(namespace, name string, gvr schema.GroupVersionResource) {
 	s.T.Helper()

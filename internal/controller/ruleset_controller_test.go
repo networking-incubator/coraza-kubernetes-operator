@@ -39,7 +39,6 @@ import (
 	wafv1alpha1 "github.com/networking-incubator/coraza-kubernetes-operator/api/v1alpha1"
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/ecds/render"
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/rulesets/assemble"
-	"github.com/networking-incubator/coraza-kubernetes-operator/internal/rulesets/cache"
 	"github.com/networking-incubator/coraza-kubernetes-operator/test/utils"
 )
 
@@ -96,7 +95,6 @@ func TestRuleSetReconciler_ReconcileNotFound(t *testing.T) {
 		Client:   k8sClient,
 		Scheme:   scheme,
 		Recorder: utils.NewTestRecorder(),
-		Cache:    cache.NewRuleSetCache(),
 	}
 	result, err := reconciler.Reconcile(ctx, ctrl.Request{
 		NamespacedName: types.NamespacedName{
@@ -107,35 +105,6 @@ func TestRuleSetReconciler_ReconcileNotFound(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Equal(t, reconcile.Result{}, result)
-}
-
-func TestRuleSetReconciler_ReconcileNotFoundDeletesCache(t *testing.T) {
-	_, cleanup := setupTest(t)
-	t.Cleanup(cleanup)
-
-	ruleSetCache := cache.NewRuleSetCache()
-	cacheKey := testNamespace + "/deleted-ruleset"
-	ruleSetCache.Put(cacheKey, "SecCollectionTimeout 1", nil)
-	require.Equal(t, 1, ruleSetCache.Len(), "pre-condition: cache should have one entry")
-
-	reconciler := &RuleSetReconciler{
-		Client:   k8sClient,
-		Scheme:   scheme,
-		Recorder: utils.NewTestRecorder(),
-		Cache:    ruleSetCache,
-	}
-	result, err := reconciler.Reconcile(context.Background(), ctrl.Request{
-		NamespacedName: types.NamespacedName{
-			Name:      "deleted-ruleset",
-			Namespace: testNamespace,
-		},
-	})
-
-	require.NoError(t, err)
-	assert.Equal(t, reconcile.Result{}, result)
-	_, ok := ruleSetCache.Get(cacheKey)
-	assert.False(t, ok, "cache entry should be removed when RuleSet is deleted")
-	assert.Equal(t, 0, ruleSetCache.Len(), "cache should be empty after deletion")
 }
 
 func TestRuleSetReconciler_ReconcileRuleSources(t *testing.T) {
@@ -168,8 +137,6 @@ func TestRuleSetReconciler_ReconcileRuleSources(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := context.Background()
-			ruleSetCache := cache.NewRuleSetCache()
-
 			t.Logf("Creating %d RuleSource(s)", len(tt.ruleSources))
 			names := make([]string, 0, len(tt.ruleSources))
 			for name := range tt.ruleSources {
@@ -214,7 +181,6 @@ func TestRuleSetReconciler_ReconcileRuleSources(t *testing.T) {
 				Client:   k8sClient,
 				Scheme:   scheme,
 				Recorder: recorder,
-				Cache:    ruleSetCache,
 			}
 			nn := types.NamespacedName{Name: ruleSet.Name, Namespace: ruleSet.Namespace}
 			result, err := reconcileRuleSetWithRuleSources(ctx, t, nn, reconciler)
@@ -235,9 +201,6 @@ func TestRuleSetReconciler_ReconcileRuleSources(t *testing.T) {
 
 func TestRuleSetReconciler_MissingRuleSource(t *testing.T) {
 	ctx := context.Background()
-
-	ruleSetCache := cache.NewRuleSetCache()
-
 	t.Log("Creating RuleSet referencing non-existent RuleSource")
 	ruleSet := utils.NewTestRuleSet(utils.RuleSetOptions{
 		Name:      "missing-src-ruleset",
@@ -260,7 +223,6 @@ func TestRuleSetReconciler_MissingRuleSource(t *testing.T) {
 		Client:   k8sClient,
 		Scheme:   scheme,
 		Recorder: recorder,
-		Cache:    ruleSetCache,
 	}
 	result, err := reconciler.Reconcile(ctx, ctrl.Request{
 		NamespacedName: types.NamespacedName{
@@ -331,10 +293,8 @@ func TestRuleSetReconciler_ValidationRejection(t *testing.T) {
 	}
 }
 
-func TestRuleSetReconciler_UpdateCache(t *testing.T) {
+func TestRuleSetReconciler_UpdatesAcceptedContent(t *testing.T) {
 	ctx := context.Background()
-
-	ruleSetCache := cache.NewRuleSetCache()
 
 	t.Log("Creating RuleSource with initial rules")
 	rs := utils.NewTestRuleSource("update-rules", "default", "SecDefaultAction \"phase:1,log,auditlog,pass\"")
@@ -362,12 +322,11 @@ func TestRuleSetReconciler_UpdateCache(t *testing.T) {
 		}
 	})
 
-	t.Log("Performing initial reconciliation to populate cache")
+	t.Log("Performing initial reconciliation to accept content")
 	reconciler := &RuleSetReconciler{
 		Client:   k8sClient,
 		Scheme:   scheme,
 		Recorder: utils.NewTestRecorder(),
-		Cache:    ruleSetCache,
 	}
 	nn := types.NamespacedName{Name: ruleSet.Name, Namespace: ruleSet.Namespace}
 	_, err = reconcileRuleSetWithRuleSources(ctx, t, nn, reconciler)
@@ -400,8 +359,6 @@ func TestRuleSetReconciler_UpdateCache(t *testing.T) {
 
 func TestRuleSetReconciler_MissingRuleData(t *testing.T) {
 	ctx := context.Background()
-	ruleSetCache := cache.NewRuleSetCache()
-
 	ruleSrc := utils.NewTestRuleSource("missing-data-rule", testNamespace, "SecCollectionTimeout 1")
 	require.NoError(t, k8sClient.Create(ctx, ruleSrc))
 	t.Cleanup(func() {
@@ -432,7 +389,6 @@ func TestRuleSetReconciler_MissingRuleData(t *testing.T) {
 		Client:   k8sClient,
 		Scheme:   scheme,
 		Recorder: recorder,
-		Cache:    ruleSetCache,
 	}
 	result, err := reconcileRuleSetWithRuleSources(ctx, t, types.NamespacedName{Name: ruleSet.Name, Namespace: ruleSet.Namespace}, reconciler)
 	require.NoError(t, err)
@@ -455,8 +411,6 @@ func TestRuleSetReconciler_MissingRuleData(t *testing.T) {
 
 func TestRuleSetReconciler_DataSourcesDuplicateFileKeysLastListedWins(t *testing.T) {
 	ctx := context.Background()
-	ruleSetCache := cache.NewRuleSetCache()
-
 	dataFirst := utils.NewTestRuleData("dup-data-first", testNamespace, map[string]string{
 		"overlap.data": "alpha",
 	})
@@ -508,7 +462,6 @@ func TestRuleSetReconciler_DataSourcesDuplicateFileKeysLastListedWins(t *testing
 		Client:   k8sClient,
 		Scheme:   scheme,
 		Recorder: utils.NewTestRecorder(),
-		Cache:    ruleSetCache,
 	}
 	nn := types.NamespacedName{Name: ruleSet.Name, Namespace: ruleSet.Namespace}
 	_, err := reconcileRuleSetWithRuleSources(ctx, t, nn, reconciler)
@@ -536,13 +489,10 @@ func TestRuleSetReconciler_DataSourcesDuplicateFileKeysLastListedWins(t *testing
 
 func TestRuleSetReconciler_ValidateRules(t *testing.T) {
 	ctx := context.Background()
-
-	ruleSetCache := cache.NewRuleSetCache()
 	reconciler := &RuleSetReconciler{
 		Client:   k8sClient,
 		Scheme:   scheme,
 		Recorder: utils.NewTestRecorder(),
-		Cache:    ruleSetCache,
 	}
 
 	ruleSources := []struct {
@@ -616,7 +566,7 @@ func TestRuleSetReconciler_ValidateRules(t *testing.T) {
 				t.Logf("Failed to delete RuleSet: %v", err)
 			}
 		})
-		t.Log("Performing initial reconciliation to populate cache")
+		t.Log("Performing initial reconciliation to accept content")
 
 		nn := types.NamespacedName{Name: ruleSet.Name, Namespace: ruleSet.Namespace}
 		_, err = reconcileRuleSetWithRuleSources(ctx, t, nn, reconciler)
@@ -639,7 +589,7 @@ func TestRuleSetReconciler_ValidateRules(t *testing.T) {
 				t.Logf("Failed to delete RuleSet: %v", err)
 			}
 		})
-		t.Log("Performing initial reconciliation to populate cache")
+		t.Log("Performing initial reconciliation to accept content")
 		resource := types.NamespacedName{
 			Name:      ruleSet.Name,
 			Namespace: ruleSet.Namespace,
@@ -794,8 +744,6 @@ func TestRuleSetReconciler_UnsupportedRules(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("ruleset with unsupported rule should be rejected", func(t *testing.T) {
-		ruleSetCache := cache.NewRuleSetCache()
-
 		t.Log("Creating RuleSource with an unsupported multipart charset detection rule")
 		rs := utils.NewTestRuleSource("unsupported-rules-src", testNamespace,
 			`SecRule ARGS "@rx test" "id:922110,phase:2,deny,status:403,msg:'Multipart charset'"`)
@@ -825,7 +773,6 @@ func TestRuleSetReconciler_UnsupportedRules(t *testing.T) {
 			Client:   k8sClient,
 			Scheme:   scheme,
 			Recorder: recorder,
-			Cache:    ruleSetCache,
 		}
 
 		result, err := reconcileRuleSetWithRuleSources(ctx, t, types.NamespacedName{
@@ -864,8 +811,6 @@ func TestRuleSetReconciler_UnsupportedRules(t *testing.T) {
 	})
 
 	t.Run("ruleset with only supported rules should succeed", func(t *testing.T) {
-		ruleSetCache := cache.NewRuleSetCache()
-
 		t.Log("Creating RuleSource with only supported rules")
 		rs := utils.NewTestRuleSource("supported-rules-src", testNamespace,
 			`SecRule REQUEST_URI "@contains /admin" "id:1,phase:1,deny,status:403"`)
@@ -895,7 +840,6 @@ func TestRuleSetReconciler_UnsupportedRules(t *testing.T) {
 			Client:   k8sClient,
 			Scheme:   scheme,
 			Recorder: recorder,
-			Cache:    ruleSetCache,
 		}
 
 		result, err := reconcileRuleSetWithRuleSources(ctx, t, types.NamespacedName{
@@ -923,8 +867,6 @@ func TestRuleSetReconciler_UnsupportedRules(t *testing.T) {
 	})
 
 	t.Run("ruleset mixing supported and unsupported rules should be rejected", func(t *testing.T) {
-		ruleSetCache := cache.NewRuleSetCache()
-
 		rsSupported := utils.NewTestRuleSource("mix-supported-src", testNamespace,
 			`SecRule REQUEST_URI "@contains /test" "id:1,phase:1,pass,nolog"`)
 		require.NoError(t, k8sClient.Create(ctx, rsSupported))
@@ -963,7 +905,6 @@ func TestRuleSetReconciler_UnsupportedRules(t *testing.T) {
 			Client:   k8sClient,
 			Scheme:   scheme,
 			Recorder: recorder,
-			Cache:    ruleSetCache,
 		}
 
 		result, err := reconcileRuleSetWithRuleSources(ctx, t, types.NamespacedName{
@@ -982,9 +923,7 @@ func TestRuleSetReconciler_UnsupportedRules(t *testing.T) {
 			"expected Warning/UnsupportedRules event; got: %v", recorder.Events)
 	})
 
-	t.Run("previously valid cache entry is preserved when ruleset update introduces unsupported rules", func(t *testing.T) {
-		ruleSetCache := cache.NewRuleSetCache()
-
+	t.Run("previously accepted content is preserved when an update introduces unsupported rules", func(t *testing.T) {
 		t.Log("Creating a valid RuleSource and accepting its content")
 		const validRule = `SecCollectionTimeout 1`
 		rs := utils.NewTestRuleSource("update-to-unsupported-rules-src", testNamespace, validRule)
@@ -1013,7 +952,6 @@ func TestRuleSetReconciler_UnsupportedRules(t *testing.T) {
 			Client:   k8sClient,
 			Scheme:   scheme,
 			Recorder: recorder,
-			Cache:    ruleSetCache,
 		}
 		nn := types.NamespacedName{Name: ruleSet.Name, Namespace: ruleSet.Namespace}
 		_, err := reconcileRuleSetWithRuleSources(ctx, t, nn, reconciler)
@@ -1045,8 +983,6 @@ func TestRuleSetReconciler_UnsupportedRules(t *testing.T) {
 	})
 
 	t.Run("ruleset with skip annotation should be accepted with unsupported rules listed in status", func(t *testing.T) {
-		ruleSetCache := cache.NewRuleSetCache()
-
 		t.Log("Creating RuleSource with an unsupported response body inspection rule")
 		const unsupportedRule = `SecRule ARGS "@rx error" "id:922110,phase:2,deny,status:403,msg:'Multipart charset'"`
 		rs := utils.NewTestRuleSource("skip-annotation-rules-src", testNamespace, unsupportedRule)
@@ -1077,7 +1013,6 @@ func TestRuleSetReconciler_UnsupportedRules(t *testing.T) {
 			Client:   k8sClient,
 			Scheme:   scheme,
 			Recorder: recorder,
-			Cache:    ruleSetCache,
 		}
 
 		result, err := reconcileRuleSetWithRuleSources(ctx, t, types.NamespacedName{
@@ -1111,8 +1046,6 @@ func TestRuleSetReconciler_UnsupportedRules(t *testing.T) {
 	})
 
 	t.Run("removing skip annotation degrades accepted ruleset with unsupported rules", func(t *testing.T) {
-		ruleSetCache := cache.NewRuleSetCache()
-
 		const unsupportedRule = `SecRule ARGS "@rx error" "id:922110,phase:2,deny,status:403,msg:'Multipart charset'"`
 		rs := utils.NewTestRuleSource("remove-skip-rules-src", testNamespace, unsupportedRule)
 		require.NoError(t, k8sClient.Create(ctx, rs))
@@ -1141,7 +1074,6 @@ func TestRuleSetReconciler_UnsupportedRules(t *testing.T) {
 			Client:   k8sClient,
 			Scheme:   scheme,
 			Recorder: utils.NewFakeRecorder(),
-			Cache:    ruleSetCache,
 		}
 		nn := types.NamespacedName{Name: ruleSet.Name, Namespace: ruleSet.Namespace}
 
@@ -1171,8 +1103,6 @@ func TestRuleSetReconciler_UnsupportedRules(t *testing.T) {
 
 func TestRuleSetReconciler_DuplicateSourceReferences(t *testing.T) {
 	ctx := context.Background()
-	ruleSetCache := cache.NewRuleSetCache()
-
 	ruleSrc := utils.NewTestRuleSource("dup-ref-src", testNamespace, "SecCollectionTimeout 1")
 	require.NoError(t, k8sClient.Create(ctx, ruleSrc))
 	t.Cleanup(func() {
@@ -1201,7 +1131,6 @@ func TestRuleSetReconciler_DuplicateSourceReferences(t *testing.T) {
 		Client:   k8sClient,
 		Scheme:   scheme,
 		Recorder: recorder,
-		Cache:    ruleSetCache,
 	}
 	result, err := reconciler.Reconcile(ctx, ctrl.Request{
 		NamespacedName: types.NamespacedName{Name: ruleSet.Name, Namespace: ruleSet.Namespace},
@@ -1223,8 +1152,6 @@ func TestRuleSetReconciler_DuplicateSourceReferences(t *testing.T) {
 
 func TestRuleSetReconciler_DuplicateDataReferences(t *testing.T) {
 	ctx := context.Background()
-	ruleSetCache := cache.NewRuleSetCache()
-
 	ruleSrc := utils.NewTestRuleSource("dup-data-ref-src", testNamespace, "SecCollectionTimeout 1")
 	require.NoError(t, k8sClient.Create(ctx, ruleSrc))
 	t.Cleanup(func() {
@@ -1266,7 +1193,6 @@ func TestRuleSetReconciler_DuplicateDataReferences(t *testing.T) {
 		Client:   k8sClient,
 		Scheme:   scheme,
 		Recorder: recorder,
-		Cache:    ruleSetCache,
 	}
 	result, err := reconciler.Reconcile(ctx, ctrl.Request{
 		NamespacedName: types.NamespacedName{Name: ruleSet.Name, Namespace: ruleSet.Namespace},
@@ -1292,8 +1218,6 @@ func TestRuleSetReconciler_DuplicateDataReferences(t *testing.T) {
 
 func TestRuleSetReconciler_RuleSourceStatusValidated(t *testing.T) {
 	ctx := context.Background()
-	ruleSetCache := cache.NewRuleSetCache()
-
 	rs := utils.NewTestRuleSource("status-valid-src", testNamespace,
 		"SecRule REQUEST_URI \"@contains /test\" \"id:1,phase:1,pass,nolog\"")
 	require.NoError(t, k8sClient.Create(ctx, rs))
@@ -1311,7 +1235,6 @@ func TestRuleSetReconciler_RuleSourceStatusValidated(t *testing.T) {
 		Client:   k8sClient,
 		Scheme:   scheme,
 		Recorder: utils.NewTestRecorder(),
-		Cache:    ruleSetCache,
 	}
 	nn := types.NamespacedName{Name: ruleSet.Name, Namespace: ruleSet.Namespace}
 	_, err := reconcileRuleSetWithRuleSources(ctx, t, nn, reconciler)
@@ -1329,8 +1252,6 @@ func TestRuleSetReconciler_RuleSourceStatusValidated(t *testing.T) {
 
 func TestRuleSetReconciler_RuleSourceStatusInvalidRules(t *testing.T) {
 	ctx := context.Background()
-	ruleSetCache := cache.NewRuleSetCache()
-
 	validSrc := utils.NewTestRuleSource("status-ok-src", testNamespace, "SecCollectionTimeout 1")
 	require.NoError(t, k8sClient.Create(ctx, validSrc))
 	t.Cleanup(func() { _ = k8sClient.Delete(ctx, validSrc) })
@@ -1355,7 +1276,6 @@ func TestRuleSetReconciler_RuleSourceStatusInvalidRules(t *testing.T) {
 		Client:   k8sClient,
 		Scheme:   scheme,
 		Recorder: utils.NewTestRecorder(),
-		Cache:    ruleSetCache,
 	}
 	_, err := reconcileRuleSetWithRuleSources(ctx, t, types.NamespacedName{Name: ruleSet.Name, Namespace: ruleSet.Namespace}, reconciler)
 	require.NoError(t, err)
@@ -1379,8 +1299,6 @@ func TestRuleSetReconciler_RuleSourceStatusInvalidRules(t *testing.T) {
 
 func TestRuleSetReconciler_RuleSourceStatusValidationSkipped(t *testing.T) {
 	ctx := context.Background()
-	ruleSetCache := cache.NewRuleSetCache()
-
 	rs := utils.NewTestRuleSource("status-skip-src", testNamespace, "SecCollectionTimeout 1")
 	rs.Annotations = map[string]string{
 		wafv1alpha1.AnnotationSkipValidation: "false",
@@ -1400,7 +1318,6 @@ func TestRuleSetReconciler_RuleSourceStatusValidationSkipped(t *testing.T) {
 		Client:   k8sClient,
 		Scheme:   scheme,
 		Recorder: utils.NewTestRecorder(),
-		Cache:    ruleSetCache,
 	}
 	_, err := reconcileRuleSetWithRuleSources(ctx, t, types.NamespacedName{Name: ruleSet.Name, Namespace: ruleSet.Namespace}, reconciler)
 	require.NoError(t, err)
@@ -1414,8 +1331,6 @@ func TestRuleSetReconciler_RuleSourceStatusValidationSkipped(t *testing.T) {
 
 func TestRuleSetReconciler_RuleDataStatusLoaded(t *testing.T) {
 	ctx := context.Background()
-	ruleSetCache := cache.NewRuleSetCache()
-
 	rd := utils.NewTestRuleData("status-data", testNamespace, map[string]string{
 		"test.data": "alpha\nbravo",
 	})
@@ -1440,7 +1355,6 @@ func TestRuleSetReconciler_RuleDataStatusLoaded(t *testing.T) {
 		Client:   k8sClient,
 		Scheme:   scheme,
 		Recorder: utils.NewTestRecorder(),
-		Cache:    ruleSetCache,
 	}
 	_, err := reconcileRuleSetWithRuleSources(ctx, t, types.NamespacedName{Name: ruleSet.Name, Namespace: ruleSet.Namespace}, reconciler)
 	require.NoError(t, err)
@@ -1454,8 +1368,6 @@ func TestRuleSetReconciler_RuleDataStatusLoaded(t *testing.T) {
 
 func TestRuleSetReconciler_RuleSourceStatusRecoversAfterRulesFixed(t *testing.T) {
 	ctx := context.Background()
-	ruleSetCache := cache.NewRuleSetCache()
-
 	validBuddy := utils.NewTestRuleSource("status-recover-buddy", testNamespace, "SecCollectionTimeout 1")
 	require.NoError(t, k8sClient.Create(ctx, validBuddy))
 	t.Cleanup(func() { _ = k8sClient.Delete(ctx, validBuddy) })
@@ -1480,7 +1392,6 @@ func TestRuleSetReconciler_RuleSourceStatusRecoversAfterRulesFixed(t *testing.T)
 		Client:   k8sClient,
 		Scheme:   scheme,
 		Recorder: utils.NewTestRecorder(),
-		Cache:    ruleSetCache,
 	}
 	_, err := reconcileRuleSetWithRuleSources(ctx, t, types.NamespacedName{Name: ruleSet.Name, Namespace: ruleSet.Namespace}, reconciler)
 	require.NoError(t, err)
@@ -1511,8 +1422,6 @@ func TestRuleSetReconciler_RuleSourceStatusRecoversAfterRulesFixed(t *testing.T)
 
 func TestRuleSetReconciler_RuleDataStatusRefreshesAfterSpecUpdate(t *testing.T) {
 	ctx := context.Background()
-	ruleSetCache := cache.NewRuleSetCache()
-
 	rd := utils.NewTestRuleData("status-data-refresh", testNamespace, map[string]string{
 		"refresh.data": "one",
 	})
@@ -1537,7 +1446,6 @@ func TestRuleSetReconciler_RuleDataStatusRefreshesAfterSpecUpdate(t *testing.T) 
 		Client:   k8sClient,
 		Scheme:   scheme,
 		Recorder: utils.NewTestRecorder(),
-		Cache:    ruleSetCache,
 	}
 	_, err := reconcileRuleSetWithRuleSources(ctx, t, types.NamespacedName{Name: ruleSet.Name, Namespace: ruleSet.Namespace}, reconciler)
 	require.NoError(t, err)
@@ -1598,7 +1506,6 @@ func TestRuleSetReconciler_MetricsRecordOnSuccess(t *testing.T) {
 		Client:   k8sClient,
 		Scheme:   scheme,
 		Recorder: utils.NewTestRecorder(),
-		Cache:    cache.NewRuleSetCache(),
 		Metrics:  m,
 	}
 
@@ -1637,7 +1544,6 @@ func TestRuleSetReconciler_MetricsValidationInvalid(t *testing.T) {
 		Client:   k8sClient,
 		Scheme:   scheme,
 		Recorder: utils.NewTestRecorder(),
-		Cache:    cache.NewRuleSetCache(),
 		Metrics:  m,
 	}
 
@@ -1685,7 +1591,6 @@ func TestRuleSetReconciler_MetricsCorazaAggregateInvalid(t *testing.T) {
 		Client:   k8sClient,
 		Scheme:   scheme,
 		Recorder: utils.NewTestRecorder(),
-		Cache:    cache.NewRuleSetCache(),
 		Metrics:  m,
 	}
 
@@ -1726,7 +1631,6 @@ func TestRuleSetReconciler_MetricsNotIncrementedOnResync(t *testing.T) {
 		Client:   k8sClient,
 		Scheme:   scheme,
 		Recorder: utils.NewTestRecorder(),
-		Cache:    cache.NewRuleSetCache(),
 		Metrics:  m,
 	}
 
@@ -1760,7 +1664,6 @@ func TestRuleSetReconciler_MetricsForgetOnNotFound(t *testing.T) {
 		Client:   k8sClient,
 		Scheme:   scheme,
 		Recorder: utils.NewTestRecorder(),
-		Cache:    cache.NewRuleSetCache(),
 		Metrics:  m,
 	}
 
@@ -1811,7 +1714,6 @@ func TestRuleSetReconciler_MetricsSourceDataCountsUpdateOnSpecChange(t *testing.
 		Client:   k8sClient,
 		Scheme:   scheme,
 		Recorder: utils.NewTestRecorder(),
-		Cache:    cache.NewRuleSetCache(),
 		Metrics:  m,
 	}
 	nn := types.NamespacedName{Name: ruleSet.Name, Namespace: ruleSet.Namespace}
@@ -1898,7 +1800,6 @@ func TestRuleSetReconciler_MetricsForgetRuleDataOnSpecRemoval(t *testing.T) {
 		Client:   k8sClient,
 		Scheme:   scheme,
 		Recorder: utils.NewTestRecorder(),
-		Cache:    cache.NewRuleSetCache(),
 		Metrics:  m,
 	}
 	nn := types.NamespacedName{Name: ruleSet.Name, Namespace: ruleSet.Namespace}
@@ -1981,7 +1882,6 @@ func TestRuleSetReconciler_MetricsMultiRuleSetRuleDataIsolation(t *testing.T) {
 		Client:   k8sClient,
 		Scheme:   scheme,
 		Recorder: utils.NewTestRecorder(),
-		Cache:    cache.NewRuleSetCache(),
 		Metrics:  m,
 	}
 
@@ -2044,7 +1944,6 @@ func TestRuleSetReconciler_MetricsRuleSetDeletionCleansUpRuleData(t *testing.T) 
 		Client:   k8sClient,
 		Scheme:   scheme,
 		Recorder: utils.NewTestRecorder(),
-		Cache:    cache.NewRuleSetCache(),
 		Metrics:  m,
 	}
 	nn := types.NamespacedName{Name: ruleSet.Name, Namespace: ruleSet.Namespace}

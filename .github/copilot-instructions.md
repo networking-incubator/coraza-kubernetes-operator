@@ -28,7 +28,7 @@ Only provide minor feedback when the user explicitly requests it with `/copilot 
 
 - Understand controller-runtime reconciliation patterns (idempotence, requeue strategies, finalizers)
 - Know Kubernetes API conventions (status conditions, owner references, RBAC, webhooks)
-- Recognize WAF-specific concerns (rule syntax validation, cache consistency, rule reload performance)
+- Recognize WAF-specific concerns (rule syntax validation, accepted-configuration consistency, rule publication performance)
 - Identify cross-repo impacts between this operator and `coraza-rs`
 
 ## Project Overview
@@ -50,7 +50,7 @@ Cross-namespace references between Engine, RuleSet, and RuleSource are explicitl
 ## Testing Expectations
 
 - Controller changes must have envtest unit tests (`internal/controller/*_test.go`).
-- Cache changes must have unit tests (`internal/rulesets/cache/*_test.go`).
+- Rule assembly and validation changes must have focused unit tests.
 - Integration tests run against a Kind cluster with Istio (`test/integration/`).
 - Integration tests must use the test framework in `test/framework/`. See `test/framework/README.md` for the API and conventions. Tests that bypass the framework (raw client calls, manual polling, hardcoded ports) should be refactored to use it.
 - `make test` runs unit tests. `make test.integration` runs integration tests. Both must pass.
@@ -67,17 +67,17 @@ Cross-namespace references between Engine, RuleSet, and RuleSource are explicitl
 - **Status conditions:** Updates must set all three condition types (Ready, Progressing, Degraded). Missing one leaves stale status.
 - **Owner references:** Any resource the operator creates must have an owner reference back to the parent CRD for garbage collection.
 - **Context cancellation:** Always respect context cancellation. Don't ignore `ctx.Done()` in long-running operations or HTTP servers.
-- **Cache server consistency:** RuleSet cache updates must be atomic. Partial updates can cause WASM plugins to load incomplete/corrupt rules.
+- **ECDS publication consistency:** Publish only complete, hash-verified accepted configurations. Do not expose partially assembled RuleSet content to Gateway subscribers.
 - **RBAC drift:** Changes to what the operator reads/writes require updates to RBAC manifests in `config/rbac/`. Run `make manifests` to regenerate.
 
 ## Security Considerations
 
 This operator manages Web Application Firewall rules. Security is paramount:
 
- - **Input validation:** By default, SecLang rules from RuleSource objects are validated before being accepted, and invalid rules must be rejected with clear error messages in status conditions. The controller supports opting out of per-RuleSource validation with the `waf.k8s.coraza.io/rule-validation: "false"` annotation on the RuleSource; even when this is used, the aggregated RuleSet is still validated before caching and must be rejected on validation failure with appropriate status reporting.
+ - **Input validation:** By default, SecLang rules from RuleSource objects are validated before being accepted, and invalid rules must be rejected with clear error messages in status conditions. The controller supports opting out of per-RuleSource validation with the `waf.k8s.coraza.io/rule-validation: "false"` annotation on the RuleSource; even when this is used, the aggregated RuleSet is still validated before acceptance and must be rejected on validation failure with appropriate status reporting.
 - **Namespace isolation:** Cross-namespace references are **explicitly prohibited**. Never weaken this constraint without security review.
 - **Secret handling:** If PRs introduce credential handling, ensure secrets are never logged or exposed in status fields.
-- **Denial of Service:** Large rule sets or very frequent polling (small reload intervals) can DoS the cache server. Review performance impacts of cache operations and polling configuration.
+- **Denial of Service:** Large rule sets can increase validation and reconciliation resource use. Respect the configured limits and review performance impacts of rule processing.
 
 ## Documentation Requirements
 
@@ -100,7 +100,7 @@ This operator manages Web Application Firewall rules. Security is paramount:
 Favor a functional programming inspired approach where practical:
 
 - **Pure functions over methods with side effects:** Extract logic into functions that take inputs and return outputs. Keep side effects (API calls, status patches, event recording) at the call site, not buried inside helpers.
-- **Small, composable functions:** Break reconciliation logic into focused functions that each do one thing (e.g., `validateAggregatedRules`, `rejectUnsupportedRules`, `buildCacheReadyMessage`, `buildWasmPlugin`).
+- **Small, composable functions:** Break reconciliation logic into focused functions that each do one thing (e.g., `validateAggregatedRules`, `rejectUnsupportedRules`, `buildEnvoyFilter`).
 - **Early returns for error/edge cases:** Handle failures at the top, keep the happy path unindented.
 - **Immutable-by-default thinking:** Avoid package-level mutable state when feasible.
 

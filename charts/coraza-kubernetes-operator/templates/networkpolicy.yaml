@@ -88,9 +88,9 @@ spec:
         - port: 8443
           protocol: TCP
     {{- end }}
-    # Cache server port (18080) is NOT listed here on purpose.
+    # ECDS listener port (18080) is NOT listed here on purpose.
     # Per-Engine NetworkPolicies are created dynamically by the controller
-    # to allow only the specific gateway workloads that need cache access.
+    # to allow only the specific gateway workloads that need ECDS access.
     # Kubernetes NetworkPolicies are additive, so those policies extend
     # this one without conflict.
   {{- if $enabled }}

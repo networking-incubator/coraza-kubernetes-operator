@@ -62,8 +62,8 @@ Decoded, the document is:
 
 Rules for both sides:
 
-- No token, token path, polling interval, HTTP rule-server address, TLS material, or
-  per-pod identifier appears in the payload.
+- The payload carries the WAF configuration. Gateway authentication is handled separately
+  on the ECDS stream; credentials and private TLS material are not part of the payload.
 - `envoy-coraza` validates and compiles the configuration in `on_configure`. A
   configuration that fails to parse or compile is rejected; the proxy keeps its
   previous configuration, or its bootstrap policy. The operator republishes NACKed

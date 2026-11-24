@@ -15,7 +15,7 @@ spec:
       rules:
         # Reconcile error ratio above 10% over 5m window (errors / total reconciles).
         # Guard: when reconcile_total rate is 0 the division is NaN and the alert
-        # does not fire (same pattern as CorazaCacheHitRateLow traffic guard).
+        # does not fire.
         - alert: CorazaReconcileErrorRateHigh
           expr: >-
             (
@@ -52,41 +52,6 @@ spec:
           annotations:
             summary: "One or more Coraza RuleSets are not ready"
             description: '{{ "{{" }} $value {{ "}}" }} RuleSet resource(s) have been in non-Ready state for more than 5 minutes.'
-
-        # Cache server absent from metrics (down or not scraped).
-        # coraza_cache_size_bytes is a GaugeFunc (always present once the cache is
-        # initialized), unlike GaugeVec metrics that only appear after first use.
-        - alert: CorazaCacheServerDown
-          expr: absent(coraza_cache_size_bytes) == 1
-          for: 2m
-          labels:
-            severity: critical
-          annotations:
-            summary: "Coraza ruleset cache server is not reachable"
-            description: "The coraza_cache_size_bytes metric is absent — the cache server may be down or the metrics endpoint is unreachable."
-
-        # Cache utilization above 90%.
-        # Guard against division by zero: only evaluate when max_size_bytes > 0.
-        # When max_size_bytes is 0 (no size limit configured or metric not emitted),
-        # the division produces NaN and the alert would silently never fire.
-        - alert: CorazaCacheSizeHigh
-          expr: (coraza_cache_size_bytes / coraza_cache_config_max_size_bytes > 0.9) and coraza_cache_config_max_size_bytes > 0
-          for: 5m
-          labels:
-            severity: warning
-          annotations:
-            summary: "Coraza ruleset cache is near capacity"
-            description: 'Cache utilization is {{ "{{" }} $value | humanizePercentage {{ "}}" }} of the configured maximum.'
-
-        # More than 10 entries pruned in 15 minutes — indicates sustained cache pressure.
-        - alert: CorazaCacheGCFrequencyHigh
-          expr: increase(coraza_cache_gc_pruned_entries_total[15m]) > 10
-          for: 15m
-          labels:
-            severity: warning
-          annotations:
-            summary: "Coraza cache GC is pruning entries at a high rate"
-            description: 'Cache GC pruned more than 10 entries in the last 15 minutes — consider increasing cache size limits.'
 
         # Workqueue depth above 100 for 10 minutes
         - alert: CorazaWorkqueueDepthHigh
@@ -130,30 +95,6 @@ spec:
           annotations:
             summary: "RuleSet validation failure rate is high"
             description: 'Namespace {{ "{{" }} $labels.namespace {{ "}}" }} has {{ "{{" }} $value | humanizePercentage {{ "}}" }} RuleSet aggregate validation failure rate over the last 5 minutes.'
-
-        # Cache hit ratio below 50% with active traffic
-        - alert: CorazaCacheHitRateLow
-          expr: >-
-            (coraza:cache_hit_ratio:rate5m < 0.5)
-            and
-            (sum(rate(coraza_cache_server_requests_total{code=~"200|404"}[5m])) > 0)
-          for: 10m
-          labels:
-            severity: warning
-          annotations:
-            summary: "Cache hit ratio is low"
-            description: 'Cache hit ratio is {{ "{{" }} $value | humanizePercentage {{ "}}" }} — most cache requests are returning 404 (cache miss).'
-
-        # Sustained authentication failures on the cache HTTP server.
-        # Require multiple failures in 15m to ignore brief token refresh on pod restart.
-        - alert: CorazaCacheServerAuthFailures
-          expr: increase(coraza_cache_server_auth_failures_total[15m]) >= 3
-          for: 5m
-          labels:
-            severity: warning
-          annotations:
-            summary: "Cache server authentication failures detected"
-            description: 'The RuleSet cache server is rejecting authenticated requests — verify ServiceAccount tokens and RBAC for WASM plugin polling.'
 
         # RuleSources in Degraded state
         - alert: CorazaRuleSourcesDegraded
@@ -221,12 +162,4 @@ spec:
         - record: coraza:rulesources_degraded:count
           expr: count(coraza_rulesource_condition{condition="Degraded"} == 1) or vector(0)
 
-        # Produces NaN when there is no cache traffic (0/0). This is correct:
-        # the dependent CorazaCacheHitRateLow alert has a traffic-presence
-        # guard (sum(rate(...)) > 0) so it never fires on NaN/idle.
-        - record: coraza:cache_hit_ratio:rate5m
-          expr: >-
-            sum(rate(coraza_cache_server_requests_total{code="200"}[5m]))
-            /
-            sum(rate(coraza_cache_server_requests_total{code=~"200|404"}[5m]))
 {{- end }}

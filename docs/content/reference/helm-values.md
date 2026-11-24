@@ -75,14 +75,15 @@ rulePolicy:
 
 ## Sizing the operator
 
-Every replica caches all RuleSource and RuleData objects in the cluster and compiles one RuleSet at a time. Plan the memory limit as:
+Every replica's informer cache holds RuleSource and RuleData objects in the cluster. The operator compiles one RuleSet at a time, but the independent RuleSource controller can compile a RuleSource for validation at the same time. Budget for:
 
-- **Steady state:** the cached rule text and RuleData (about 1 byte of memory per byte stored; the kubectl last-applied annotation and managed fields are not cached), plus one published configuration per Engine, plus a runtime baseline. The operator with the OWASP CRS and three Engines uses about 63 MiB.
+- **Steady state:** the informer-cached rule text and RuleData (about 1 byte of memory per byte stored; the kubectl last-applied annotation and managed fields are not cached), plus one published configuration per Engine and a runtime baseline. Size this for the total rule and data content and the number of Engines.
 - **One RuleSet compile:** its cost depends on the shape of the rules, not only on their size, and the content limits bound what can be delivered rather than what a compile costs. Measured on a kind cluster: a maximal CRS-shaped RuleSet peaked at 492 to 556 MiB of container memory, with up to about 350 MiB of live heap. The rule limit refuses RuleSets of many small rules; the costliest shape within it, rules with long inline `@pm` lists, reached about 400 MiB of live heap and took about 18 s at 500m of CPU. Regular expressions that expand when compiled are not bounded yet. Without a memory limit the heap grows further.
+- **Overlapping RuleSource validation:** leave extra headroom for a RuleSource compile that runs alongside a RuleSet compile. The measurements above are for RuleSet compiles.
 
-The defaults (`512Mi` request, `1Gi` limit) cover one maximal CRS-shaped compile on top of a modest rule cache. The operator sets the Go runtime memory limit to 90% of `resources.limits.memory`, read from the `MEMORY_LIMIT_BYTES` environment variable when the container starts (an explicit `GOMEMLIMIT` takes precedence), so the garbage collector works harder before the container reaches its limit; it does not cap the live heap. Because the value is read at start, the chart's `resizePolicy` restarts the container on an in-place memory resize. Without a memory limit, Kubernetes passes the node's allocatable memory instead. Raise the limit when tenants store many large RuleSources.
+The `1Gi` memory limit leaves room for one maximal CRS-shaped compile alongside operator overhead; the `512Mi` request is used for scheduling, not as a usage cap. The operator sets the Go runtime memory limit to 90% of `resources.limits.memory`, read from the `MEMORY_LIMIT_BYTES` environment variable when the container starts (an explicit `GOMEMLIMIT` takes precedence), so the garbage collector works harder before the container reaches its limit; it does not cap the live heap. Because the value is read at start, the chart's `resizePolicy` restarts the container on an in-place memory resize. Without a memory limit, Kubernetes passes the node's allocatable memory instead. Raise the limit when tenants store many large RuleSources.
 
-Because every replica caches every rule object, and every RuleSet change can start a compile, cluster administrators should bound how many of each a tenant can create with a `ResourceQuota` in each tenant namespace, for example:
+Because every replica's informer cache holds every rule object, and every RuleSet change can start a compile, cluster administrators should bound how many of each a tenant can create with a `ResourceQuota` in each tenant namespace, for example:
 
 ```yaml
 apiVersion: v1

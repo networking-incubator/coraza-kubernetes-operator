@@ -19,7 +19,6 @@ package controller
 import (
 	"context"
 	"fmt"
-	"sync"
 	"time"
 
 	rbacv3 "github.com/envoyproxy/go-control-plane/envoy/config/rbac/v3"
@@ -32,7 +31,6 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/events"
 	"k8s.io/client-go/util/workqueue"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -73,7 +71,6 @@ type EngineReconciler struct {
 	Metrics  *CorazaMetrics
 
 	client.Client
-	kubeClient    kubernetes.Interface
 	istioRevision string
 	// xdsConfig carries the ECDS endpoint and CA material injected into the
 	// EnvoyFilter.
@@ -85,13 +82,6 @@ type EngineReconciler struct {
 	// Limits bounds the configuration an Engine may accept. Acceptance must
 	// reject content the ECDS serving plane could not deliver.
 	Limits xds.Limits
-
-	// tokenStore is a thread-safe store for cache client tokens, keyed by
-	// "namespace/engineName/rulesetName". Uses sync.Map for simple concurrent access.
-	// Each Engine+RuleSet pair has its own token (no sharing), so no per-key mutex is needed.
-	// Including the rulesetName in the key ensures that changing an Engine's
-	// spec.ruleSet.name invalidates the cached token (which encodes the audience).
-	tokenStore sync.Map
 }
 
 const (
@@ -209,11 +199,6 @@ func (r *EngineReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 			if listErr := r.List(ctx, &list, client.InNamespace(req.Namespace)); listErr == nil {
 				r.Metrics.SetEnginesTotal(req.Namespace, len(list.Items))
 			}
-
-			// Remove cached tokens for this Engine so a recreated Engine
-			// with the same name does not reuse a token bound to the
-			// now-deleted ServiceAccount.
-			r.deleteTokensByPrefix(req.Namespace + "/" + req.Name + "/")
 
 			// Best-effort cleanup: remove any orphaned NetworkPolicy that may
 			// remain if the Engine was deleted before the finalizer was added

@@ -8,11 +8,6 @@ image:
 #  https://github.com/networking-incubator/coraza-kubernetes-operator/issues/38
 replicas: 1
 
-cache:
-  # Deprecated and ignored: the legacy RuleSet cache server is not started, so
-  # no garbage collection runs.
-  gcInterval: "5m"
-
 # Memory covers one maximal RuleSet compile on top of the cached rule objects;
 # compile cost depends on the shape of the rules. See the sizing section of the
 # Helm values reference. The operator sets its Go memory limit to 90% of

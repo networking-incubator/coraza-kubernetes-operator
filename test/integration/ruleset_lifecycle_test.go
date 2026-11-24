@@ -69,8 +69,8 @@ func TestRuleSetDeletion(t *testing.T) {
 		t.Fatalf("failed to delete ruleset: %v", err)
 	}
 
-	s.Step("verify cached rules still apply after ruleset deletion")
-	// The WAF should continue using cached rules
+	s.Step("verify last accepted rules still apply after RuleSet deletion")
+	// The proxy continues enforcing its last accepted configuration.
 	gw.ExpectBlocked("/?test=blocked")
 	gw.ExpectAllowed("/?test=safe")
 }
@@ -135,7 +135,7 @@ func TestEngineDeleteRecreate(t *testing.T) {
 }
 
 // TestRuleSourceDeletion verifies that deleting a RuleSource referenced by a RuleSet
-// causes the RuleSet to become degraded, but cached rules continue to apply.
+// causes the RuleSet to become degraded, but the proxy keeps its last accepted configuration.
 func TestRuleSourceDeletion(t *testing.T) {
 	t.Parallel()
 	s := fw.NewScenario(t)
@@ -172,7 +172,7 @@ func TestRuleSourceDeletion(t *testing.T) {
 	s.Step("verify RuleSet becomes degraded after source deletion")
 	s.ExpectRuleSetDegraded(ns, "ruleset")
 
-	s.Step("verify cached rules still apply despite degraded RuleSet")
+	s.Step("verify last accepted rules still apply despite degraded RuleSet")
 	gw.ExpectBlocked("/?test=blocked")
 	gw.ExpectAllowed("/?test=safe")
 }
