@@ -192,26 +192,12 @@
       "title": "Reconcile rate (all controllers)",
       "gridPos": {
         "h": 8,
-        "w": 12,
+        "w": 24,
         "x": 0,
         "y": 49
       },
       "exprs": [
         "sum by (controller, result) (rate(controller_runtime_reconcile_total{controller=~\"ruleset|engine|rulesource\"}[5m]))"
-      ]
-    },
-    {
-      "id": 14,
-      "type": "timeseries",
-      "title": "Cache request rate",
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 49
-      },
-      "exprs": [
-        "sum by (handler) (rate(coraza_cache_server_requests_total[5m]))"
       ]
     }
   ],

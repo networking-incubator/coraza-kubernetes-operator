@@ -52,9 +52,8 @@ contract]({{< relref "/reference/ecds-plugin-contract" >}}) for the exact payloa
 
 ## Rule updates
 
-Rules are pushed, not polled. When a RuleSet changes and the Engine re-accepts, the operator
-publishes a new ECDS snapshot; Envoy reconfigures the filter in place and the Gateway pods do
-not restart. There is no cache server, no polling interval, and no token in the rule payload.
+When a RuleSet changes and the Engine accepts the new configuration, the operator publishes
+a new ECDS snapshot. Envoy reconfigures the filter in place without restarting Gateway pods.
 
 If the plugin rejects a payload, Envoy NACKs the update and keeps the previous configuration.
 

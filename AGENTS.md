@@ -58,29 +58,23 @@ make clean.cluster.kind     # Destroy it
 
 ## Architecture
 
-### Controllers and shared cache
+### Controllers and reconciliation
 
 - **RuleSourceReconciler** - watches `RuleSource` (spec generation and validation annotation). Validates `spec.rules` with Coraza per fragment (skips patch-only fragments that contain only `SecRuleUpdate*` / `SecRuleRemove*`; without RuleSet-scoped RuleData; aggregate validation on the RuleSet remains authoritative for `@pmFromFile`) and patches **RuleSource** status (`Validated`, `InvalidRules`, or `ValidationSkipped`).
-- **RuleSetReconciler** - watches RuleSet + referenced RuleSources + referenced RuleData. Gates on **RuleSource** status before aggregating; merges rules and RuleData, runs aggregate Coraza validation, checks for WASM-unsupported rules, stores in RuleSetCache.
+- **RuleSetReconciler** - watches RuleSet + referenced RuleSources + referenced RuleData. Gates on **RuleSource** status before aggregating; merges rules and RuleData, runs aggregate Coraza validation, and checks for WASM-unsupported rules.
   - It runs the gateway-parity checks (`validation.CheckGatewayParity`: rule text Coraza and envoy-coraza read differently) before every aggregate compile and on every reconcile of accepted content; accepted content that fails them reports `InvalidRuleSet` and keeps its accepted record, so the Engine keeps its configuration. The cluster rule policy (`validation.CheckRulePolicy`, `--rule-*` flags / `rulePolicy` Helm values) runs only on content that differs from what the RuleSet last accepted.
 - **EngineReconciler** - watches Engine + referenced RuleSet + Gateways + Pods. When the RuleSet is ready, renders the artifact, records the accepted configuration in Engine status, and applies an EnvoyFilter (server-side apply) that configures the WASM filter and its ECDS config source. Dataplane metrics use platform-owned central Istio ALS collectors (not per-Engine OTC sidecars).
 - **PublicationReconciler** - watches Engine, RuleSet, RuleSource, RuleData, Gateway and Pods. On every replica it reconstructs the accepted Engine configuration, publishes the artifact to the local xDS snapshot store, and authorizes Gateway pod ServiceAccounts to subscribe. It never writes status.
-
-The RuleSet reconciler is initialized in `internal/controller/manager.go` with a shared `RuleSetCache` that holds validation artifacts; the RuleSource and Engine reconcilers share the same manager client.
 
 ### xDS / ECDS delivery
 
 The operator serves ECDS over its own listener (`internal/xds/`): EnvoyFilter-generated WASM filters subscribe to `coraza.waf.<namespace>.<engine>.<uid>` and receive the rendered runtime configuration, while the raw WASM binary is fetched from `https://<operator-service>:<xds-port>/wasm/<sha256>.wasm` (port defaults to 18080). The listener terminates TLS 1.3 and intentionally negotiates both HTTP/2 (gRPC/ECDS and asset fetches) and HTTP/1.1 (asset fetches). Subscribers are authorized by a ServiceAccount bearer token validated through TokenReview and by matching Gateway pod ServiceAccounts.
 
-### Legacy RuleSet cache server
-
-`internal/rulesets/cache/` still contains the versioned in-memory cache and its HTTP server, and the `--cache-server-port` flag still exists, but the server is **not started** and WASM plugins no longer poll `/rules/...`. It is retained pending removal; do not build new features on it.
-
 ### Key directories
 
 - `api/v1alpha1/` - CRD types (Engine, RuleSet, RuleSource, RuleData, DriverConfig)
 - `internal/controller/` - reconcilers and watch setup
-- `internal/rulesets/` - cache, memfs (virtual FS for rule validation), unsupported rule detection, `validation/` (shared Coraza helpers for rule text)
+- `internal/rulesets/` - memfs (virtual FS for rule validation), unsupported rule detection, `validation/` (shared Coraza helpers for rule text)
 - `cmd/manager/` - operator entry point
 - `cmd/kubectl-coraza/` - CLI plugin for rule generation
 - `test/framework/` - integration test helpers (Scenario pattern, port-forwarding, assertions)
@@ -113,7 +107,7 @@ If you introduce a finalizer to a controller that uses `GenerationChangedPredica
 ```go
 return ctrl.Result{RequeueAfter: 100 * time.Millisecond}, nil
 ```
-This also means unit tests will need two `Reconcile()` calls - the first to add the finalizer, the second to do the actual work. The current EngineReconciler does **not** use a finalizer, so a single `Reconcile()` call is sufficient in its tests.
+This also means unit tests need two `Reconcile()` calls - the first to add the Engine NetworkPolicy finalizer, the second to do the actual work.
 
 ### EngineReconciler in tests must set operatorNamespace
 

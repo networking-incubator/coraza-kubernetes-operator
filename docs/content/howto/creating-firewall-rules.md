@@ -5,7 +5,7 @@ weight: 20
 description: "Write SecLang rules in RuleSource objects and aggregate them in a RuleSet."
 ---
 
-Firewall rules in the Coraza Kubernetes Operator are written using [ModSecurity SecLang](https://github.com/owasp-modsecurity/ModSecurity/wiki/Reference-Manual-(v3.x)) syntax. Rule text is stored in **RuleSource** resources; a **RuleSet** lists RuleSource (and optional RuleData) names in order and drives compilation and caching.
+Firewall rules in the Coraza Kubernetes Operator are written using [ModSecurity SecLang](https://github.com/owasp-modsecurity/ModSecurity/wiki/Reference-Manual-(v3.x)) syntax. Rule text is stored in **RuleSource** resources; a **RuleSet** lists RuleSource (and optional RuleData) names in order and drives compilation and ECDS publication.
 
 ## Writing rules in RuleSources
 
@@ -92,7 +92,7 @@ No restart of the operator or Engine is required.
 
 ## Rule validation
 
-The operator compiles and validates rules when a RuleSet is reconciled. If a rule has a syntax error, the RuleSet can enter a `Degraded` state and the invalid revision is not cached. A previously cached valid revision continues to be served.
+The operator compiles and validates rules when a RuleSet is reconciled. If a rule has a syntax error, the RuleSet can enter a `Degraded` state and the invalid revision is not accepted for delivery. The last accepted configuration remains published to Gateways.
 
 Check the RuleSet status for errors:
 

@@ -58,11 +58,9 @@ check_metric_in_exprs() {
 }
 
 for metric in \
-  coraza_cache_size_bytes \
   coraza:engines_not_ready:count \
   coraza_rulesource_validations_total \
   coraza_ruleset_validations_total \
-  coraza_cache_set_duration_seconds \
   rest_client_requests_total; do
   check_metric_in_exprs "${OVERVIEW}" "${metric}" "overview"
 done

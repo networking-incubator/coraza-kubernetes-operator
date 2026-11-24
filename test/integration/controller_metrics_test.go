@@ -34,8 +34,7 @@ import (
 )
 
 // TestCorazaControllerMetrics verifies that the operator's coraza_* metrics
-// (engine, ruleset, and cache server counters) are exposed on the operator's
-// authenticated HTTPS metrics endpoint.
+// are exposed on the operator's authenticated HTTPS metrics endpoint.
 func TestCorazaControllerMetrics(t *testing.T) {
 	t.Parallel()
 	s := fw.NewScenario(t)
@@ -108,22 +107,6 @@ func TestCorazaControllerMetrics(t *testing.T) {
 			"expected 200 for authenticated metrics request, got %d", resp.StatusCode)
 		return string(body)
 	}
-
-	// -------------------------------------------------------------------------
-	// Verify cache server metrics are present (always emitted by the server)
-	// -------------------------------------------------------------------------
-
-	s.Step("verify cache server metrics")
-	t.Run("exposes coraza_cache metrics", func(t *testing.T) {
-		require.EventuallyWithT(t, func(collect *assert.CollectT) {
-			body := fetchMetrics(collect)
-			if body == "" {
-				return
-			}
-			assert.Contains(collect, body, "coraza_cache_size_bytes",
-				"expected coraza_cache_size_bytes gauge in response")
-		}, framework.DefaultTimeout, framework.DefaultInterval)
-	})
 
 	// -------------------------------------------------------------------------
 	// Create resources and verify Engine + RuleSet metrics appear

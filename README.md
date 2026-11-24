@@ -52,35 +52,25 @@ their gateways/proxies:
 
 `RuleSet` resources list named `RuleSource` objects in `spec.sources` (order
 matters) for [Seclang] rule text, and optional `RuleData` objects in `spec.data`
-for data files used with `@pmFromFile`. The reconciler emits the merged result
-to the `RuleSet` cache server.
+for data files used with `@pmFromFile`. The operator validates and assembles the
+inputs before accepting a configuration for an Engine.
 
 > **Note**: Currently, only [Seclang] rules are supported.
 
-The `RuleSet` cache contains the compiled and validated set of rules, which
-is pulled by `Engines`.
-
-`Engine` resources pick a `RuleSet` to enforce, and attach the Coraza WAF
-to a `Gateway`, which will then enforce the configured `RuleSet`.
+`Engine` resources select a `RuleSet` and attach the Coraza WAF to a `Gateway`.
+The operator publishes accepted configuration to Gateways over Envoy's
+Extension Config Discovery Service (ECDS), and applies accepted updates without
+restarting Gateway pods.
 
 > **Warning**: Hosting or providing any packaged rules is an explicit non-goal
 > of this project. Users must supply their own rules.
 
-The keys for the cache are the `namespace/name` of the `RuleSet`, allowing the
-compiled set of rules to be polled from a cache server hosting the cache.
-
 > **Note**: All `RuleSets` and rules are restricted to same-namespace
 > currently.
 
-The engine controller responds to `Engine` resources by deploying the Coraza
-engine according to the type and mode provided, and attaching it to a `Gateway`.
-
-> **Note**: For example: if the type is `istio` and the mode is `wasm`, it
-> will attach Coraza to an Istio `Gateway`, loading it via a [WASM] module.
-
-`Engine` resources target a `RuleSet` to indicate the firewall rules that will
-be applied to all `Gateway` traffic. Poll intervals for `RuleSets` can be set
-to enable automatic and live rule updates on running `Engines`.
+For Istio, the Engine controller attaches Coraza with an `EnvoyFilter`; the
+Gateway receives the WASM module over the operator's digest-addressed HTTPS
+asset route.
 
 <img width="825" height="460" alt="cko-architecture-diagram" src="https://github.com/user-attachments/assets/e7b257e3-096f-4321-a40d-fe4e473480ac" />
 

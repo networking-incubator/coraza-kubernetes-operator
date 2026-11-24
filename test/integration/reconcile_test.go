@@ -96,7 +96,7 @@ func TestReconciliation(t *testing.T) {
 
 	s.ExpectRuleSetDegraded(ns, "ruleset")
 
-	s.Step("cache remained untouched, old rules still apply")
+	s.Step("last accepted rules remain in effect")
 	gw.ExpectAllowed("/sinistermonkey")
 	gw.ExpectBlocked("/maniacalmonkey")
 

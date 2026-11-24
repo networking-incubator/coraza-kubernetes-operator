@@ -5,7 +5,7 @@ weight: 45
 description: "Enable metrics collection and Prometheus monitoring for the operator."
 ---
 
-The Coraza Kubernetes Operator exposes Prometheus metrics over HTTPS for monitoring the RuleSet cache server.
+The Coraza Kubernetes Operator exposes control-plane and serving-plane Prometheus metrics over HTTPS.
 
 ## Enabling the Metrics Endpoint
 
@@ -85,20 +85,6 @@ By default, the operator generates a self-signed certificate for the metrics end
 
 ## Available Metrics
 
-### RuleSet cache server (RED)
-
-| Metric | Type | Description |
-|--------|------|-------------|
-| `coraza_cache_server_requests_total` | Counter | Total number of requests. Labels: `handler`, `method`, `code`. |
-| `coraza_cache_server_request_duration_seconds` | Histogram | Request duration in seconds. Labels: `handler`, `method`, `code`. |
-| `coraza_cache_server_in_flight_requests` | Gauge | Number of in-flight requests. Labels: `handler`. |
-| `coraza_cache_server_auth_failures_total` | Counter | Authentication failures on the cache HTTP server (invalid or missing bearer token). |
-
-The `handler` label has two values:
-
-- `rules` -- requests for the full compiled ruleset
-- `latest` -- requests for the latest ruleset metadata
-
 ### Rule validation
 
 Counters and histograms are emitted during Coraza validation in the RuleSource and RuleSet reconcilers. The `outcome` label is `valid`, `invalid`, or (RuleSource only) `skipped`. A `valid` outcome means Coraza parsing succeeded; it does not imply the resource is Ready.
@@ -109,12 +95,6 @@ Counters and histograms are emitted during Coraza validation in the RuleSource a
 | `coraza_rulesource_validation_duration_seconds` | Histogram | RuleSource validation latency. Labels: `namespace`, `outcome` (`valid` or `invalid` only). |
 | `coraza_ruleset_validations_total` | Counter | RuleSet aggregate validation outcomes. Labels: `namespace`, `outcome`. |
 | `coraza_ruleset_validation_duration_seconds` | Histogram | RuleSet aggregate validation latency. Labels: `namespace`, `outcome`. |
-
-### Cache storage
-
-| Metric | Type | Description |
-|--------|------|-------------|
-| `coraza_cache_set_duration_seconds` | Histogram | Time to store a compiled RuleSet in the in-memory cache. Labels: `namespace`. |
 
 ### xDS serving certificate
 

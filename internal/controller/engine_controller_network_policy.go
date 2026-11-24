@@ -58,10 +58,10 @@ const (
 
 	// NetworkPolicyGenerateName is the prefix used with GenerateName for all
 	// created NetworkPolicy resources.
-	NetworkPolicyGenerateName = "coraza-cache-"
+	NetworkPolicyGenerateName = "coraza-ecds-"
 
 	// operatorPodLabelKey and operatorPodLabelValue identify the operator pods
-	// targeted by the cache server NetworkPolicy. These match the labels set by
+	// targeted by the ECDS NetworkPolicy. These match the labels set by
 	// the Helm chart's selectorLabels template.
 	operatorPodLabelKey   = "control-plane"
 	operatorPodLabelValue = "coraza-controller-manager"
@@ -151,7 +151,7 @@ func (r *EngineReconciler) handleNetworkPolicyDeletion(ctx context.Context, log 
 // -----------------------------------------------------------------------------
 
 // applyNetworkPolicy creates or updates a NetworkPolicy in the operator namespace
-// that allows ingress from the Engine's gateway pods to the cache server port.
+// that allows ingress from the Engine's gateway pods to the ECDS listener.
 func (r *EngineReconciler) applyNetworkPolicy(ctx context.Context, log logr.Logger, req ctrl.Request, engine *wafv1alpha1.Engine) error {
 	ws := targetLabelSelector(engine)
 	if ws == nil || (len(ws.MatchLabels) == 0 && len(ws.MatchExpressions) == 0) {
@@ -170,7 +170,7 @@ func (r *EngineReconciler) applyNetworkPolicy(ctx context.Context, log logr.Logg
 		desired.Name = existing.Name
 		desired.GenerateName = ""
 		desired.ResourceVersion = existing.ResourceVersion
-		logDebug(log, req, "Engine", "Updating cache server NetworkPolicy", "networkPolicyName", existing.Name)
+		logDebug(log, req, "Engine", "Updating ECDS NetworkPolicy", "networkPolicyName", existing.Name)
 		if err := r.Update(ctx, desired); err != nil {
 			logAPIError(log, req, "Engine", err, "Failed to update NetworkPolicy", desired)
 			return err
@@ -179,7 +179,7 @@ func (r *EngineReconciler) applyNetworkPolicy(ctx context.Context, log logr.Logg
 		return nil
 	}
 
-	logDebug(log, req, "Engine", "Creating cache server NetworkPolicy")
+	logDebug(log, req, "Engine", "Creating ECDS NetworkPolicy")
 	if err := r.Create(ctx, desired); err != nil {
 		logAPIError(log, req, "Engine", err, "Failed to create NetworkPolicy", desired)
 		return err
@@ -221,7 +221,7 @@ func (r *EngineReconciler) buildNetworkPolicy(engine *wafv1alpha1.Engine) *netwo
 	protocol := corev1.ProtocolTCP
 	listenPort := r.xdsConfig.ListenPort
 	if listenPort <= 0 {
-		listenPort = DefaultRuleSetCacheServerPort
+		listenPort = DefaultXDSListenPort
 	}
 	port := intstr.FromInt32(listenPort)
 

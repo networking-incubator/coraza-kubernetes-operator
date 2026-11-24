@@ -60,11 +60,13 @@ New rules or settings build the new configuration once on each Gateway, as befor
 
 ### Upgrading from a pre-ECDS release
 
-This release delivers WAF configuration over xDS (ECDS) and no longer creates Envoy
-`WasmPlugin` resources. An in-place upgrade from a release that used `WasmPlugin` is not
-supported: the operator does not look those resources up or delete them, so a legacy
-`coraza-engine-<engine-name>` `WasmPlugin` in the Engine's namespace stays attached to
-the Gateway next to the new ECDS filter. Delete them as part of the upgrade:
+The v0.5.0 release used Istio `WasmPlugin` resources for the WAF filter. ECDS
+releases deliver WAF configuration over xDS and no longer create `WasmPlugin`
+resources. An in-place upgrade from a release that used `WasmPlugin` is not
+supported: the operator does not look those resources up or delete them, so a
+legacy `coraza-engine-<engine-name>` `WasmPlugin` in the Engine's namespace stays
+attached to the Gateway next to the new ECDS filter. Delete them as part of the
+upgrade:
 
 ```bash
 kubectl get wasmplugins.extensions.istio.io -A

@@ -29,10 +29,20 @@ Out of approximately 3,300 OWASP CoreRuleSet conformance tests, 190 tests (6%) a
 The RuleSet controller automatically detects and rejects any RuleSet containing rules listed in this document. When unsupported rules are found:
 
 - The RuleSet is marked **Degraded** with reason `UnsupportedRules`.
-- The rejected revision is not cached. Any previously cached valid revision continues to be served.
+- The rejected revision is not accepted for delivery. A running operator replica that
+  already holds the last accepted ECDS snapshot continues to serve it.
 - The RuleSet is not requeued automatically. You must remove or replace the unsupported rules.
 
-This behavior can be overridden with the annotation `waf.k8s.coraza.io/skip-unsupported-rules-check: "true"`. The issues are still logged, but the RuleSet is cached normally.
+A check for unsupported rules can be skipped with the annotation
+`waf.k8s.coraza.io/skip-unsupported-rules-check: "true"`. The issues are still
+logged, but the RuleSet is accepted normally.
+
+A restarted replica reconstructs the configuration from the current RuleSet and its
+referenced inputs. If those inputs no longer reproduce the Engine's accepted record,
+the replica cannot publish that configuration. Pending records for the current
+rendering schema gate startup publication readiness until they are resolved or the
+two-minute deadline expires. Expiry lifts the readiness gate without publishing
+the missing configurations.
 
 Unsupported rules are classified into two tiers:
 

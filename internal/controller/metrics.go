@@ -73,7 +73,6 @@ type CorazaMetrics struct {
 	rulesetValidations           *prometheus.CounterVec
 	rulesourceValidationDuration *prometheus.HistogramVec
 	rulesetValidationDuration    *prometheus.HistogramVec
-	cacheSetDuration             *prometheus.HistogramVec
 }
 
 // NewCorazaMetrics creates a CorazaMetrics and registers all gauges with reg.
@@ -168,15 +167,9 @@ func NewCorazaMetrics(reg prometheus.Registerer) (*CorazaMetrics, error) {
 
 		rulesetValidationDuration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
 			Name:    "coraza_ruleset_validation_duration_seconds",
-			Help:    "Duration of RuleSet validation (PMFromFile, rule text checks and aggregate parse) by outcome; excludes status patches and cache writes.",
+			Help:    "Duration of aggregate RuleSet validation by outcome; excludes status patches and unsupported-rule checks.",
 			Buckets: []float64{.001, .005, .01, .025, .05, .1, .25, .5, 1, 2.5, 5},
 		}, []string{"namespace", "outcome"}),
-
-		cacheSetDuration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
-			Name:    "coraza_cache_set_duration_seconds",
-			Help:    "Duration of cache Put operations recorded once per RuleSet cache transition; excludes resync and content-unchanged reconciles.",
-			Buckets: []float64{.0001, .0005, .001, .005, .01, .025, .05, .1},
-		}, []string{"namespace"}),
 	}
 
 	for _, c := range []prometheus.Collector{
@@ -185,7 +178,7 @@ func NewCorazaMetrics(reg prometheus.Registerer) (*CorazaMetrics, error) {
 		m.rulesourceInfo, m.rulesourceCondition, m.rulesources,
 		m.ruledataInfo, m.ruledataCondition, m.ruledatas,
 		m.rulesourceValidations, m.rulesetValidations,
-		m.rulesourceValidationDuration, m.rulesetValidationDuration, m.cacheSetDuration,
+		m.rulesourceValidationDuration, m.rulesetValidationDuration,
 	} {
 		if err := reg.Register(c); err != nil {
 			return nil, err
@@ -427,12 +420,4 @@ func (m *CorazaMetrics) ObserveRuleSetValidation(ns, outcome string, d time.Dura
 		return
 	}
 	m.rulesetValidationDuration.WithLabelValues(ns, outcome).Observe(d.Seconds())
-}
-
-// ObserveCacheSet records a cache Put duration.
-func (m *CorazaMetrics) ObserveCacheSet(ns string, d time.Duration) {
-	if m == nil {
-		return
-	}
-	m.cacheSetDuration.WithLabelValues(ns).Observe(d.Seconds())
 }

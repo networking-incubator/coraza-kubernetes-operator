@@ -27,7 +27,6 @@ import (
 	"runtime/debug"
 	"strconv"
 	"strings"
-	"time"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
@@ -52,7 +51,6 @@ import (
 
 	wafv1alpha1 "github.com/networking-incubator/coraza-kubernetes-operator/api/v1alpha1"
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/controller"
-	"github.com/networking-incubator/coraza-kubernetes-operator/internal/rulesets/cache"
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/rulesets/validation"
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/xds"
 	// +kubebuilder:scaffold:imports
@@ -123,8 +121,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	rulesetCache := setupRuleSetCache(cfg)
-
 	xdsDeps, err := xds.NewDependencies(xds.Config{
 		KubeClient:    kubeClient,
 		Reader:        mgr.GetClient(),
@@ -151,8 +147,6 @@ func main() {
 		os.Exit(1)
 	}
 	if err := controller.SetupControllers(mgr, controller.Deps{
-		KubeClient:        kubeClient,
-		RuleSetCache:      rulesetCache,
 		IstioRevision:     cfg.istioRevision,
 		OperatorNamespace: podNamespace,
 		ECDSConfig:        ecdsConfig,
@@ -196,10 +190,6 @@ type config struct {
 	metricsCertPath   string
 	metricsCertName   string
 	metricsCertKey    string
-	cacheGCInterval   time.Duration
-	cacheMaxAge       time.Duration
-	cacheMaxSize      int
-	cacheServerPort   int
 
 	// Deprecated and ignored: kept so the chart can keep passing them until
 	// Phase 7 removes the flags and the chart arguments together.
@@ -245,12 +235,6 @@ func parseFlags() config {
 	flag.StringVar(&cfg.metricsCertPath, "metrics-cert-path", "", "The directory that contains the metrics server certificate.")
 	flag.StringVar(&cfg.metricsCertName, "metrics-cert-name", "tls.crt", "The name of the metrics server certificate file.")
 	flag.StringVar(&cfg.metricsCertKey, "metrics-cert-key", "tls.key", "The name of the metrics server key file.")
-	// Deprecated: the RuleSet cache server is not started and nothing populates
-	// the cache, so these four flags are accepted for chart compatibility only.
-	flag.DurationVar(&cfg.cacheGCInterval, "cache-gc-interval", cache.CacheGCInterval, "Deprecated and ignored")
-	flag.DurationVar(&cfg.cacheMaxAge, "cache-max-age", cache.CacheMaxAge, "Deprecated and ignored")
-	flag.IntVar(&cfg.cacheMaxSize, "cache-max-size", cache.CacheMaxSize, "Deprecated and ignored")
-	flag.IntVar(&cfg.cacheServerPort, "cache-server-port", controller.DefaultRuleSetCacheServerPort, "Deprecated and ignored")
 	// Deprecated: accepted for chart compatibility until Phase 7 removes both
 	// the flags and the chart arguments. Neither value is used.
 	flag.StringVar(&cfg.envoyClusterName, "envoy-cluster-name", "", "Deprecated and ignored")
@@ -260,7 +244,7 @@ func parseFlags() config {
 		"Helm release name; the fallback Service name for the default xDS advertise address when --operator-service-name is unset")
 	flag.StringVar(&cfg.xdsAdvertiseAddress, "xds-advertise-address", "",
 		"The operator address Gateways dial for ECDS; defaults to <operator-service-name>.<POD_NAMESPACE>.svc.cluster.local")
-	flag.IntVar(&cfg.xdsPort, "xds-port", controller.DefaultRuleSetCacheServerPort,
+	flag.IntVar(&cfg.xdsPort, "xds-port", controller.DefaultXDSListenPort,
 		"The operator ECDS port appended to the advertise address when it has no port")
 	flag.StringVar(&cfg.assetBaseURL, "asset-base-url", "",
 		"The base URL Envoy fetches the WASM asset from; defaults to https://<advertise-address>")
@@ -484,25 +468,6 @@ func buildCacheOptions(operatorNamespace string) ctrlcache.Options {
 			},
 		},
 	}
-}
-
-func setupRuleSetCache(cfg config) *cache.RuleSetCache {
-	rulesetCache := cache.NewRuleSetCache()
-	rulesetCache.SetLogger(ctrl.Log.WithName("ruleset-cache"))
-	gcConfig := &cache.GarbageCollectionConfig{
-		GCInterval: cfg.cacheGCInterval,
-		MaxAge:     cfg.cacheMaxAge,
-		MaxSize:    cfg.cacheMaxSize,
-	}
-
-	if err := cache.RegisterUSEMetrics(metrics.Registry, rulesetCache, *gcConfig); err != nil {
-		setupLog.Error(err, "unable to register USE metrics for ruleset cache")
-		os.Exit(1)
-	}
-
-	// The legacy HTTP rule server is intentionally not registered: ECDS is the
-	// only delivery path. The package and its tests are retained.
-	return rulesetCache
 }
 
 func setupHealthChecks(mgr ctrl.Manager, deps *xds.Dependencies) {

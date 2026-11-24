@@ -31,7 +31,6 @@ import (
 	wafv1alpha1 "github.com/networking-incubator/coraza-kubernetes-operator/api/v1alpha1"
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/ecds/render"
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/rulesets/assemble"
-	"github.com/networking-incubator/coraza-kubernetes-operator/internal/rulesets/cache"
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/rulesets/validation"
 	"github.com/networking-incubator/coraza-kubernetes-operator/test/utils"
 )
@@ -101,7 +100,6 @@ func TestRuleSetReconciler_AcceptsContentByHash(t *testing.T) {
 		Client:   k8sClient,
 		Scheme:   scheme,
 		Recorder: recorder,
-		Cache:    cache.NewRuleSetCache(),
 	}
 	nn := types.NamespacedName{Name: ruleSet.Name, Namespace: ruleSet.Namespace}
 	_, err := reconcileRuleSetWithRuleSources(ctx, t, nn, reconciler)
@@ -173,7 +171,6 @@ func TestRuleSetReconciler_PreservesAcceptedContentOnInvalidUpdate(t *testing.T)
 				Client:     k8sClient,
 				Scheme:     scheme,
 				Recorder:   utils.NewFakeRecorder(),
-				Cache:      cache.NewRuleSetCache(),
 				RulePolicy: tt.policy,
 			}
 			nn := types.NamespacedName{Name: ruleSet.Name, Namespace: ruleSet.Namespace}
@@ -240,7 +237,6 @@ func TestRuleSetReconciler_RulePolicyKeepsAcceptedContent(t *testing.T) {
 		Client:   k8sClient,
 		Scheme:   scheme,
 		Recorder: utils.NewFakeRecorder(),
-		Cache:    cache.NewRuleSetCache(),
 	})
 	require.NoError(t, err)
 	require.NoError(t, k8sClient.Get(ctx, nn, ruleSet))
@@ -253,7 +249,6 @@ func TestRuleSetReconciler_RulePolicyKeepsAcceptedContent(t *testing.T) {
 		Client:     k8sClient,
 		Scheme:     scheme,
 		Recorder:   utils.NewFakeRecorder(),
-		Cache:      cache.NewRuleSetCache(),
 		RulePolicy: policy,
 	}
 	_, err = reconcileRuleSetWithRuleSources(ctx, t, nn, restarted)
@@ -313,7 +308,6 @@ func TestRuleSetReconciler_RulePolicyRevertToAcceptedContent(t *testing.T) {
 		Client:     k8sClient,
 		Scheme:     scheme,
 		Recorder:   utils.NewFakeRecorder(),
-		Cache:      cache.NewRuleSetCache(),
 		RulePolicy: validation.RulePolicy{DeniedOperators: []string{"pm"}},
 	}
 	nn := types.NamespacedName{Name: ruleSet.Name, Namespace: ruleSet.Namespace}
@@ -365,7 +359,6 @@ func TestRuleSetReconciler_EmptyRulesPolicyAcceptance(t *testing.T) {
 			Client:   k8sClient,
 			Scheme:   scheme,
 			Recorder: utils.NewFakeRecorder(),
-			Cache:    cache.NewRuleSetCache(),
 		}
 		nn := types.NamespacedName{Name: ruleSet.Name, Namespace: ruleSet.Namespace}
 		_, err := reconcileRuleSetWithRuleSources(ctx, t, nn, reconciler)
@@ -399,7 +392,6 @@ func TestRuleSetReconciler_EmptyRulesPolicyAcceptance(t *testing.T) {
 			Client:   k8sClient,
 			Scheme:   scheme,
 			Recorder: utils.NewFakeRecorder(),
-			Cache:    cache.NewRuleSetCache(),
 		}
 		nn := types.NamespacedName{Name: ruleSet.Name, Namespace: ruleSet.Namespace}
 		_, err := reconcileRuleSetWithRuleSources(ctx, t, nn, reconciler)

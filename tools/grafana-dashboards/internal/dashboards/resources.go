@@ -139,22 +139,11 @@ func addOperatorActivity(builder *dashboard.DashboardBuilder) {
 		Title:       "Reconcile rate (all controllers)",
 		Description: "Operator-wide; not filtered by namespace variable.",
 		Unit:        "ops",
-		GridPos:     dashboard.GridPos{H: 8, W: 12, X: 0, Y: panelY},
+		GridPos:     dashboard.GridPos{H: 8, W: 24, X: 0, Y: panelY},
 		Queries: []prom.QuerySpec{{
 			Expr:   `sum by (controller, result) (rate(controller_runtime_reconcile_total` + controllerFilter + `[5m]))`,
 			Legend: "{{controller}} {{result}}",
 		}},
 	}))
 
-	builder.WithPanel(panels.TimeseriesPanel(panels.TimeseriesPanelConfig{
-		ID:          14,
-		Title:       "Cache request rate",
-		Description: "Cache is operator-scoped; keys are ruleset namespace/name.",
-		Unit:        "reqps",
-		GridPos:     dashboard.GridPos{H: 8, W: 12, X: 12, Y: panelY},
-		Queries: []prom.QuerySpec{{
-			Expr:   "sum by (handler) (rate(coraza_cache_server_requests_total[5m]))",
-			Legend: "{{handler}}",
-		}},
-	}))
 }

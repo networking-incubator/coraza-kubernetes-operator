@@ -54,7 +54,6 @@ spec:
             {{- end }}
             {{- end }}
             - --envoy-cluster-name={{ printf "outbound|80||%s" (include "coraza-operator.serviceFQDN" .) }}
-            - --cache-gc-interval={{ .Values.cache.gcInterval }}
             {{- if .Values.istio.revision }}
             - --istio-revision={{ .Values.istio.revision }}
             {{- end }}

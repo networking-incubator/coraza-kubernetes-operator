@@ -19,7 +19,9 @@ package controller
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
@@ -182,7 +184,6 @@ func TestEngineReconciler_ReconcileIstioDriver(t *testing.T) {
 		xdsConfig:         testXDSConfig(),
 		assetBaseURL:      testAssetBaseURL,
 		Recorder:          recorder,
-		kubeClient:        testKubeClient,
 		operatorNamespace: testNamespace,
 	}
 	engineReq := ctrl.Request{
@@ -375,7 +376,6 @@ func TestEngineReconciler_SelectDriver_NilDriverDefaultsToWasm(t *testing.T) {
 		xdsConfig:         testXDSConfig(),
 		assetBaseURL:      testAssetBaseURL,
 		Recorder:          utils.NewTestRecorder(),
-		kubeClient:        testKubeClient,
 		operatorNamespace: testNamespace,
 	}
 
@@ -733,7 +733,6 @@ func TestEngineReconciler_NetworkPolicyCreated(t *testing.T) {
 		xdsConfig:         testXDSConfig(),
 		assetBaseURL:      testAssetBaseURL,
 		Recorder:          utils.NewTestRecorder(),
-		kubeClient:        testKubeClient,
 		operatorNamespace: ns,
 	}
 	engineReq := ctrl.Request{
@@ -771,8 +770,8 @@ func TestEngineReconciler_NetworkPolicyCreated(t *testing.T) {
 	require.Len(t, npList.Items, 1, "exactly one NetworkPolicy should exist for the Engine")
 	np := npList.Items[0]
 
-	t.Log("Verifying NetworkPolicy uses GenerateName")
-	assert.True(t, len(np.Name) > len(NetworkPolicyGenerateName), "name should be server-generated")
+	t.Log("Verifying NetworkPolicy uses the ECDS GenerateName prefix")
+	assert.True(t, strings.HasPrefix(np.Name, NetworkPolicyGenerateName), "name should use the ECDS prefix")
 
 	t.Log("Verifying NetworkPolicy labels")
 	assert.Equal(t, engine.Name, np.Labels["waf.k8s.coraza.io/engine-name"])
@@ -794,9 +793,9 @@ func TestEngineReconciler_NetworkPolicyCreated(t *testing.T) {
 	require.NotNil(t, peer.PodSelector)
 	assert.Equal(t, "test-gw", peer.PodSelector.MatchLabels["gateway.networking.k8s.io/gateway-name"])
 
-	t.Log("Verifying NetworkPolicy allows only cache server port")
+	t.Log("Verifying NetworkPolicy allows only the ECDS listener port")
 	require.Len(t, np.Spec.Ingress[0].Ports, 1)
-	assert.Equal(t, int32(DefaultRuleSetCacheServerPort), np.Spec.Ingress[0].Ports[0].Port.IntVal)
+	assert.Equal(t, int32(DefaultXDSListenPort), np.Spec.Ingress[0].Ports[0].Port.IntVal)
 
 	t.Log("Verifying finalizer blocks deletion and cleans up NetworkPolicy")
 	require.NoError(t, k8sClient.Delete(ctx, engine))
@@ -815,6 +814,64 @@ func TestEngineReconciler_NetworkPolicyCreated(t *testing.T) {
 	)
 	require.NoError(t, err)
 	assert.Empty(t, npList.Items, "NetworkPolicy should be deleted after finalizer runs")
+}
+
+func TestEngineReconciler_UpdatesLegacyNetworkPolicy(t *testing.T) {
+	ctx := context.Background()
+	ns := setupTestNamespace(t, ctx)
+	engine := utils.NewTestEngine(utils.EngineOptions{
+		Name:        "legacy-netpol-engine",
+		Namespace:   ns,
+		GatewayName: "test-gw",
+	})
+
+	const legacyName = "coraza-cache-legacy"
+	legacyPolicy := &networkingv1.NetworkPolicy{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      legacyName,
+			Namespace: ns,
+			Labels: map[string]string{
+				engineNameLabel:                   engine.Name,
+				networkPolicyEngineLabelNamespace: engine.Namespace,
+			},
+		},
+	}
+	require.NoError(t, k8sClient.Create(ctx, legacyPolicy))
+
+	const ecdsPort int32 = 19090
+	reconciler := &EngineReconciler{
+		Client:            k8sClient,
+		operatorNamespace: ns,
+		xdsConfig:         ECDSConfig{ListenPort: ecdsPort},
+	}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: engine.Name, Namespace: engine.Namespace}}
+	log := utils.NewTestLogger(t)
+
+	require.Eventually(t, func() bool {
+		existing, err := reconciler.findNetworkPolicyForEngine(ctx, engine.Namespace, engine.Name)
+		return err == nil && existing != nil && existing.Name == legacyName
+	}, 5*time.Second, 10*time.Millisecond)
+
+	require.NoError(t, reconciler.applyNetworkPolicy(ctx, log, req, engine))
+
+	directClient := k8sClient.(*indexedTestClient).Client
+	var policies networkingv1.NetworkPolicyList
+	require.NoError(t, directClient.List(ctx, &policies,
+		client.InNamespace(ns),
+		engineNetworkPolicyLabels(engine.Namespace, engine.Name),
+	))
+	require.Len(t, policies.Items, 1, "legacy policy should be updated instead of duplicated")
+	assert.Equal(t, legacyName, policies.Items[0].Name, "legacy policy should keep its name")
+	require.Len(t, policies.Items[0].Spec.Ingress, 1)
+	require.Len(t, policies.Items[0].Spec.Ingress[0].Ports, 1)
+	assert.Equal(t, ecdsPort, policies.Items[0].Spec.Ingress[0].Ports[0].Port.IntVal)
+
+	require.NoError(t, reconciler.cleanupNetworkPolicy(ctx, log, req))
+	require.NoError(t, directClient.List(ctx, &policies,
+		client.InNamespace(ns),
+		engineNetworkPolicyLabels(engine.Namespace, engine.Name),
+	))
+	assert.Empty(t, policies.Items, "legacy policy should be cleaned up when its Engine is deleted")
 }
 
 // -----------------------------------------------------------------------------
@@ -997,7 +1054,6 @@ func TestEngineReconciler_TargetConflict(t *testing.T) {
 		xdsConfig:         testXDSConfig(),
 		assetBaseURL:      testAssetBaseURL,
 		Recorder:          recorderA,
-		kubeClient:        testKubeClient,
 		operatorNamespace: testNamespace,
 	}
 	reqA := ctrl.Request{
@@ -1145,7 +1201,6 @@ func TestEngineReconciler_TargetConflict_NameTiebreak(t *testing.T) {
 		xdsConfig:         testXDSConfig(),
 		assetBaseURL:      testAssetBaseURL,
 		Recorder:          utils.NewTestRecorder(),
-		kubeClient:        testKubeClient,
 		operatorNamespace: testNamespace,
 	}
 
@@ -1218,7 +1273,6 @@ func TestEngineReconciler_TargetConflict_Resolves(t *testing.T) {
 		xdsConfig:         testXDSConfig(),
 		assetBaseURL:      testAssetBaseURL,
 		Recorder:          utils.NewTestRecorder(),
-		kubeClient:        testKubeClient,
 		operatorNamespace: testNamespace,
 	}
 	reqA := ctrl.Request{
@@ -1255,7 +1309,6 @@ func TestEngineReconciler_TargetConflict_Resolves(t *testing.T) {
 		xdsConfig:         testXDSConfig(),
 		assetBaseURL:      testAssetBaseURL,
 		Recorder:          utils.NewTestRecorder(),
-		kubeClient:        testKubeClient,
 		operatorNamespace: testNamespace,
 	}
 	reqB := ctrl.Request{
@@ -1340,7 +1393,6 @@ func TestEngineReconciler_TargetConflict_ResolvesOnRetarget(t *testing.T) {
 		xdsConfig:         testXDSConfig(),
 		assetBaseURL:      testAssetBaseURL,
 		Recorder:          utils.NewTestRecorder(),
-		kubeClient:        testKubeClient,
 		operatorNamespace: testNamespace,
 	}
 	reqA := ctrl.Request{NamespacedName: types.NamespacedName{Name: engineA.Name, Namespace: testNamespace}}
@@ -1443,7 +1495,6 @@ func TestEngineReconciler_ReadyToTargetNotFound(t *testing.T) {
 		xdsConfig:         testXDSConfig(),
 		assetBaseURL:      testAssetBaseURL,
 		Recorder:          utils.NewTestRecorder(),
-		kubeClient:        testKubeClient,
 		operatorNamespace: ns,
 	}
 	req := ctrl.Request{
@@ -1550,7 +1601,6 @@ func TestEngineReconciler_MetricsRecordOnSuccess(t *testing.T) {
 		assetBaseURL:      testAssetBaseURL,
 		Recorder:          utils.NewTestRecorder(),
 		Metrics:           m,
-		kubeClient:        testKubeClient,
 		operatorNamespace: testNamespace,
 	}
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: engine.Name, Namespace: engine.Namespace}}

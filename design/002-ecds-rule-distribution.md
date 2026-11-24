@@ -6,15 +6,13 @@
 
 ## Decision
 
-CKO delivers each Engine's complete WAF configuration through Envoy's Extension Config Discovery Service (ECDS), rather than through HTTP polling. The elected leader validates rules and records accepted hashes in Kubernetes status. Every operator replica reconstructs accepted configurations, verifies the hashes, and serves its own snapshots.
+CKO delivers each Engine's complete WAF configuration to Envoy through the Extension Config Discovery Service (ECDS). The elected leader validates rules and records accepted hashes in Kubernetes status. Every operator replica reconstructs accepted configurations, verifies the hashes, and serves its own snapshots.
 
 An EnvoyFilter attaches the WAF to the target Gateway and configures its ECDS subscription. Gateway pods need no new containers, mounts, or rollouts. The default WASM module is bundled with CKO and served as raw HTTPS bytes; Envoy verifies its SHA-256 digest.
 
-The previous HTTP rule server and its helpers remain in the source tree but are not started. `Engine.spec.ruleSetCacheServer` is retained for compatibility and ignored.
-
 ### Why ECDS?
 
-The previous plugin polled a process-local cache populated by the leader. A Service could send requests to a follower without that cache, and credential renewal changed plugin configuration. ECDS moves delivery, reconnects, and ACK/NACK handling to Envoy. Rule and data updates no longer require polling or Gateway restarts.
+ECDS provides versioned configuration delivery, reconnects, and ACK/NACK handling in Envoy. Accepted rule and data updates are applied without restarting Gateway pods.
 
 This does not make updates atomic across proxies, make ACKs proof of WAF health, or persist historical rule payloads.
 
@@ -103,7 +101,7 @@ The operator serves ECDS and the bundled module on one TLS listener, port `18080
 
 CKO does not enforce a destination allowlist or block private and cluster-internal destinations. Deployments using custom URLs must restrict Gateway egress to approved destinations, including protection against redirects and DNS rebinding. TLS and digest verification do not replace those controls.
 
-The bundled asset is not secret; RuleData is. Rule content stays behind ECDS authentication and authorization. No rule endpoints are exposed by the asset handler.
+The bundled asset is not secret; RuleData is. Rule content is delivered through authenticated ECDS subscriptions, while the asset handler serves packaged WASM bytes only.
 
 The current chart can regenerate default certificate material and the attachment CA is loaded at startup. Reusing generated Secrets and coordinating CA rotation with overlapping trust are follow-up work; leaf certificate reload alone is not seamless CA rotation. Mixed-release deployments also need a plan for every ready replica to serve the digests referenced by accepted configurations.
 
@@ -140,7 +138,7 @@ Ordinary wait states and aggregate validation failures can retain accepted metad
 
 ## API migration
 
-The WASM driver change is breaking within `waf.k8s.coraza.io/v1alpha1`: `image` and `imagePullSecret` were replaced by `url` and `sha256`. There is no conversion webhook or compatibility bridge for the polling plugin. The implementation does **not** yet provide legacy-field tombstones or a preflight. Applying the new CRD can prune the old fields, causing an Engine without a new override to select the bundled module silently.
+The WASM driver change is breaking within `waf.k8s.coraza.io/v1alpha1`: `image` and `imagePullSecret` were replaced by the paired `url` and `sha256` fields. There is no conversion webhook; applying the new CRD prunes the old fields. An Engine with neither new field selects the bundled module, so inventory and migrate custom module references before upgrading.
 
 Pre-ECDS WasmPlugin resources are not automatically removed and can remain attached alongside the new filter. Inventory old module references and remove legacy attachments as described in the [upgrade guide](../docs/content/howto/upgrading.md). Explicit rejection of legacy fields and a preflight that isolates affected Engines remain proposed follow-up work.
 
@@ -165,7 +163,6 @@ Other follow-ups include upgrade preflight/tombstones, certificate reuse and tru
 
 | Alternative | Reason not selected |
 | --- | --- |
-| Keep HTTP polling active alongside ECDS | Adds a second delivery and authentication path; the old implementation remains disabled. |
 | Put rules in WasmPlugin and let Istiod deliver them | Keeps payloads in Kubernetes extension objects and makes Istiod the serving control plane. |
 | Use WasmPlugin only for OCI code and CKO for ECDS | The inspected Istio flow rewrites OCI references on Istiod's ECDS path; direct CKO ECDS bypasses it. No supported handoff was found. |
 | Add Gateway containers, mounts, or image volumes | Requires pod customization and potentially rollouts. |
