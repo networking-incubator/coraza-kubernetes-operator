@@ -197,15 +197,19 @@ Known trades of this contract:
 ## Cold start
 
 A proxy caches the module by `sha256` and fetches it only when it first applies a
-configuration. A proxy whose cache is empty rejects that first push and never asks for the
-resource again on its own, so the operator ends the stream with a retryable `Unavailable`
-and republishes a versioned retry. Each resolvable NACK is retried without an attempt or
-time limit; exponential backoff starts at 2 seconds and is capped at 30 seconds. Envoy
-resubscribes after the fetch has finished, applies the same configuration, and acknowledges
-it; the module is not sent again after that. A proxy that keeps rejecting retains its
-previous working configuration, or its bootstrap policy if it never had one. With a
-fail-open bootstrap it may allow traffic without WAF; with fail-closed it denies. Persistent
-NACKs can be diagnosed from the operator retry logs and Gateway Envoy logs.
+configuration. A proxy whose cache is empty rejects that first push, starts the fetch, and
+never asks for the resource again on its own. Envoy also accepts, without building it, a
+configuration whose bytes are those it last received, so the operator never sends a proxy
+the bytes it rejected: it gives them a new tag (see [Versions and hashes](#versions-and-hashes)),
+ends the stream with a retryable `Unavailable`, and sends the configuration again under the
+new tag when the proxy resubscribes, after the fetch has finished. Each resolvable NACK is
+retried without an attempt or time limit. The delay is the proxy's own: it starts at 2
+seconds, doubles with each rejection in a row of the same content, is capped at 30 seconds,
+and ends at the proxy's next acknowledgement. New content ends the delay at once and starts
+it again from 2 seconds. A proxy that keeps rejecting retains its previous working
+configuration, or its bootstrap policy if it never had one. With a fail-open bootstrap it
+may allow traffic without WAF; with fail-closed it denies. Persistent NACKs can be diagnosed
+from the operator retry logs and Gateway Envoy logs.
 
 ## Revocation
 
@@ -254,10 +258,50 @@ scoped to one resource per stream. Delta and ADS are out of scope.
 
 - Resource identity includes the Engine UID, so a recreated Engine never reuses a
   deleted Engine's cached configuration.
-- The accepted ECDS `version_info` is the engine-version hash, not the hash of the
-  rendered resource: `sha256:<64 lowercase hexadecimal characters>`. A NACK retry is
-  scoped to the rejecting proxy: its version becomes `sha256:<hash>.retry<N>`, and the
-  same suffix is appended to its WASM `vm_id` without changing the Engine's accepted hash.
+- The content version of an Engine is the engine-version hash, not the hash of the
+  rendered resource: `sha256:<64 lowercase hexadecimal characters>`. What a proxy is sent
+  carries a tag after it. The ECDS `version_info` is `sha256:<hash>.<epoch>-<generation>`,
+  and the WASM `vm_id` is the rendered `vm_id` with `.<epoch>-<generation>` appended. The
+  epoch is 16 lowercase hexadecimal characters chosen at random when an operator process
+  starts, and the generation is a decimal counter per Engine that starts at 0, so no two
+  processes send the same tag. The tag is never part of a content hash, the accepted
+  configuration, a status field or a readiness check, and the plugin configuration bytes never
+  carry it; `envoy-coraza` reads only those bytes, so it never sees the tag.
+- Envoy builds a filter only from bytes that differ from the bytes it last received, and
+  accepts identical bytes without building them. A rejected configuration is therefore
+  retried under another tag, never resent. The operator records, for each proxy, the tag it
+  sent last, whether the proxy acknowledged it, and how many times in a row the proxy has
+  rejected a configuration. It moves the Engine to the next generation when a proxy rejects
+  the current tag, or would be sent a tag it did not acknowledge, whether or not the
+  rejection reached it. The records are bounded (four per admitted stream) and only a response
+  writes one, so a stream that sends rejections alone fills none. Losing a record restarts
+  that proxy's back-off, and when the record held the Engine's current tag unacknowledged,
+  the Engine moves to its next generation.
+- A proxy that connects again reports the version it last accepted. When that is a tag of
+  the Engine's current content, from any process, the operator answers the first request of
+  the stream with those bytes again. That is one full response, which counts against the
+  response budget, and Envoy skips building bytes it already built, so a Gateway that moves
+  to another replica, or finds the operator restarted, keeps its filter, however many tags
+  the Engine's Gateways hold. Any other version is sent the current tag
+  of the process it connects to: a version not written in the form above (including the
+  bare hashes and `.retry<N>` versions of earlier releases), a version of other content,
+  and a generation this process has not reached.
+- A tag another process minted carries only the content the proxy reported. When the
+  operator publishes new content, the proxies that hold such a tag are sent it under the
+  operator's own current tag, because the process that minted the tag may send the same tag
+  with the same bytes: a proxy that rejected them here would be sent them there again, and
+  Envoy accepts bytes it already received without building them. A proxy that reports such a
+  tag after the new content was published is replayed exactly the bytes it reports, not moved
+  to the operator's own tag with the proxies that held the tag before: Gateways that move
+  between replicas while the content is published build their filter once for each content,
+  also when the content returns to an earlier version, as long as they were not sent other
+  content in between. A Gateway that last received other bytes (for example, it rejected
+  newer content before the Engine returned to an earlier version) builds the earlier
+  content again, because Envoy builds any bytes that differ from the last ones it received.
+- A tag is a few words. The operator holds the rendered configuration of an Engine once,
+  and produces the bytes sent under a tag when it sends them, so the tags in use cost no
+  more than the streams that hold them, and a tag is dropped with its last stream.
+  Publishing new content decodes the configuration once, whatever the number of tags.
 - `ruleSetHash = sha256(canonical(rule text + sorted filename list + raw bytes))`.
 - The Engine version hashes schema and rendering versions, Engine identity, the RuleSet
   UID and content hash, failure and empty-rules policies, observability, binary URL and
