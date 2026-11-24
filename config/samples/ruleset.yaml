@@ -5,6 +5,8 @@ metadata:
 spec:
   rules: |
     SecRuleEngine On
+    # Make the sample's "block" rules deny instead of falling back to pass.
+    SecDefaultAction "phase:2,deny,status:403,log"
     SecRequestBodyAccess On
     SecRequestBodyLimit 13107200
     SecResponseBodyAccess Off

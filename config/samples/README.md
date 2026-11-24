@@ -48,8 +48,8 @@ kubectl port-forward svc/coraza-gateway-istio 8080:80
 ```bash
 curl http://localhost:8080/                                  # normal request
 curl -I "http://localhost:8080/?q=evilmonkey"                # blocked (rule 3001, 403)
-curl "http://localhost:8080/?q=select+*+from+users"          # logged (rule 1001)
-curl "http://localhost:8080/?q=<script>alert(1)</script>"    # logged (rule 2001)
+curl "http://localhost:8080/?q=select+*+from+users"          # blocked (rule 1001, 403)
+curl "http://localhost:8080/?q=<script>alert(1)</script>"    # blocked (rule 2001, 403)
 ```
 
 Check gateway logs for Coraza output:
