@@ -44,6 +44,20 @@ kubectl apply -f https://github.com/networking-incubator/coraza-kubernetes-opera
 
 Without the CRD update, the old RuleSet schema cannot store the new accepted-content fields and Engines cannot re-accept their configuration.
 
+### Gateway filters are rebuilt once
+
+The operator now sends each configuration under a tag in its version and its WASM VM ID, and
+no longer honours the versions of earlier releases. After the upgrade, the first reconnect of
+every Gateway pod delivers the tagged configuration, even if the rules did not change, and
+the pod rebuilds its WAF filter once it can build it. If the upgrade also changes the WASM
+module, the first tagged response may be rejected while the Gateway fetches the module, and
+the operator then sends it again. This also recovers a Gateway that an earlier release left
+on a configuration it had rejected, once the Gateway can build it: the upgrade does not make
+a configuration that a Gateway keeps rejecting acceptable. Once a Gateway holds a tagged
+version of a configuration, later restarts of the operator and moves between replicas do not
+rebuild its filter while the configuration is unchanged, however many Gateways there are.
+New rules or settings build the new configuration once on each Gateway, as before.
+
 ### Upgrading from a pre-ECDS release
 
 This release delivers WAF configuration over xDS (ECDS) and no longer creates Envoy
