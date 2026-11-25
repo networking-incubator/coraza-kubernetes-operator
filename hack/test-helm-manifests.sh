@@ -362,6 +362,77 @@ grep -qxE -- " *- --xds-max-connections-per-source=0" <<<"$out" && pass "default
 out=$(render --set xds.maxConnectionsPerSource=4096)
 grep -qxE -- " *- --xds-max-connections-per-source=4096" <<<"$out" && pass "per-source connection cap override passed" || fail "--xds-max-connections-per-source override missing"
 
+# ── tls.bootstrap hands the certificate to the operator ─────────────────────
+# OLM bundles and GitOps renderers cannot run the generate branch; the operator
+# creates the Secret itself, so the chart must stay out of the way and the
+# mount must be optional or the pod never starts.
+section "tls.bootstrap=true"
+out=$(render --set tls.bootstrap=true)
+if echo "$out" | grep -q "^kind: Secret"; then
+  fail "chart should not create a serving Secret when tls.bootstrap=true"
+else
+  pass "no serving Secret with tls.bootstrap=true"
+fi
+echo "$out" | grep -q -- "--xds-cert-secret=${RELEASE}-coraza-kubernetes-operator-serving-cert" \
+  && pass "manager told which Secret to provision" || fail "--xds-cert-secret missing"
+echo "$out" | grep -q "optional: true" && pass "serving cert mount is optional" || fail "serving cert mount is not optional"
+echo "$out" | grep -q "resourceNames:" && pass "bootstrap Role restricts get/update by name" || fail "bootstrap Role is not name-restricted"
+
+# ── tls.bootstrap honours existingSecret ────────────────────────────────────
+section "tls.bootstrap=true with existingSecret"
+out=$(render --set tls.bootstrap=true --set tls.existingSecret=my-serving-cert)
+echo "$out" | grep -q -- "--xds-cert-secret=my-serving-cert" \
+  && pass "manager provisions the named Secret" || fail "--xds-cert-secret does not use existingSecret"
+echo "$out" | grep -q "secretName: my-serving-cert" \
+  && pass "deployment mounts existingSecret" || fail "deployment does not mount existingSecret"
+
+# ── bootstrap is off by default ─────────────────────────────────────────────
+section "tls.bootstrap defaults to off"
+out=$(render)
+if echo "$out" | grep -q -- "--xds-cert-secret"; then
+  fail "--xds-cert-secret should not be set by default"
+else
+  pass "--xds-cert-secret absent by default"
+fi
+if echo "$out" | grep -q "optional: true"; then
+  fail "serving cert mount should be required by default"
+else
+  pass "serving cert mount required by default"
+fi
+if echo "$out" | grep -q "resourceNames:"; then
+  fail "bootstrap Role should not render by default"
+else
+  pass "bootstrap Role absent by default"
+fi
+
+# ── a custom caName is rejected under bootstrap ─────────────────────────────
+# The operator always writes the CA under ca.crt, so --xds-ca-path would point
+# at a file that never appears.
+section "tls.bootstrap rejects a custom caName"
+if render_err=$(render --set tls.bootstrap=true --set tls.caName=root.crt 2>&1); then
+  fail "a custom caName should have failed the render under bootstrap"
+else
+  echo "$render_err" | grep -q "tls.caName must be ca.crt" \
+    && pass "custom caName rejected with a descriptive error" \
+    || fail "render failed but the error did not mention caName: $render_err"
+fi
+
+# ── tls.sans reaches the bootstrap ──────────────────────────────────────────
+# tls.sans already exists for the generate path; silently dropping it under
+# bootstrap would hand out a certificate missing the name a client verifies.
+section "tls.bootstrap passes tls.sans through"
+out=$(render --set tls.bootstrap=true --set 'tls.sans={coraza.example.com}')
+echo "$out" | grep -q -- "--xds-cert-dns-name=coraza.example.com" \
+  && pass "extra SAN forwarded to the manager" || fail "tls.sans dropped under bootstrap"
+
+# ── the generated Secret survives a switch to bootstrap ─────────────────────
+# Without a keep policy, helm prunes the Secret when it leaves the rendered
+# manifest, the operator mints a fresh CA, and proxies still trust the old one.
+section "generated serving Secret is kept on upgrade"
+out=$(render)
+echo "$out" | grep -q "helm.sh/resource-policy: keep" \
+  && pass "generated Secret is annotated keep" || fail "generated Secret has no keep policy"
+
 # ── Summary ───────────────────────────────────────────────────────────────────
 echo
 echo "Results: $PASS passed, $FAIL failed"

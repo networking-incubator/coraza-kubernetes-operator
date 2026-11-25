@@ -63,6 +63,12 @@ spec:
             - --xds-cert-name={{ .Values.tls.certName | default "tls.crt" }}
             - --xds-key-name={{ .Values.tls.keyName | default "tls.key" }}
             - --xds-ca-path=/etc/coraza-tls/{{ .Values.tls.caName | default "ca.crt" }}
+            {{- if .Values.tls.bootstrap }}
+            - --xds-cert-secret={{ include "coraza-operator.servingCertSecretName" . }}
+            {{- range .Values.tls.sans }}
+            - --xds-cert-dns-name={{ . }}
+            {{- end }}
+            {{- end }}
             - --xds-auth-failure-rate={{ .Values.xds.authFailureRate }}
             - --xds-auth-failure-burst={{ .Values.xds.authFailureBurst }}
             - --xds-max-request-bytes={{ int .Values.xds.maxRequestBytes }}
@@ -184,7 +190,13 @@ spec:
       volumes:
         - name: xds-serving-cert
           secret:
-            secretName: {{ .Values.tls.existingSecret | default (printf "%s-serving-cert" (include "coraza-operator.fullname" .)) }}
+            secretName: {{ include "coraza-operator.servingCertSecretName" . }}
+            {{- if .Values.tls.bootstrap }}
+            # The operator creates this Secret itself on first start, after the
+            # pod is already scheduled. Without optional the kubelet would block
+            # the mount forever and the operator could never create it.
+            optional: true
+            {{- end }}
         {{- if .Values.metrics.certSecret }}
         - name: metrics-certs
           secret:

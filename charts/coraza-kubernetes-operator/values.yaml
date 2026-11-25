@@ -212,12 +212,27 @@ tls:
   # false for static manifests and GitOps pipelines: no private key is
   # published, and the referenced Secret must already exist.
   generate: true
+  # Let the operator create the serving Secret itself on first start instead of
+  # templating it. This is the option for every install that cannot run
+  # `helm install` / `helm upgrade` (OLM bundles, plain manifests, Argo CD,
+  # Flux), because `lookup` returns nothing there and `generate` would mint a
+  # fresh CA on every render, breaking the trust bundle inlined into
+  # EnvoyFilters. Takes precedence over generate.
+  #
+  # The Secret volume becomes optional so the pod starts before the Secret
+  # exists; the kubelet syncs it into the volume within its sync period
+  # (up to ~1 minute on a first install) and the listener picks it up without
+  # a restart. Grants the operator create on Secrets in its own namespace, plus
+  # get and update on this one Secret. Rotate by deleting the Secret and
+  # restarting the Deployment.
+  bootstrap: false
   certName: "tls.crt"
   keyName: "tls.key"
   caName: "ca.crt"
-  # Extra DNS SANs appended when the serving certificate is generated. Changing
-  # this list does not update a Secret reused by Helm; rotate the certificate
-  # and restart the operator before using a newly added hostname.
+  # Extra DNS SANs appended when the serving certificate is generated, and
+  # passed to the operator as --xds-cert-dns-name when tls.bootstrap is set.
+  # Changing this list does not update a Secret reused by Helm; rotate the
+  # certificate and restart the operator before using a newly added hostname.
   sans: []
 
 networkPolicy:

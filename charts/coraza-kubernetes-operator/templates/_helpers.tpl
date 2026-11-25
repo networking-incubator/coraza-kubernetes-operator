@@ -43,6 +43,15 @@ Service account name.
 {{- end }}
 
 {{/*
+Name of the Secret holding the xDS serving certificate. One definition so the
+Deployment volume, the generated Secret, the bootstrap Role and
+--xds-cert-secret cannot drift.
+*/}}
+{{- define "coraza-operator.servingCertSecretName" -}}
+{{- .Values.tls.existingSecret | default (printf "%s-serving-cert" (include "coraza-operator.fullname" .)) }}
+{{- end }}
+
+{{/*
 Manager service FQDN (used in Istio resources and envoy cluster name).
 */}}
 {{- define "coraza-operator.serviceFQDN" -}}

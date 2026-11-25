@@ -1,0 +1,54 @@
+{{- if .Values.tls.bootstrap }}
+{{- /*
+Secret access for the serving-certificate bootstrap only.
+
+This is deliberately a separate Role from the main one. That Role's rules are
+generated from kubebuilder markers and overwritten by `make helm.sync`, so it
+cannot carry a conditional or a resourceNames restriction; this one is
+hand-written and renders only when tls.bootstrap is set.
+
+Kubernetes cannot scope `create` by resource name, so that verb is granted on
+Secrets in this namespace. `get` and `update` are restricted to the one Secret
+the operator owns, which keeps the rest of the namespace out of reach.
+*/}}
+{{- $secretName := include "coraza-operator.servingCertSecretName" . }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "coraza-operator.fullname" . }}-serving-cert
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "coraza-operator.labels" . | nindent 4 }}
+rules:
+  - apiGroups:
+      - ""
+    resources:
+      - secrets
+    verbs:
+      - create
+  - apiGroups:
+      - ""
+    resources:
+      - secrets
+    resourceNames:
+      - {{ $secretName }}
+    verbs:
+      - get
+      - update
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "coraza-operator.fullname" . }}-serving-cert
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "coraza-operator.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "coraza-operator.fullname" . }}-serving-cert
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "coraza-operator.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}
