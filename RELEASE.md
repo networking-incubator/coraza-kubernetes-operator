@@ -219,6 +219,9 @@ images alongside the operator image:
 | `bundle/base/csv-template.yaml` | CSV template — edit to change OLM metadata |
 | `bundle/base/ci.yaml` | OperatorHub PR metadata (`reviewers`, `updateGraph`); copied to `bundle/ci.yaml` by `make bundle` |
 | `hack/generate_bundle.py` | Generates bundle from Helm chart + CSV template |
+| `hack/publish_operatorhub.sh` | Opens the PR against `k8s-operatorhub/community-operators` |
+| `hack/operatorhub-pr-template.md` | Body of that PR (the upstream review checklist) |
+| `hack/operatorhub_opp_test.sh` | Runs the upstream OPP test tiers against a staged bundle |
 | `catalog/coraza-kubernetes-operator/catalog.yaml` | Package and channel definitions (no bundle content) |
 | `hack/update_catalog.py` | Adds new versions to catalog channel entries |
 | `catalog/Dockerfile` | Multi-stage build: uses `opm render` to embed bundle content |
@@ -243,6 +246,28 @@ images alongside the operator image:
 
 - If the CSV template needs changes (description, icon, install modes, etc.),
   edit `bundle/base/csv-template.yaml` before the release.
+
+**Platform flavours.** `make bundle` renders the chart for vanilla Kubernetes,
+which is what OperatorHub.io requires. `make bundle BUNDLE_PLATFORM=openshift`
+renders the OpenShift flavour (no explicit `runAsUser`/`fsGroup`, so the SCC
+assigns the UID range, and `istio.revision=openshift-gateway`) for the separate
+[`redhat-openshift-ecosystem/community-operators-prod`] submission. Both are
+validated on every PR by the `bundle validate` job.
+
+**Serving certificate.** Both flavours render with `tls.generate=false`, so the
+bundle contains no Secret and no private key. The operator's install contract
+is unchanged from Helm: it expects the xDS serving Secret to exist already. For
+a Helm install the chart creates it; for a bundle install the cluster
+administrator creates it before subscribing. That prerequisite is spelled out
+in the CSV description and in the OperatorHub install guide, and it is load
+bearing: the pod does not start until the Secret exists, so OLM reports the
+install as failed if it is missing.
+
+Never render the bundle with `tls.generate=true`. The generate branch mints a
+private key, and the bundle is published to a public Git repository and
+catalog image.
+
+[`redhat-openshift-ecosystem/community-operators-prod`]:https://github.com/redhat-openshift-ecosystem/community-operators-prod
 
 ### Step 5 - Publishing & Announcement
 
@@ -325,15 +350,32 @@ Merging the PR to `main` triggers the [GitHub Pages](https://github.com/networki
 workflow, which rebuilds the docs and Helm chart index. If that run does not
 occur, trigger it manually with `gh workflow run pages.yml`.
 
-### Step 7 - OperatorHub
+### Step 7 - OperatorHub.io
 
-The [`operatorhub.yml`] workflow is **disabled** (`if: false` on the job) until
-a dedicated bot or service account can hold the PAT and related settings for
-pushing to a [`k8s-operatorhub/community-operators`] fork and opening PRs.
-Re-enabling that automation is tracked in [issue #201](https://github.com/networking-incubator/coraza-kubernetes-operator/issues/201).
+Publishing to [OperatorHub.io] means opening a pull request against
+[`k8s-operatorhub/community-operators`] that adds
+`operators/coraza-kubernetes-operator/<X.Y.Z>/{manifests,metadata}` plus the
+shared `operators/coraza-kubernetes-operator/ci.yaml`. Everything in that tree
+is produced by `make bundle`; nothing is hand-written in the upstream repo.
 
-Until then, submit the OLM bundle **locally** after the GitHub release exists
-and the operator image is published to GHCR.
+Two rules from upstream shape the whole process:
+
+- The bundle must work on **vanilla Kubernetes**. That is why `make bundle`
+  defaults to `BUNDLE_PLATFORM=kubernetes`. The OpenShift flavour goes to
+  [`redhat-openshift-ecosystem/community-operators-prod`] as a *separate* PR;
+  an operator published to OperatorHub.io does not appear in OpenShift's
+  embedded catalogue and vice versa.
+- Every commit must be **signed off** (`git commit -s`, real name, `Author`
+  and `Signed-off-by` matching). `publish_operatorhub.sh` passes `-s` and uses
+  `GIT_USER` / `GIT_EMAIL` for both.
+
+The [`operatorhub.yml`] workflow that would do all of this on release is
+**disabled** (`if: false` on the job) until a dedicated bot or service account
+can hold the PAT and related settings for pushing to a fork and opening PRs.
+Re-enabling it is tracked in [issue #201](https://github.com/networking-incubator/coraza-kubernetes-operator/issues/201).
+
+Until then, submit the bundle **locally** after the GitHub release exists and
+the operator image is published to GHCR.
 
 This is separate from the Helm chart release. For a prerelease, skip OperatorHub
 submission unless maintainers explicitly request it; the disabled workflow's
@@ -349,21 +391,51 @@ planned behavior is to skip prereleases.
    make bundle VERSION=vX.Y.Z
    ```
 
-3. (Recommended) Run the same bundle test the workflow used:
+3. Validate the bundle against the upstream suites:
+
+   ```console
+   make bundle.validate
+   ```
+
+   This runs `operator-sdk bundle validate` with `suite=operatorframework`
+   (which covers `operatorhubv2`, `capabilities`, `categories`,
+   `alpha-deprecated-apis`, `good-practices` and `multiarch`). It must report
+   *All validation tests have completed successfully*. One warning is expected
+   and benign: the deprecated-APIs validator flags the `events` RBAC rule
+   because `events.k8s.io/v1beta1` was removed in Kubernetes 1.25. The rule is
+   version-agnostic and `events.k8s.io/v1` is current.
+
+4. (Recommended) Run the upstream OPP test the CI pipeline will run:
 
    ```console
    ./hack/operatorhub_opp_test.sh --version X.Y.Z
    ```
 
-   Use the **bare** semver (`X.Y.Z`, no `v`) for `--version`.
+   Use the **bare** semver (`X.Y.Z`, no `v`) for `--version`. It needs docker,
+   ansible and jmespath, and it stages the bundle into a clone of the upstream
+   repo exactly as the PR will.
 
-4. Set credentials for commits and GitHub API access. The publish script
+5. Preview how the listing will read. Paste
+   `bundle/manifests/coraza-kubernetes-operator.clusterserviceversion.yaml`
+   into <https://operatorhub.io/preview> and check the rendered description,
+   icon, categories, maintainer links and CRD examples. This is the same
+   metadata reviewers see.
+
+   If something needs fixing, **do not edit the staged bundle**. The fix
+   belongs in `bundle/base/csv-template.yaml` on a branch, reviewed and merged
+   like any other change, because the staged bundle is regenerated from the
+   template on every release and an uncommitted edit is silently reverted on
+   the next one. After the template change is merged, return to step 1 and
+   redo the generate, validate and preview steps against it.
+
+6. Set credentials for commits and GitHub API access. The publish script
    **requires** `GIT_USER`, `GIT_EMAIL`, and `GITHUB_TOKEN` (a PAT with `repo`
    on the [`networking-incubator`] fork of community-operators). For HTTPS push,
    run `gh auth setup-git` with that PAT (or use credentials your environment
-   already provides).
+   already provides). `GIT_USER` must be a real name, not a pseudonym: the DCO
+   check rejects anonymous contributions.
 
-5. Open the PR to community-operators:
+7. Open the PR to community-operators:
 
    ```console
    ./hack/publish_operatorhub.sh --version X.Y.Z --fork networking-incubator
@@ -372,10 +444,15 @@ planned behavior is to skip prereleases.
    Use `./hack/publish_operatorhub.sh --help` for options (`--dry-run`, `--fork`,
    etc.). The script copies `bundle/ci.yaml` (from `bundle/base/ci.yaml` via
    `make bundle`) into `operators/<name>/ci.yaml` on the PR branch so this repo
-   stays the source of truth for reviewers and `updateGraph`.
+   stays the source of truth for reviewers and `updateGraph`. Reviewers listed
+   there may self-merge once CI is green; everyone else waits for a maintainer.
 
-6. Watch the PR on [`k8s-operatorhub/community-operators`] for OperatorHub CI
-   feedback until it merges.
+8. Watch the PR on [`k8s-operatorhub/community-operators`] for OperatorHub CI
+   feedback until it merges. After the merge the bundle is shipped in
+   `quay.io/operatorhubio/catalog` and the listing appears on
+   [OperatorHub.io].
+
+[OperatorHub.io]:https://operatorhub.io/
 
 [`operatorhub.yml`]:https://github.com/networking-incubator/coraza-kubernetes-operator/blob/main/.github/workflows/operatorhub.yml
 [`k8s-operatorhub/community-operators`]:https://github.com/k8s-operatorhub/community-operators

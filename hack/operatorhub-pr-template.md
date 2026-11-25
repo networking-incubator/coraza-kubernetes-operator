@@ -1,20 +1,20 @@
 ### New Submissions
 
-* [x] Are you familiar with our [contribution guidelines](https://github.com/operator-framework/community-operators/blob/master/docs/contributing-via-pr.md)?
-* [x] Have you [packaged and deployed](https://github.com/operator-framework/community-operators/blob/master/docs/testing-operators.md) your Operator for Operator Framework?
+* [x] Are you familiar with our [contribution guidelines](https://k8s-operatorhub.github.io/community-operators/contributing-via-pr/)?
+* [x] Have you [packaged and deployed](https://k8s-operatorhub.github.io/community-operators/testing-operators/) your Operator for Operator Framework?
 * [x] Have you tested your Operator with all Custom Resource Definitions?
 * [x] Have you tested your Operator in all supported [installation modes](https://github.com/operator-framework/operator-lifecycle-manager/blob/master/doc/design/building-your-csv.md#operator-metadata)?
-* [x] Have you considered whether you want use [semantic versioning order](https://github.com/operator-framework/community-operators/blob/master/docs/operator-ci-yaml.md#semver-mode)?
-* [x] Is your submission [signed](https://github.com/operator-framework/community-operators/blob/master/docs/contributing-prerequisites.md#sign-your-work)?
-* [x] Is operator [icon](https://github.com/operator-framework/community-operators/blob/master/docs/packaging-operator.md#operator-icon) set?
+* [x] Have you considered whether you want use [semantic versioning order](https://k8s-operatorhub.github.io/community-operators/operator-ci-yaml/#semver-mode)?
+* [x] Is your submission [signed](https://k8s-operatorhub.github.io/community-operators/contributing-prerequisites/#sign-your-work)?
+* [x] Is operator [icon](https://k8s-operatorhub.github.io/community-operators/packaging-required-fields/) set?
 
 ### Updates to existing Operators
 
-* [x] Did you create a `ci.yaml` file according to the [update instructions](https://github.com/operator-framework/community-operators/blob/master/docs/operator-ci-yaml.md)?
+* [x] Did you create a `ci.yaml` file according to the [update instructions](https://k8s-operatorhub.github.io/community-operators/operator-ci-yaml/)?
 * [x] Is your new CSV pointing to the previous version with the `replaces` property if you chose `replaces-mode` via the `updateGraph` property in `ci.yaml`?
-* [x] Is your new CSV referenced in the [appropriate channel](https://github.com/operator-framework/community-operators/blob/master/docs/packaging-operator.md#channels) defined in the `package.yaml` or `annotations.yaml`?
+* [x] Is your new CSV referenced in the [appropriate channel](https://k8s-operatorhub.github.io/community-operators/packaging-operator/#channels) defined in the `package.yaml` or `annotations.yaml`?
 * [x] Have you tested an update to your Operator when deployed via OLM?
-* [x] Is your submission [signed](https://github.com/operator-framework/community-operators/blob/master/docs/contributing-prerequisites.md#sign-your-work)?
+* [x] Is your submission [signed](https://k8s-operatorhub.github.io/community-operators/contributing-prerequisites/#sign-your-work)?
 
 ### Your submission should not
 
@@ -33,8 +33,22 @@
 ### Operator Metadata should contain
 
 * [x] Human readable name and 1-liner description about your Operator
-* [x] Valid [category name](https://github.com/operator-framework/community-operators/blob/master/docs/packaging-operator.md#categories)
-* [x] One of the pre-defined [capability levels](https://github.com/operator-framework/operator-courier/blob/4d1a25d2c8d52f7de6297ec18d8afd6521236aa2/operatorcourier/validate.py#L556)
+* [x] Valid [category name](https://github.com/k8s-operatorhub/community-operators/blob/main/categories.json)
+* [x] One of the pre-defined [capability levels](https://sdk.operatorframework.io/docs/overview/operator-capabilities/)
 * [x] Links to the maintainer, source code and documentation
 * [x] Example templates for all Custom Resource Definitions intended to be used
 * [x] A quadratic logo
+
+### Notes for reviewers
+
+The operator requires [Istio](https://istio.io/) and the Gateway API CRDs to be
+installed; it attaches a Coraza WAF to existing Istio ingress Gateways and does
+not install either itself.
+
+It also requires a TLS Secret, `coraza-kubernetes-operator-serving-cert`, to
+exist in the install namespace **before** the operator is installed. The
+operator serves its configuration and its WASM module to Envoy over TLS and
+does not issue that certificate itself, so the pod stays in
+`ContainerCreating` until the Secret exists. Both prerequisites, and a
+copy-pasteable way to create the Secret with or without cert-manager, are
+documented in the CSV description under "Prerequisites".

@@ -120,8 +120,15 @@ jobs:
       - name: generate and validate bundle
         run: |
           make bundle
-          make operator-sdk
-          ./bin/operator-sdk bundle validate ./bundle
+          make bundle.validate
+
+      # The OpenShift flavour goes to a different catalogue
+      # (redhat-openshift-ecosystem/community-operators-prod) but shares the
+      # generator, so a change that only breaks that render must still fail here.
+      - name: generate and validate the OpenShift bundle
+        run: |
+          make bundle BUNDLE_PLATFORM=openshift
+          make bundle.validate
 
   chart-lint:
     name: chart-lint
