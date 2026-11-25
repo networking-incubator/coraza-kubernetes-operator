@@ -175,13 +175,12 @@ func buildEnvoyFilter(
 		"waf.k8s.coraza.io/ca-hash":               caHash(cfg.CAPEM),
 	}
 
-	// Fail closed: Istio treats an empty or absent workload selector as
-	// applying to every workload in the namespace.
+	// Fail closed: an EnvoyFilter without a target or selector can apply
+	// to every workload in its namespace, or the mesh from the root namespace.
 	ws := targetLabelSelector(engine)
 	if ws == nil || len(ws.MatchLabels) == 0 {
-		return nil, fmt.Errorf("target type %q name %q yields no workload selector", engine.Spec.Target.Type, engine.Spec.Target.Name)
+		return nil, fmt.Errorf("target type %q name %q yields no Gateway target reference", engine.Spec.Target.Type, engine.Spec.Target.Name)
 	}
-	matchLabels := ws.MatchLabels
 
 	caPEM := string(cfg.CAPEM)
 
@@ -238,8 +237,12 @@ func buildEnvoyFilter(
 				"namespace": engine.Namespace,
 			},
 			"spec": map[string]any{
-				"workloadSelector": map[string]any{
-					"labels": toAnyMap(matchLabels),
+				"targetRefs": []any{
+					map[string]any{
+						"group": "gateway.networking.k8s.io",
+						"kind":  "Gateway",
+						"name":  engine.Spec.Target.Name,
+					},
 				},
 				"configPatches": []any{
 					assetClusterPatch,
@@ -477,14 +480,4 @@ func protoToMap(m proto.Message) (map[string]any, error) {
 func caHash(caPEM []byte) string {
 	sum := sha256.Sum256(caPEM)
 	return "sha256:" + hex.EncodeToString(sum[:])
-}
-
-// toAnyMap converts a string map into the map[string]any form the
-// unstructured object expects.
-func toAnyMap(in map[string]string) map[string]any {
-	out := make(map[string]any, len(in))
-	for key, value := range in {
-		out[key] = value
-	}
-	return out
 }

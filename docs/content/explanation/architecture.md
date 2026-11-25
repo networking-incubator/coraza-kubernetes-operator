@@ -63,8 +63,8 @@ If compilation fails or unsupported rules are detected, the new revision is reje
 The Engine controller watches Engine resources, their referenced RuleSets, Gateways, and pods. When an Engine is created or updated, it:
 
 1. Verifies that the referenced RuleSet is in a Ready state.
-2. Discovers Gateway pods that match the Engine's target name (via the GEP-1762 label selector).
-3. Creates or updates an Istio EnvoyFilter that inserts the WASM filter and points it at the accepted ECDS resource (see [Istio WASM Integration]({{< relref "/explanation/istio-wasm-integration" >}})).
+2. Validates the target Gateway in the Engine's namespace. GEP-1762 pod labels are used to select Gateway pods for the ECDS NetworkPolicy and controller watches.
+3. Creates or updates an Istio EnvoyFilter with `spec.targetRefs` pointing to that Gateway, inserting the WASM filter and pointing it at the accepted ECDS resource (see [Istio WASM Integration]({{< relref "/explanation/istio-wasm-integration" >}})).
 4. Creates a NetworkPolicy to allow Gateway pods to reach the operator's ECDS listener.
 5. Authorizes the Gateway's ECDS subscription: the Gateway authenticates with its own pod ServiceAccount token (validated by TokenReview), and the operator maps that ServiceAccount to the Engine's target Gateway.
 6. Updates the Engine status with matched Gateways and conditions.

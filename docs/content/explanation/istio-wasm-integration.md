@@ -13,8 +13,8 @@ over `ExtensionConfigDiscoveryService` (ECDS). No `WasmPlugin` resource is creat
 
 For each accepted Engine the operator:
 
-1. Creates or updates an **EnvoyFilter** targeting the Gateway's pods (GEP-1762
-   `gateway.networking.k8s.io/gateway-name` label) with two patches:
+1. Creates or updates an **EnvoyFilter** whose `spec.targetRefs` identifies the
+   same-namespace `gateway.networking.k8s.io/Gateway`, with two patches:
    - a `CLUSTER` patch adding `coraza_wasm`, the HTTPS cluster that serves the module, and
    - an `HTTP_FILTER` patch inserting the WASM filter before the router, subscribed to ECDS
      for the Engine's resource name.
@@ -75,13 +75,36 @@ configuration.
 
 ## Target selection
 
-The Engine's `target` field identifies the Gateway by name. The operator derives the
-workload label selector using the GEP-1762 convention — Gateway API implementations label
-Gateway pods with:
+The Engine's `target` field identifies a Gateway by name in the same namespace.
+The EnvoyFilter uses this target as a `spec.targetRefs` entry:
 
+```yaml
+targetRefs:
+- group: gateway.networking.k8s.io
+  kind: Gateway
+  name: <gateway-name>
 ```
-gateway.networking.k8s.io/gateway-name: <gateway-name>
-```
+
+The GEP-1762 Gateway pod label remains in use for pod selection by the ECDS
+NetworkPolicy and controller watches; it is not the EnvoyFilter attachment.
+
+The installed EnvoyFilter CRD schema and the Istiod revision that processes the
+resource must both recognize `targetRefs`. The Istio networking API has this
+field starting in 1.22
+([1.22 API proto](https://github.com/istio/api/blob/release-1.22/networking/v1alpha3/envoy_filter.proto));
+a CRD schema without it causes the operator's server-side apply to fail. The
+complete CKO/WASM integration was live-tested with Istio 1.31.1. The API
+field's introduction in 1.22 is not a guarantee that every Istio 1.22
+deployment is supported, nor a complete product compatibility matrix.
+
+In a mixed-revision mesh, ensure only a revision that understands `targetRefs`
+processes the EnvoyFilter. Istio recommends pinning the resource to a 1.22-or-
+newer revision with `istio.io/rev`; older control planes may interpret an
+unknown `targetRefs` field as a namespace-wide EnvoyFilter. CKO adds this label
+only when `--istio-revision` or the Helm `istio.revision` value is configured,
+so set it to the compatible revision when older revisions coexist. See the
+[Istio EnvoyFilter reference](https://istio.io/latest/docs/reference/config/networking/envoy-filter/)
+for the current attachment and revision guidance.
 
 The `target.provider` field (default: `Istio`) identifies the infrastructure provider, which
 determines which driver types are valid for the Engine. This field is immutable after
