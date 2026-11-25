@@ -17,9 +17,9 @@ Kubernetes Operator (CKO).
 ### Coraza-rs release
 
 Verify whether [coraza-rs](https://github.com/networking-incubator/coraza-rs)
-needs a matching release. The CKO release workflow builds the bundled WASM from
-the commit pinned by `CORAZA_RS_VERSION` with `WASM_CRS=0`; it does not consume
-coraza-rs's prebuilt WASM assets.
+needs a matching release. The CKO release workflow downloads the published,
+digest-pinned non-CRS WASM asset with `make wasm.release`; it does not build
+Rust during the release image job.
 
 If a new coraza-rs release is needed, cut a tag in that repository. Its release
 workflow creates:
@@ -29,15 +29,23 @@ workflow creates:
 
 Before tagging CKO, synchronize both sets of Makefile pins:
 
-* `CORAZA_RS_VERSION` is the source commit used by the CKO release workflow. It
-  is a Git commit SHA, not an artifact checksum.
-* `WASM_RELEASE_VERSION`, `WASM_RELEASE_GIT_SHA`, `WASM_RELEASE_SHA256`, and
-  `WASM_RELEASE_CRS_VERSION` pin the published assets used by `make wasm.release`
-  and the default `make demo`. These do not affect the CKO release workflow, but
-  keep local deployment testing on the same coraza-rs release. The SHA variable
-  selects the CRS-enabled asset when `WASM_CRS=1`, otherwise the plain asset.
-  `WASM_RELEASE_GIT_SHA` defaults to `CORAZA_RS_VERSION`; override it only when
-  testing an artifact built from a different commit.
+* `CORAZA_RS_VERSION` is the coraza-rs source commit used by local source builds
+  and the release workflow's validation-parity pin. It is a Git commit SHA, not
+  an artifact checksum.
+* `WASM_RELEASE_VERSION` selects the published release, `WASM_RELEASE_SHA256`
+  pins its asset bytes, and `WASM_RELEASE_CRS_VERSION` records the CRS variant.
+  These are used by the CKO release workflow, `make wasm.release`, and the
+  default `make demo`. The SHA selects the CRS-enabled asset when `WASM_CRS=1`,
+  otherwise the plain asset.
+* `WASM_RELEASE_GIT_SHA` supplies manifest metadata and defaults to
+  `CORAZA_RS_VERSION`; override it for local artifact testing only. Official
+  release-mode verification requires the manifest and upstream tag's resolved
+  commit to match `CORAZA_RS_VERSION`.
+
+The release check resolves `WASM_RELEASE_VERSION` in `CORAZA_RS_REPO`, using the
+peeled commit for annotated tags and the tag SHA for lightweight tags. It
+checks that this commit equals `CORAZA_RS_VERSION`; it does not prove that the
+published WASM bytes were built from that commit.
 
 For coraza-rs `v0.0.3-rc.2`, the tag points to:
 
@@ -69,11 +77,32 @@ curl -fsSL "https://api.github.com/repos/networking-incubator/coraza-rs/releases
   jq -r '.assets[] | select(.name == "coraza-rs.wasm" or .name == "coraza-rs-crs.wasm") | "\(.name) \(.digest | sub("^sha256:"; ""))"'
 ```
 
-Validate the published artifact with `make demo` before tagging CKO. It deploys
-the CRS-enabled artifact on KIND and runs the demo traffic checks. To build from
-the pinned coraza-rs source instead, use `make demo WASM_SOURCE=build`; this
-requires the Rust toolchain. Both paths overwrite the generated files under
-`internal/assets/`, which should not be committed.
+Before tagging CKO, exercise the exact non-CRS asset used by releases on an
+isolated KIND cluster. `make demo` uses the CRS-enabled asset, so use this path
+for the release module:
+
+```sh
+export KIND_CLUSTER_NAME="coraza-release-wasm-smoke-$(date +%s)"
+export KUBECONFIG="$PWD/.cache/$KIND_CLUSTER_NAME.kubeconfig"
+export VERSION="v0.0.0-noncrs-smoke-$(date +%s)"
+mkdir -p .cache
+kind create cluster --name "$KIND_CLUSTER_NAME" --kubeconfig "$KUBECONFIG"
+make wasm.release WASM_CRS=0
+make wasm.verify WASM_CRS=0 WASM_VERIFY_RELEASE=1
+make cluster.kind
+make demo.workload
+make demo.verify
+kind delete cluster --name "$KIND_CLUSTER_NAME"
+rm -f "$KUBECONFIG"
+```
+
+The demo checks that normal traffic passes and WAF rules block requests in
+Envoy. The versioned image tag ensures KIND deploys the image containing the
+module just downloaded. The private kubeconfig keeps the test isolated from
+other cluster contexts. To build from the pinned coraza-rs source instead, use
+`make demo WASM_SOURCE=build`; this requires the Rust toolchain. Both paths
+overwrite generated files under `internal/assets/`, which should not be
+committed.
 
 ## Process
 
@@ -139,6 +168,9 @@ correct:
   - Check the rendered image tag and chart metadata (`version` has no `v` prefix;
     `appVersion` matches the image tag, including `v`)
   - Verify the WASM manifest's `git_sha`, `crs_version`, and SHA-256 against the release
+  - The workflow runs release-mode `wasm.verify` against the non-CRS pin before
+    copying assets to `dist/`, then checks that both copied files are identical
+  - Confirm the exact non-CRS asset has passed the KIND traffic checks above
 - Make sure the **previous release** is set correctly
   - e.g. for a `v1.0.0` release, _don't_ target `rc`, patch or other pre-releases. Target the last major/minor.
 

@@ -34,6 +34,36 @@ sha256() {
 
 require() { [ -n "${!1:-}" ] || die "$1 is required"; }
 
+verify_release_tag() {
+  require CORAZA_RS_REPO
+  require CORAZA_RS_VERSION
+  require WASM_RELEASE_VERSION
+
+  local repo="$CORAZA_RS_REPO"
+  local version="$WASM_RELEASE_VERSION"
+  local expected="$CORAZA_RS_VERSION"
+  local tag_ref="refs/tags/$WASM_RELEASE_VERSION"
+  local peeled_ref="${tag_ref}^{}"
+  local refs tag_sha peeled_sha resolved
+
+  case "$repo" in
+    -*) die "invalid coraza-rs repository" ;;
+  esac
+  git check-ref-format "$tag_ref" >/dev/null 2>&1 || die "invalid coraza-rs release tag $version"
+  [[ "$expected" =~ ^[0-9a-f]{40}$ ]] || die "CORAZA_RS_VERSION must be a 40-character lowercase commit SHA"
+
+  if ! refs="$(git ls-remote "$repo" "$tag_ref" "$peeled_ref")"; then
+    die "could not resolve coraza-rs release tag $version"
+  fi
+  tag_sha="$(awk -v ref="$tag_ref" '$2 == ref {print $1; exit}' <<< "$refs")"
+  peeled_sha="$(awk -v ref="$peeled_ref" '$2 == ref {print $1; exit}' <<< "$refs")"
+  # Annotated tags have a peeled commit ref; lightweight tags point at the commit.
+  resolved="${peeled_sha:-$tag_sha}"
+  [ -n "$resolved" ] || die "coraza-rs release tag $version was not found"
+  [[ "$resolved" =~ ^[0-9a-f]{40}$ ]] || die "coraza-rs release tag $version did not resolve to a commit SHA"
+  [ "$resolved" = "$expected" ] || die "coraza-rs tag $version resolves to $resolved, expected $expected"
+}
+
 build_plugin() {
   require CORAZA_RS_REPO
   require CORAZA_RS_VERSION
@@ -142,6 +172,22 @@ verify() {
   [ -n "$want" ] || die "no sha256 in $manifest"
   got="$(sha256 "$ASSETS_DIR/plugin.wasm")"
   [ "$want" = "$got" ] || die "digest mismatch: manifest $want, $ASSETS_DIR/plugin.wasm $got"
+
+  # The checked-in fixture is valid for local tests, but never for a release.
+  if [ "${WASM_VERIFY_RELEASE:-0}" = "1" ]; then
+    require WASM_RELEASE_SHA256
+
+    local git_sha crs_version
+    git_sha="$(awk '/^git_sha:/{print $2; exit}' "$manifest")"
+    [ "$git_sha" != "dev" ] || die "release verification refuses the development fixture"
+    [ "$got" = "$WASM_RELEASE_SHA256" ] || die "release digest mismatch: got $got, want $WASM_RELEASE_SHA256"
+    [ "${WASM_CRS:-0}" = "0" ] || die "release verification requires the non-CRS module"
+    verify_release_tag
+    [ "$git_sha" = "$CORAZA_RS_VERSION" ] || die "release manifest git_sha mismatch: got $git_sha, want $CORAZA_RS_VERSION"
+    crs_version="$(awk '/^crs_version:/{print $2; exit}' "$manifest")"
+    [ "$crs_version" = "none" ] || die "release manifest must record crs_version: none"
+  fi
+
   echo "wasm.verify: $got $ASSETS_DIR/plugin.wasm ok"
 }
 

@@ -16,10 +16,10 @@ is pulled from an OCI registry or extracted at runtime.
 ## Dev fixture vs. release
 
 The fixture exists only so that `go build`/`go test` always have embeddable
-bytes. **The real bundled module is never committed.** Release images replace
-both files with the built `envoy-coraza` artifact; `make demo` replaces them
-with the published `coraza-rs` release artifact, and both paths verify the
-result.
+bytes. **The real bundled module is never committed.** The release workflow and
+`make demo` replace both files with published `coraza-rs` assets and verify the
+result. Local source builds remain available through `make wasm.plugin` and
+`make wasm.crs`; the release image job does not compile Rust.
 
 `make build.image` and the ordinary `make cluster.kind` path embed the committed
 fixture unless `wasm.bundle` was run first. That image is suitable for
@@ -53,17 +53,24 @@ make wasm.verify
   manifest records the coraza-rs commit, the coraza crate version, the
   Proxy-Wasm SDK revision, and the embedded CRS release (`crs_version`).
 - `wasm.verify` recomputes the digest of the bundled file and fails if it
-  disagrees with the manifest.
+  disagrees with the manifest. With `WASM_VERIFY_RELEASE=1`, it also checks the
+  published digest, rejects the dev fixture, and verifies that the configured
+  coraza-rs tag resolves to `CORAZA_RS_VERSION`. This checks pin alignment, not
+  the published module's build provenance.
 
-Neither target runs as part of `make test`, and the committed fixture is left
-untouched unless `wasm.bundle` is invoked explicitly.
+`make test` does not invoke these build targets. The CI release-artifact check
+uses a separate assets directory; `make wasm.bundle` or `make wasm.release`
+with the default `ASSETS_DIR` replaces the fixture, so do not commit those
+generated files.
 
 ## Release artifacts
 
-The release workflow builds the module from the Makefile pin
-(`CORAZA_RS_VERSION`), bundles it, and publishes `plugin.wasm`,
+The release workflow downloads the digest-pinned non-CRS `coraza-rs.wasm`,
+bundles it into the operator image, and publishes `plugin.wasm`,
 `plugin.wasm.sha256` and `plugin.manifest.yaml` alongside the other release
-assets. It does not download a module from another repository.
+assets. It checks that the upstream release tag resolves to the Makefile's
+`CORAZA_RS_VERSION` pin but does not attest that the published bytes were built
+from that commit.
 
 ## Limits
 

@@ -93,21 +93,23 @@ jobs:
       - name: set up docker buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
-      # The image embeds the reviewed coraza-rs envoy-coraza module, built from
-      # the commit pinned in the Makefile (CORAZA_RS_VERSION). The release
-      # build does not embed CRS (WASM_CRS=0). The build links the WASI stubs so
-      # the artifact loads on Envoy <1.40 (Istio 1.31).
+      # The image embeds the published, digest-pinned non-CRS envoy-coraza
+      # module. Pre-copy verification checks digest/tag pins and rejects the
+      # dev fixture; it does not attest the upstream asset's build provenance.
       # The operator serves the module from its own /wasm/<digest>.wasm route;
       # Envoy rejects redirecting asset URLs, so never point an Engine url at a
       # GitHub release asset.
-      - name: build and bundle envoy-coraza module
+      - name: download and verify published envoy-coraza module
         run: |
           set -eu
           mkdir -p dist/wasm
-          make wasm.plugin WASM_MODULE_OUT=dist/wasm/plugin.wasm WASM_CRS=0
-          make wasm.bundle WASM_MODULE=dist/wasm/plugin.wasm WASM_CRS=0
-          make wasm.verify
+          make wasm.release WASM_CRS=0
+          make wasm.verify WASM_CRS=0 WASM_VERIFY_RELEASE=1
+          cp internal/assets/plugin.wasm dist/wasm/
           cp internal/assets/plugin.manifest.yaml dist/wasm/
+          # Keep release assets byte-identical to the verified embedded bundle.
+          cmp internal/assets/plugin.wasm dist/wasm/plugin.wasm
+          cmp internal/assets/plugin.manifest.yaml dist/wasm/plugin.manifest.yaml
           (cd dist/wasm && sha256sum plugin.wasm > plugin.wasm.sha256)
 
       - name: upload wasm artifacts
