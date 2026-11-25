@@ -58,6 +58,9 @@ jobs:
       - name: check for uncommitted changes
         run: git diff --exit-code || (echo "generated files have uncommitted changes. run 'make manifests generate helm.sync' and commit the results." && exit 1)
 
+      - name: verify recommended config sample
+        run: make verify-recommended-conf
+
       # The operator image must carry the real module, not the 8-byte build
       # fixture: Envoy fetches /wasm/<digest>.wasm and rejects the fixture with
       # "Missing or unknown Proxy-Wasm ABI version". Build the pinned

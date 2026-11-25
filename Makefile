@@ -297,6 +297,13 @@ wasm.plugin: ## Build envoy-coraza from the pinned coraza-rs commit (skipped whe
 	 BINARYEN_DIR='$(BINARYEN_DIR)' \
 	 hack/wasm.sh plugin
 
+.PHONY: generate-recommended-conf verify-recommended-conf
+generate-recommended-conf: ## Regenerate the docs sample from pinned coraza-rs
+verify-recommended-conf: ## Check that the docs sample matches pinned coraza-rs
+generate-recommended-conf verify-recommended-conf: %-recommended-conf:
+	@CORAZA_RS_VERSION='$(CORAZA_RS_VERSION)' \
+	 hack/wasm.sh recommended-conf $*
+
 .PHONY: wasm.crs
 wasm.crs: ## Build and bundle a CRS-enabled module from source (demo only; the release bundle omits CRS)
 	$(MAKE) wasm.plugin WASM_CRS=1

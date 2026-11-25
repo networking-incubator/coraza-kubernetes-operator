@@ -20,6 +20,7 @@ package integration
 
 import (
 	"context"
+	"net/http"
 	"net/url"
 	"testing"
 
@@ -219,6 +220,32 @@ SecRule REQUEST_URI "@beginsWith /safe" "id:9301,phase:1,pass,nolog"`)
 	gw.ExpectAllowed("/safe/path")
 	gw.ExpectBlocked("/?test=blocked")
 	gw.ExpectBlocked("/safe/override") // Override rule should block even safe paths
+}
+
+func TestRecommendedBaseRulesOverride(t *testing.T) {
+	t.Parallel()
+	s := fw.NewScenario(t)
+	ns := s.GenerateNamespace("recommended-conf")
+
+	s.CreateGateway(ns, "gw")
+	s.ExpectGatewayProgrammed(ns, "gw")
+	s.ApplyManifest(ns, "../../docs/assets/samples/recommended-base-rules.yaml")
+	s.CreateRuleSet(ns, "ruleset", []string{"base-rules"}, nil)
+	s.CreateEngine(ns, "engine", framework.EngineOpts{RuleSetName: "ruleset", GatewayName: "gw"})
+	s.ExpectEngineReady(ns, "engine")
+	s.CreateEchoBackend(ns, "echo")
+	s.CreateHTTPRoute(ns, "route", "gw", "echo")
+
+	gw := s.ProxyToGateway(ns, "gw")
+	const malformedJSON = `{"a":`
+	s.Step("verify the recommended rules enforce by default")
+	gw.ExpectPostAllowed("/", "application/json", `{"a":1}`)
+	gw.ExpectPostStatus("/", "application/json", malformedJSON, http.StatusBadRequest)
+
+	s.Step("verify a later DetectionOnly directive stops blocking")
+	s.CreateRuleSource(ns, "mode", "SecRuleEngine DetectionOnly")
+	s.UpdateRuleSet(ns, "ruleset", []string{"base-rules", "mode"})
+	gw.ExpectPostAllowed("/", "application/json", malformedJSON)
 }
 
 // TestEmptyRuleSet verifies that a RuleSet with SecRuleEngine Off
