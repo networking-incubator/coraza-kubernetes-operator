@@ -57,6 +57,8 @@ import (
 const (
 	// wasmAssetCluster is the Envoy cluster that serves the raw WASM binary.
 	wasmAssetCluster = "coraza_wasm"
+	// istioRevisionLabel opts the EnvoyFilter into an Istio revision.
+	istioRevisionLabel = "istio.io/rev"
 	// ecdsStatPrefix is the gRPC stat prefix for the ECDS config source.
 	ecdsStatPrefix = "coraza_ecds"
 	// assetFetchTimeout bounds the WASM binary download.
@@ -166,7 +168,7 @@ func buildEnvoyFilter(
 		engineNameLabel:                engine.Name,
 	}
 	if cfg.IstioRevision != "" {
-		labels["istio.io/rev"] = cfg.IstioRevision
+		labels[istioRevisionLabel] = cfg.IstioRevision
 	}
 
 	annotations := map[string]string{

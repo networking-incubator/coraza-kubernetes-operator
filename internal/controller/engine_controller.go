@@ -79,6 +79,7 @@ type EngineReconciler struct {
 	// bundled module is served at <assetBaseURL>/wasm/<sha256>.wasm.
 	assetBaseURL      string
 	operatorNamespace string
+	renderCache       engineRenderCache
 	// Limits bounds the configuration an Engine may accept. Acceptance must
 	// reject content the ECDS serving plane could not deliver.
 	Limits xds.Limits
@@ -194,6 +195,7 @@ func (r *EngineReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	if err := r.Get(ctx, req.NamespacedName, &engine); err != nil {
 		if apierrors.IsNotFound(err) {
 			logDebug(log, req, "Engine", "Resource not found")
+			r.renderCache.delete(req.NamespacedName)
 			r.Metrics.ForgetEngine(req.Namespace, req.Name)
 			var list wafv1alpha1.EngineList
 			if listErr := r.List(ctx, &list, client.InNamespace(req.Namespace)); listErr == nil {
@@ -227,6 +229,7 @@ func (r *EngineReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	// Handle deletion: clean up cross-namespace NetworkPolicy before removing
 	// the finalizer so the Engine can be garbage-collected.
 	if deleting, err := r.handleNetworkPolicyDeletion(ctx, log, req, &engine); deleting || err != nil {
+		r.renderCache.delete(req.NamespacedName)
 		return ctrl.Result{}, err
 	}
 
