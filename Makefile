@@ -251,8 +251,15 @@ wasm.bundle: ## Bundle WASM_MODULE=<path> (raw plugin.wasm) and rewrite its mani
 	 hack/wasm.sh bundle
 
 .PHONY: wasm.verify
-wasm.verify: ## Verify the bundled module digest against plugin.manifest.yaml
-	@ASSETS_DIR='$(ASSETS_DIR)' hack/wasm.sh verify
+wasm.verify: ## Verify the bundle digest; use WASM_VERIFY_RELEASE=1 for release pins
+	@ASSETS_DIR='$(ASSETS_DIR)' \
+	 WASM_VERIFY_RELEASE='$(WASM_VERIFY_RELEASE)' \
+	 WASM_CRS='$(WASM_CRS)' \
+	 WASM_RELEASE_SHA256='$(WASM_RELEASE_SHA256)' \
+	 CORAZA_RS_REPO='$(CORAZA_RS_REPO)' \
+	 CORAZA_RS_VERSION='$(CORAZA_RS_VERSION)' \
+	 WASM_RELEASE_VERSION='$(WASM_RELEASE_VERSION)' \
+	 hack/wasm.sh verify
 
 # envoy-coraza built from coraza-rs. The default build has no embedded CRS;
 # wasm.crs adds the pinned CRS tree. `make demo` downloads the published
@@ -267,7 +274,7 @@ wasm.verify: ## Verify the bundled module digest against plugin.manifest.yaml
 # std imports. The artifact is therefore linked with hack/wasi-stub.wat using
 # the pinned Binaryen release; Envoy 1.40+ ignores the stubs.
 CORAZA_RS_REPO ?= https://github.com/networking-incubator/coraza-rs
-# v0.0.3-rc.2 source commit used by the operator release build.
+# Coraza-rs commit used by source builds and the release tag parity check.
 CORAZA_RS_VERSION ?= 1caf0a5ae9f7ee0cf83899bb58daa6a33a98bff1
 CORAZA_RS_DIR ?= $(CURDIR)/.cache/coraza-rs
 # Raw module produced by wasm.plugin (ignored by git, outside the source repo).
@@ -297,13 +304,13 @@ wasm.crs: ## Build and bundle a CRS-enabled module from source (demo only; the r
 		CORAZA_RS_DIR=$(CORAZA_RS_DIR) CORAZA_RS_VERSION=$(CORAZA_RS_VERSION) \
 		WASM_MODULE=$(if $(WASM_MODULE),$(WASM_MODULE),$(WASM_MODULE_OUT))
 
-# Prebuilt envoy-coraza artifacts published by coraza-rs. The demo downloads
-# these instead of compiling Rust; CI and `make wasm.crs` still build from
-# source. Digests are pinned so a re-uploaded asset fails instead of shipping
-# bytes the release did not publish.
+# Prebuilt envoy-coraza artifacts published by coraza-rs. The release workflow
+# and demo download these instead of compiling Rust; source-build targets remain
+# available for CI and development. Digests are pinned so a re-uploaded asset
+# fails instead of shipping bytes the release did not publish.
 WASM_RELEASE_VERSION ?= v0.0.3-rc.2
-# The published artifact normally comes from CORAZA_RS_VERSION; override when
-# testing an artifact built from a different coraza-rs commit.
+# Developer override for testing an artifact built from another commit;
+# release verification still requires CORAZA_RS_VERSION.
 WASM_RELEASE_GIT_SHA ?= $(CORAZA_RS_VERSION)
 WASM_RELEASE_BASE ?= https://github.com/networking-incubator/coraza-rs/releases/download/$(WASM_RELEASE_VERSION)
 WASM_RELEASE_DIR ?= $(CURDIR)/.cache/coraza-rs-release/$(WASM_RELEASE_VERSION)
