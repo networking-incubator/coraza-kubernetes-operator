@@ -17,11 +17,28 @@ limitations under the License.
 package validation
 
 import (
+	"os"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"sigs.k8s.io/yaml"
+
+	wafv1alpha1 "github.com/networking-incubator/coraza-kubernetes-operator/api/v1alpha1"
 )
+
+func TestRecommendedBaseRulesSample(t *testing.T) {
+	raw, err := os.ReadFile("../../../docs/assets/samples/recommended-base-rules.yaml")
+	require.NoError(t, err)
+	var sample wafv1alpha1.RuleSource
+	require.NoError(t, yaml.UnmarshalStrict(raw, &sample))
+	require.Equal(t, "RuleSource", sample.Kind)
+	require.Equal(t, "base-rules", sample.Name)
+	require.Contains(t, sample.Spec.Rules, "SecRuleEngine On\n")
+	require.NoError(t, ValidateRuleSourceRules(sample.Spec.Rules, sample.Name, nil))
+	require.NoError(t, CheckGatewayParity(sample.Spec.Rules, nil))
+	require.NoError(t, CheckRulePolicy(sample.Spec.Rules, nil, RulePolicy{MaxRequestBodyLimit: MaxRequestBodyLimit}))
+}
 
 func TestValidateCorazaRSIncludes(t *testing.T) {
 	require.NoError(t, ValidateCorazaRSIncludes(`SecRuleEngine On
