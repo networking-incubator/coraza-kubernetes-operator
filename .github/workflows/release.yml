@@ -138,10 +138,9 @@ jobs:
         with:
           context: .
           push: true
-          # Restore this line to re-enable Quay:
-          #   ${{ env.QUAY_REGISTRY }}/${{ env.QUAY_IMAGE_NAME }}:${{ github.ref_name }}
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}
+            ${{ env.QUAY_REGISTRY }}/${{ env.QUAY_IMAGE_NAME }}:${{ github.ref_name }}
           platforms: linux/amd64
 
   build-push-bundle:
