@@ -455,15 +455,19 @@ func validateContentLimits(content assemble.Content, limits xds.Limits) error {
 }
 
 func validateRenderedPayload(artifact render.Artifact, limits xds.Limits) error {
-	if size := proto.Size(artifact.Resource) + messageEnvelopeBytes; size > limits.MaxMessageBytes {
+	return validateRenderedPayloadSizes(proto.Size(artifact.Resource), len(artifact.Payload), limits)
+}
+
+func validateRenderedPayloadSizes(resourceSize, payloadSize int, limits xds.Limits) error {
+	if size := resourceSize + messageEnvelopeBytes; size > limits.MaxMessageBytes {
 		return fmt.Errorf("ECDS response size %d exceeds the message limit of %d", size, limits.MaxMessageBytes)
 	}
 	// envoy-coraza rejects a configuration above its own cap, so a payload
 	// that only fits the gRPC message would still be NACKed. The decompressed
 	// document is capped at render time; the envelope is checked here, since a
 	// document that compresses poorly wraps to more than it carries.
-	if len(artifact.Payload) > render.MaxConfigurationBytes {
-		return fmt.Errorf("ECDS payload %d exceeds the plugin configuration limit of %d", len(artifact.Payload), render.MaxConfigurationBytes)
+	if payloadSize > render.MaxConfigurationBytes {
+		return fmt.Errorf("ECDS payload %d exceeds the plugin configuration limit of %d", payloadSize, render.MaxConfigurationBytes)
 	}
 	// The runtime payload's schema_version is render.SchemaVersion by
 	// construction and pinned by render tests; re-decoding the multi-megabyte

@@ -17,21 +17,26 @@ limitations under the License.
 package controller
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-logr/logr"
+	"google.golang.org/protobuf/proto"
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/managedfields"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -67,6 +72,109 @@ const (
 	// inject into the EnvoyFilter.
 	reasonTLSNotConfigured = "TLSNotConfigured"
 )
+
+type engineRenderCacheKey struct {
+	namespace             string
+	name                  string
+	uid                   types.UID
+	ruleSetUID            types.UID
+	contentHash           string
+	emptyRulesPolicy      string
+	failurePolicy         string
+	enableFilterStateLogs bool
+	driverType            string
+	binary                render.BinaryRef
+	vm                    render.VMSettings
+}
+
+type engineRenderCacheEntry struct {
+	key          engineRenderCacheKey
+	artifact     render.Artifact
+	payloadSize  int
+	resourceSize int
+}
+
+// engineRenderCache reuses only successful renders with identical inputs and retains no ECDS payload.
+// It is process-local, so a new binary starts with a miss and runs render.Render again.
+type engineRenderCache struct {
+	mu      sync.Mutex
+	entries map[types.NamespacedName]engineRenderCacheEntry
+}
+
+func (c *engineRenderCache) get(engineKey types.NamespacedName, key engineRenderCacheKey) (engineRenderCacheEntry, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	entry, ok := c.entries[engineKey]
+	return entry, ok && entry.key == key
+}
+
+func (c *engineRenderCache) set(engineKey types.NamespacedName, entry engineRenderCacheEntry) {
+	entry.artifact.Payload = nil
+	entry.artifact.Resource = nil
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.entries == nil {
+		c.entries = make(map[types.NamespacedName]engineRenderCacheEntry)
+	}
+	c.entries[engineKey] = entry
+}
+
+// renderEngineArtifact returns metadata-only artifacts on misses and hits. It
+// measures payload/resource on misses, caches only their sizes, and rechecks
+// limits on every call.
+func (r *EngineReconciler) renderEngineArtifact(
+	engineKey types.NamespacedName,
+	input render.EngineInput,
+) (render.Artifact, string, error) {
+	key := engineRenderCacheKeyFor(input)
+	entry, cacheHit := r.renderCache.get(engineKey, key)
+	if !cacheHit {
+		artifact, err := render.Render(input)
+		if err != nil {
+			return render.Artifact{}, fmt.Sprintf("Failed to render Engine configuration: %v", err), err
+		}
+		entry = engineRenderCacheEntry{
+			key:          key,
+			artifact:     artifact,
+			payloadSize:  len(artifact.Payload),
+			resourceSize: proto.Size(artifact.Resource),
+		}
+	}
+
+	if err := validateRenderedPayloadSizes(entry.resourceSize, entry.payloadSize, r.Limits.WithDefaults()); err != nil {
+		return render.Artifact{}, fmt.Sprintf("Rendered Engine configuration exceeds delivery limits: %v", err), err
+	}
+	if !cacheHit {
+		r.renderCache.set(engineKey, entry)
+	}
+	artifact := entry.artifact
+	artifact.Payload = nil
+	artifact.Resource = nil
+	return artifact, "", nil
+}
+
+func (c *engineRenderCache) delete(engineKey types.NamespacedName) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.entries, engineKey)
+}
+
+func engineRenderCacheKeyFor(in render.EngineInput) engineRenderCacheKey {
+	return engineRenderCacheKey{
+		namespace:             in.Namespace,
+		name:                  in.Name,
+		uid:                   in.UID,
+		ruleSetUID:            in.RuleSet.UID,
+		contentHash:           in.RuleSet.ContentHash,
+		emptyRulesPolicy:      in.EmptyRulesPolicy,
+		failurePolicy:         in.FailurePolicy,
+		enableFilterStateLogs: in.EnableFilterStateLogs,
+		driverType:            in.DriverType,
+		binary:                in.Binary,
+		vm:                    in.VMSettings,
+	}
+}
 
 // -----------------------------------------------------------------------------
 // Engine Controller - WASM Driver - Provisioning
@@ -104,9 +212,8 @@ func (r *EngineReconciler) provisionWasmDriver(ctx context.Context, log logr.Log
 	contentHash := accepted.contentHash
 
 	failurePolicy := engineFailurePolicy(engine)
-	limits := r.Limits.WithDefaults()
 	logDebug(log, req, "Engine", "Rendering Engine configuration")
-	artifact, err := render.Render(render.EngineInput{
+	input := render.EngineInput{
 		Namespace:             engine.Namespace,
 		Name:                  engine.Name,
 		UID:                   engine.UID,
@@ -117,17 +224,11 @@ func (r *EngineReconciler) provisionWasmDriver(ctx context.Context, log logr.Log
 		EnableFilterStateLogs: observabilityEnabled(engine),
 		DriverType:            string(wafv1alpha1.DriverTypeWasm),
 		Binary:                binary,
-	})
-	if err != nil {
-		if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "Engine", engine, &engine.Status.Conditions, engine.Generation, "RenderFailed", fmt.Sprintf("Failed to render Engine configuration: %v", err)); patchErr != nil {
-			return ctrl.Result{}, patchErr
-		}
-		return ctrl.Result{}, err
 	}
-	if err := validateRenderedPayload(artifact, limits); err != nil {
-		// Keep the accepted configuration: content past a limit never replaces
-		// what the Engine already serves.
-		if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "Engine", engine, &engine.Status.Conditions, engine.Generation, "RenderFailed", fmt.Sprintf("Rendered Engine configuration exceeds delivery limits: %v", err)); patchErr != nil {
+	engineKey := types.NamespacedName{Namespace: engine.Namespace, Name: engine.Name}
+	artifact, failureMessage, err := r.renderEngineArtifact(engineKey, input)
+	if err != nil {
+		if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "Engine", engine, &engine.Status.Conditions, engine.Generation, "RenderFailed", failureMessage); patchErr != nil {
 			return ctrl.Result{}, patchErr
 		}
 		return ctrl.Result{}, err
@@ -153,8 +254,9 @@ func (r *EngineReconciler) provisionWasmDriver(ctx context.Context, log logr.Log
 
 	// Observability is optional: a missing or temporarily invalid collector
 	// declaration must not block WAF provisioning or traffic handling.
-	telemetryErr := r.reconcileTelemetry(ctx, engine)
+	var telemetryErr error
 	if observabilityEnabled(engine) {
+		telemetryErr = r.reconcileTelemetry(ctx, engine)
 		patch := client.MergeFrom(engine.DeepCopy())
 		before := snapshotConditions(engine.Status.Conditions)
 		setObservabilityReady(&engine.Status.Conditions, engine.Generation, telemetryErr)
@@ -370,9 +472,14 @@ func (r *EngineReconciler) applyEnvoyFilter(
 	var existing unstructured.Unstructured
 	existing.SetGroupVersionKind(envoyFilterGVK)
 	previous := ""
+	existingFound := false
+	// This unstructured GET is live with controller-runtime v0.25.3's default
+	// Cache.Unstructured=false. Ownership detection needs its managedFields; the
+	// manager cache transform strips them, so revisit this if either behavior changes.
 	err := r.Get(ctx, types.NamespacedName{Namespace: engine.Namespace, Name: envoyFilterName(engine.Name)}, &existing)
 	switch {
 	case err == nil:
+		existingFound = true
 		previous = existing.GetAnnotations()["waf.k8s.coraza.io/bootstrap-policy"]
 	case !apierrors.IsNotFound(err):
 		logAPIError(log, req, "Engine", err, "Failed to get EnvoyFilter", nil)
@@ -402,6 +509,10 @@ func (r *EngineReconciler) applyEnvoyFilter(
 		return "", err
 	}
 
+	if existingFound && envoyFilterMatches(&existing, envoyFilter) {
+		return applied, nil
+	}
+
 	if err := serverSideApply(ctx, r.Client, envoyFilter); err != nil {
 		if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "Engine", engine, &engine.Status.Conditions, engine.Generation, "ProvisioningFailed", fmt.Sprintf("Failed to create or update EnvoyFilter: %v", err)); patchErr != nil {
 			return "", patchErr
@@ -411,6 +522,115 @@ func (r *EngineReconciler) applyEnvoyFilter(
 
 	logInfo(log, req, "Engine", "EnvoyFilter provisioned", "envoyFilter", envoyFilter.GetName(), "bootstrapPolicy", applied)
 	return applied, nil
+}
+
+func envoyFilterMatches(existing, desired *unstructured.Unstructured) bool {
+	if deletionTimestamp := existing.GetDeletionTimestamp(); deletionTimestamp != nil && !deletionTimestamp.IsZero() {
+		return false
+	}
+	if existing.GetAPIVersion() != desired.GetAPIVersion() ||
+		existing.GetKind() != desired.GetKind() ||
+		existing.GetName() != desired.GetName() ||
+		existing.GetNamespace() != desired.GetNamespace() ||
+		!unstructuredJSONEqual(existing.Object["spec"], desired.Object["spec"]) ||
+		!apiequality.Semantic.DeepEqual(existing.GetOwnerReferences(), desired.GetOwnerReferences()) {
+		return false
+	}
+
+	existingLabels := existing.GetLabels()
+	desiredLabels := desired.GetLabels()
+	for key, value := range desiredLabels {
+		if existingLabels[key] != value {
+			return false
+		}
+	}
+	// istio.io/rev is currently the only optional operator-owned label or
+	// annotation. Add an ownership check for any other omitted or conditional
+	// operator metadata, or this path may skip the SSA apply needed to prune it.
+	if _, desiredRevision := desiredLabels[istioRevisionLabel]; !desiredRevision {
+		if _, existingRevision := existingLabels[istioRevisionLabel]; existingRevision {
+			ownsRevision, known := operatorOwnsIstioRevision(existing)
+			if !known || ownsRevision {
+				return false
+			}
+		}
+	}
+
+	existingAnnotations := existing.GetAnnotations()
+	for key, value := range desired.GetAnnotations() {
+		if existingAnnotations[key] != value {
+			return false
+		}
+	}
+	return true
+}
+
+// operatorOwnsIstioRevision reports whether the operator's main-resource Apply
+// manager owns the revision label. Unknown managedFields must not suppress an
+// apply that may be needed to remove operator-owned drift.
+func operatorOwnsIstioRevision(existing *unstructured.Unstructured) (bool, bool) {
+	managedFields := existing.GetManagedFields()
+	if len(managedFields) == 0 || managedfields.ValidateManagedFields(managedFields) != nil {
+		return false, false
+	}
+
+	ownsRevision := false
+	for _, managed := range managedFields {
+		if managed.Manager == "" || managed.FieldsV1 == nil || len(managed.FieldsV1.Raw) == 0 {
+			return false, false
+		}
+
+		if managed.Manager != fieldManager ||
+			managed.Operation != metav1.ManagedFieldsOperationApply ||
+			managed.Subresource != "" {
+			continue
+		}
+
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal(managed.FieldsV1.Raw, &fields); err != nil || fields == nil {
+			return false, false
+		}
+
+		metadataRaw, found := fields["f:metadata"]
+		if !found {
+			continue
+		}
+		var metadataFields map[string]json.RawMessage
+		if err := json.Unmarshal(metadataRaw, &metadataFields); err != nil || metadataFields == nil {
+			return false, false
+		}
+
+		labelsRaw, found := metadataFields["f:labels"]
+		if !found {
+			continue
+		}
+		var labelFields map[string]json.RawMessage
+		if err := json.Unmarshal(labelsRaw, &labelFields); err != nil || labelFields == nil {
+			return false, false
+		}
+
+		revisionRaw, found := labelFields["f:"+istioRevisionLabel]
+		if !found {
+			continue
+		}
+		var revisionField map[string]json.RawMessage
+		if err := json.Unmarshal(revisionRaw, &revisionField); err != nil || revisionField == nil || len(revisionField) != 0 {
+			return false, false
+		}
+		ownsRevision = true
+	}
+
+	return ownsRevision, true
+}
+
+func unstructuredJSONEqual(a, b any) bool {
+	// Generated and API-decoded unstructured numbers can have different Go types.
+	aJSON, err := json.Marshal(a)
+	if err != nil {
+		return false
+	}
+	bJSON, err := json.Marshal(b)
+	return err == nil && bytes.Equal(aJSON, bJSON)
 }
 
 // clearAcceptedConfiguration drops an accepted record the RuleSet can no longer

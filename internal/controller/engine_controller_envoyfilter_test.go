@@ -97,6 +97,245 @@ func newEnvoyFilterTestArtifact(t *testing.T) (render.Artifact, render.BinaryRef
 	return artifact, binary
 }
 
+func TestEnvoyFilterMatchesRevisionAndRetainsForeignMetadata(t *testing.T) {
+	artifact, binary := newEnvoyFilterTestArtifact(t)
+	desired, err := buildEnvoyFilter(newEnvoyFilterTestEngine(), artifact, binary, EnvoyFilterConfig{
+		AdvertiseAddress: envoyFilterTestAdvertise,
+		CAPEM:            []byte(envoyFilterTestCA),
+		IstioRevision:    "revision-2",
+	}, "fail")
+	require.NoError(t, err)
+
+	existing := desired.DeepCopy()
+	labels := existing.GetLabels()
+	labels["example.com/retained"] = "label"
+	existing.SetLabels(labels)
+	annotations := existing.GetAnnotations()
+	annotations["example.com/retained"] = "annotation"
+	existing.SetAnnotations(annotations)
+
+	assert.True(t, envoyFilterMatches(existing, desired), "foreign metadata should not trigger an apply")
+	assert.Equal(t, "label", existing.GetLabels()["example.com/retained"])
+	assert.Equal(t, "annotation", existing.GetAnnotations()["example.com/retained"])
+
+	staleRevision := existing.DeepCopy()
+	labels = staleRevision.GetLabels()
+	labels["istio.io/rev"] = "revision-1"
+	staleRevision.SetLabels(labels)
+	assert.False(t, envoyFilterMatches(staleRevision, desired), "a stale revision must be updated")
+
+	desiredWithoutRevision := desired.DeepCopy()
+	labels = desiredWithoutRevision.GetLabels()
+	delete(labels, "istio.io/rev")
+	desiredWithoutRevision.SetLabels(labels)
+	assert.False(t, envoyFilterMatches(existing, desiredWithoutRevision), "a removed desired revision must be removed from the object")
+
+	existingWithoutRevision := existing.DeepCopy()
+	labels = existingWithoutRevision.GetLabels()
+	delete(labels, "istio.io/rev")
+	existingWithoutRevision.SetLabels(labels)
+	assert.True(t, envoyFilterMatches(existingWithoutRevision, desiredWithoutRevision))
+
+	deleting := existing.DeepCopy()
+	deletionTimestamp := metav1.Now()
+	deleting.SetDeletionTimestamp(&deletionTimestamp)
+	assert.False(t, envoyFilterMatches(deleting, desired), "a deleting EnvoyFilter must be recreated")
+}
+
+func TestEnvoyFilterMatchesOmittedRevisionByManagedFields(t *testing.T) {
+	artifact, binary := newEnvoyFilterTestArtifact(t)
+	desired, err := buildEnvoyFilter(newEnvoyFilterTestEngine(), artifact, binary, EnvoyFilterConfig{
+		AdvertiseAddress: envoyFilterTestAdvertise,
+		CAPEM:            []byte(envoyFilterTestCA),
+	}, "fail")
+	require.NoError(t, err)
+
+	const revisionFieldSet = `{"f:metadata":{"f:labels":{"f:istio.io/rev":{}}}}`
+	const foreignManager = "foreign-revision-controller"
+	managedBy := func(manager string, operation metav1.ManagedFieldsOperationType) metav1.ManagedFieldsEntry {
+		return metav1.ManagedFieldsEntry{
+			Manager:    manager,
+			Operation:  operation,
+			APIVersion: envoyFilterGVK.GroupVersion().String(),
+			FieldsType: "FieldsV1",
+			FieldsV1:   &metav1.FieldsV1{Raw: []byte(revisionFieldSet)},
+		}
+	}
+	operatorOwner := managedBy(fieldManager, metav1.ManagedFieldsOperationApply)
+	foreignOwner := managedBy(foreignManager, metav1.ManagedFieldsOperationApply)
+	statusOwner := operatorOwner
+	statusOwner.Subresource = "status"
+
+	tests := []struct {
+		name      string
+		managed   []metav1.ManagedFieldsEntry
+		wantMatch bool
+	}{
+		{name: "missing managed fields", wantMatch: false},
+		{name: "empty managed fields", managed: []metav1.ManagedFieldsEntry{}, wantMatch: false},
+		{
+			name: "missing fieldsV1",
+			managed: []metav1.ManagedFieldsEntry{{
+				Manager:    foreignManager,
+				Operation:  metav1.ManagedFieldsOperationApply,
+				APIVersion: envoyFilterGVK.GroupVersion().String(),
+				FieldsType: "FieldsV1",
+			}},
+			wantMatch: false,
+		},
+		{
+			name: "invalid fieldsV1",
+			managed: []metav1.ManagedFieldsEntry{{
+				Manager:    foreignManager,
+				Operation:  metav1.ManagedFieldsOperationApply,
+				APIVersion: envoyFilterGVK.GroupVersion().String(),
+				FieldsType: "FieldsV1",
+				FieldsV1:   &metav1.FieldsV1{Raw: []byte("[]")},
+			}},
+			wantMatch: false,
+		},
+		{name: "foreign owner", managed: []metav1.ManagedFieldsEntry{foreignOwner}, wantMatch: true},
+		{name: "operator owner", managed: []metav1.ManagedFieldsEntry{operatorOwner}, wantMatch: false},
+		{name: "shared owners", managed: []metav1.ManagedFieldsEntry{foreignOwner, operatorOwner}, wantMatch: false},
+		{
+			name: "operator update manager is distinct from apply manager",
+			managed: []metav1.ManagedFieldsEntry{
+				managedBy(fieldManager, metav1.ManagedFieldsOperationUpdate),
+			},
+			wantMatch: true,
+		},
+		{
+			name:      "operator status subresource is distinct from main resource",
+			managed:   []metav1.ManagedFieldsEntry{statusOwner},
+			wantMatch: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			existing := desired.DeepCopy()
+			labels := existing.GetLabels()
+			labels[istioRevisionLabel] = "foreign-revision"
+			existing.SetLabels(labels)
+			existing.SetManagedFields(tc.managed)
+
+			assert.Equal(t, tc.wantMatch, envoyFilterMatches(existing, desired))
+		})
+	}
+}
+
+func TestRenderEngineArtifactReturnsMetadataOnlyAndRechecksSizes(t *testing.T) {
+	engine := newEnvoyFilterTestEngine()
+	content := assemble.Content{Rules: "SecRuleEngine On"}
+	contentHash, err := render.RuleSetContentHash(content)
+	require.NoError(t, err)
+	input := render.EngineInput{
+		Namespace: engine.Namespace,
+		Name:      engine.Name,
+		UID:       engine.UID,
+		RuleSet: render.RuleSetAccepted{
+			UID:         types.UID("22222222-2222-4222-8222-222222222222"),
+			ContentHash: contentHash,
+		},
+		Content: content,
+		Binary: render.BinaryRef{
+			URL:    envoyFilterTestBinaryURL,
+			SHA256: "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+		},
+	}
+	engineKey := types.NamespacedName{Namespace: engine.Namespace, Name: engine.Name}
+	reconciler := &EngineReconciler{Limits: xds.Limits{MaxMessageBytes: 1}}
+
+	_, failureMessage, err := reconciler.renderEngineArtifact(engineKey, input)
+	require.Error(t, err)
+	assert.Contains(t, failureMessage, "ECDS response size")
+	_, cached := reconciler.renderCache.get(engineKey, engineRenderCacheKeyFor(input))
+	assert.False(t, cached, "an oversized miss must not populate the cache")
+
+	reconciler.Limits = xds.Limits{}
+	first, failureMessage, err := reconciler.renderEngineArtifact(engineKey, input)
+	require.NoError(t, err, failureMessage)
+	assert.Nil(t, first.Payload)
+	assert.Nil(t, first.Resource)
+
+	entry, cached := reconciler.renderCache.get(engineKey, engineRenderCacheKeyFor(input))
+	require.True(t, cached)
+	assert.Greater(t, entry.payloadSize, 0)
+	assert.Greater(t, entry.resourceSize, 0)
+	assert.Nil(t, entry.artifact.Payload)
+	assert.Nil(t, entry.artifact.Resource)
+
+	reconciler.Limits = xds.Limits{MaxMessageBytes: 1}
+	_, failureMessage, err = reconciler.renderEngineArtifact(engineKey, input)
+	require.Error(t, err)
+	assert.Contains(t, failureMessage, "ECDS response size")
+
+	reconciler.Limits = xds.Limits{}
+	cachedArtifact, failureMessage, err := reconciler.renderEngineArtifact(engineKey, input)
+	require.NoError(t, err, failureMessage)
+	assert.Nil(t, cachedArtifact.Payload)
+	assert.Nil(t, cachedArtifact.Resource)
+	assert.Equal(t, first.Version, cachedArtifact.Version)
+}
+
+func TestEngineRenderCacheKeyInvalidatesRenderingInputs(t *testing.T) {
+	engine := newEnvoyFilterTestEngine()
+	input := render.EngineInput{
+		Namespace: engine.Namespace,
+		Name:      engine.Name,
+		UID:       engine.UID,
+		RuleSet: render.RuleSetAccepted{
+			UID:         types.UID("22222222-2222-4222-8222-222222222222"),
+			ContentHash: "sha256:" + strings.Repeat("a", 64),
+		},
+		Content:               assemble.Content{Rules: "SecRuleEngine On"},
+		EmptyRulesPolicy:      "Reject",
+		FailurePolicy:         "fail",
+		DriverType:            "wasm",
+		Binary:                render.BinaryRef{URL: envoyFilterTestBinaryURL, SHA256: strings.Repeat("c", 64), CRSVersion: "v4.30.0"},
+		EnableFilterStateLogs: false,
+	}
+	engineKey := types.NamespacedName{Namespace: engine.Namespace, Name: engine.Name}
+	cache := engineRenderCache{}
+	cache.set(engineKey, engineRenderCacheEntry{key: engineRenderCacheKeyFor(input)})
+	if _, found := cache.get(engineKey, engineRenderCacheKeyFor(input)); !found {
+		t.Fatal("the original rendering inputs should hit the cache")
+	}
+
+	tests := []struct {
+		name   string
+		mutate func(*render.EngineInput)
+	}{
+		{name: "namespace", mutate: func(in *render.EngineInput) { in.Namespace = "different-namespace" }},
+		{name: "name", mutate: func(in *render.EngineInput) { in.Name = "different-engine" }},
+		{name: "Engine UID", mutate: func(in *render.EngineInput) { in.UID = types.UID("44444444-4444-4444-8444-444444444444") }},
+		{name: "binary URL", mutate: func(in *render.EngineInput) { in.Binary.URL += "/other" }},
+		{name: "binary digest", mutate: func(in *render.EngineInput) { in.Binary.SHA256 = strings.Repeat("d", 64) }},
+		{name: "CRS capability", mutate: func(in *render.EngineInput) { in.Binary.CRSVersion = "none" }},
+		{name: "empty rules policy", mutate: func(in *render.EngineInput) { in.EmptyRulesPolicy = "Allow" }},
+		{name: "failure policy", mutate: func(in *render.EngineInput) { in.FailurePolicy = "allow" }},
+		{name: "observability", mutate: func(in *render.EngineInput) { in.EnableFilterStateLogs = true }},
+		{name: "driver type", mutate: func(in *render.EngineInput) { in.DriverType = "other" }},
+		{
+			name: "VM settings",
+			mutate: func(in *render.EngineInput) {
+				in.VMSettings.Runtime = "envoy.wasm.runtime.wasmtime"
+			},
+		},
+		{name: "RuleSet UID", mutate: func(in *render.EngineInput) { in.RuleSet.UID = types.UID("33333333-3333-4333-8333-333333333333") }},
+		{name: "accepted content hash", mutate: func(in *render.EngineInput) { in.RuleSet.ContentHash = "sha256:" + strings.Repeat("b", 64) }},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			changed := input
+			tc.mutate(&changed)
+			if _, found := cache.get(engineKey, engineRenderCacheKeyFor(changed)); found {
+				t.Fatal("changed rendering inputs must invalidate the cached artifact")
+			}
+		})
+	}
+}
+
 // socketAddress returns the asset cluster's single endpoint socket address.
 func socketAddress(t *testing.T, cluster map[string]any) map[string]any {
 	t.Helper()

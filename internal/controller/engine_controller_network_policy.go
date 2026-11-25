@@ -23,6 +23,7 @@ import (
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
@@ -170,6 +171,9 @@ func (r *EngineReconciler) applyNetworkPolicy(ctx context.Context, log logr.Logg
 		desired.Name = existing.Name
 		desired.GenerateName = ""
 		desired.ResourceVersion = existing.ResourceVersion
+		if networkPolicyMatches(existing, desired) {
+			return nil
+		}
 		logDebug(log, req, "Engine", "Updating ECDS NetworkPolicy", "networkPolicyName", existing.Name)
 		if err := r.Update(ctx, desired); err != nil {
 			logAPIError(log, req, "Engine", err, "Failed to update NetworkPolicy", desired)
@@ -186,6 +190,17 @@ func (r *EngineReconciler) applyNetworkPolicy(ctx context.Context, log logr.Logg
 	}
 	logInfo(log, req, "Engine", "NetworkPolicy created", "networkPolicyName", desired.Name, "networkPolicyNamespace", desired.Namespace)
 	return nil
+}
+
+func networkPolicyMatches(existing, desired *networkingv1.NetworkPolicy) bool {
+	return existing.DeletionTimestamp.IsZero() &&
+		existing.Name == desired.Name &&
+		existing.Namespace == desired.Namespace &&
+		apiequality.Semantic.DeepEqual(existing.Labels, desired.Labels) &&
+		apiequality.Semantic.DeepEqual(existing.Annotations, desired.Annotations) &&
+		apiequality.Semantic.DeepEqual(existing.OwnerReferences, desired.OwnerReferences) &&
+		apiequality.Semantic.DeepEqual(existing.Finalizers, desired.Finalizers) &&
+		apiequality.Semantic.DeepEqual(existing.Spec, desired.Spec)
 }
 
 // cleanupNetworkPolicy removes NetworkPolicies associated with an Engine.
