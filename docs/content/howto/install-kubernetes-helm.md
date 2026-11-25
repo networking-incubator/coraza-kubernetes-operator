@@ -30,6 +30,17 @@ helm upgrade --install coraza-kubernetes-operator \
   --create-namespace
 ```
 
+## Install from the OCI Registry
+
+Install directly from GitHub Container Registry without adding a Helm repository:
+
+```bash
+helm upgrade --install coraza-kubernetes-operator \
+  oci://ghcr.io/networking-incubator/charts/coraza-kubernetes-operator \
+  --namespace coraza-system \
+  --create-namespace
+```
+
 ### Pin a Specific Version
 
 ```bash
