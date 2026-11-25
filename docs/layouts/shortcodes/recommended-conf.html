@@ -1,0 +1,8 @@
+{{- $sample := resources.Get "samples/recommended-base-rules.yaml" -}}
+{{- $source := replaceRE "^# Source: " "" (index (split $sample.Content "\n") 0) -}}
+<p><a href="{{ $sample.RelPermalink }}" download>Download the RuleSource YAML</a> · <a href="{{ $source }}">Read the fully commented upstream configuration</a></p>
+{{- with .Get 0 }}
+{{- highlight (printf "%s apply -n waf-tutorial -f - <<'EOF'\n%sEOF" . $sample.Content) "bash" "" }}
+{{- else }}
+{{- highlight $sample.Content "yaml" "" }}
+{{- end -}}

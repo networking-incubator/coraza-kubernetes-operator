@@ -848,10 +848,13 @@ docs.image: container-engine-detect ## Build the documentation container image
 	$(CONTAINER_TOOL) build -t $(DOCS_IMG) $(DOCS_DIR)
 
 .PHONY: docs.serve
-docs.serve: docs.image container-engine-detect ## Serve documentation locally with live reload
-	$(CONTAINER_TOOL) run --rm -it \
+docs.serve: docs.api ## Serve documentation locally with live reload
+	$(CONTAINER_TOOL) run --rm -it $(if $(filter podman,$(CONTAINER_TOOL)),--userns=keep-id) \
+		--user "$(shell id -u):$(shell id -g)" \
+		-e HOME=/tmp -e GOPATH=/tmp/go -e GOCACHE=/tmp/go-build \
 		-v $(CURDIR)/$(DOCS_DIR):/src:z -p 1313:1313 $(DOCS_IMG) \
-		hugo server --bind 0.0.0.0 --baseURL http://localhost:1313/ --buildDrafts --buildFuture
+		hugo server --config hugo.yaml,hugo.container.yaml \
+		--bind 0.0.0.0 --baseURL http://localhost:1313/ --buildDrafts --buildFuture
 
 .PHONY: docs.api
 docs.api: docs.image container-engine-detect ## Generate CRD API reference from Go types

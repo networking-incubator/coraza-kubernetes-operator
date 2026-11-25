@@ -1,0 +1,11 @@
+module:
+  mounts:
+    - source: assets
+      target: assets
+    # The container installs Docsy's dependencies outside the /src bind mount.
+    - source: /deps/node_modules/bootstrap
+      target: assets/vendor/bootstrap
+    - source: /deps/node_modules/@fortawesome/fontawesome-free
+      target: assets/vendor/Font-Awesome
+    - source: /deps/node_modules/@fortawesome/fontawesome-free/webfonts
+      target: static/webfonts
