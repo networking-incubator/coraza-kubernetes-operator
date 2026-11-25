@@ -106,10 +106,10 @@ references before an Engine accepts the configuration:
   CRS-enabled build (`make wasm.crs`, or the published artifact `make demo` downloads). The release bundle does
   not embed CRS. In a CRS-enabled module, `Include crs/crs-setup.conf`,
   `Include crs/rules/*.conf`, and a literal `crs/rules/<file>.conf` are accepted.
-  The previous Go plugin's `@` aliases (`@recommended-conf`, `@demo-conf`,
-  `@ftw-conf`, `@crs-setup-conf`, `@owasp_crs/...`) are **not** resolved by
-  `envoy-coraza`, and every other glob is rejected before delivery with a clear
-  error. You can also use `kubectl coraza generate coreruleset` to turn a
+  CKO rejects `@` aliases and every other glob before delivery. The pinned
+  `envoy-coraza` module does bundle `@recommended-conf`, but CKO does not accept
+  the alias. Use the [recommended `base-rules` manifest]({{< relref "/howto/creating-firewall-rules#start-with-the-recommended-configuration" >}})
+  instead. You can also use `kubectl coraza generate coreruleset` to turn a
   CoreRuleSet checkout into one RuleSource per file plus a RuleData object for the
   `.data` files; the generated RuleSet concatenates the files and needs no
   includes.

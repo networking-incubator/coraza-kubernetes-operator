@@ -14,7 +14,11 @@ This project does not maintain CoreRuleSet rules. A CRS-enabled `envoy-coraza` b
 ## Use the embedded CoreRuleSet
 
 `make demo` downloads the published CRS-enabled `envoy-coraza` artifact, and
-`make wasm.crs` builds the same thing from source, with the CRS release pinned by the operator (`v4.30.0`; recorded as `crs_version` in `plugin.manifest.yaml`). The default and release builds do **not** embed CRS, so `crs/...` includes require a CRS-enabled module: the operator rejects a RuleSet that uses them while the bundled module reports `crs_version: none`. Reference the embedded tree directly:
+`make wasm.crs` builds the same thing from source, with the CRS release pinned by the operator (`v4.30.0`; recorded as `crs_version` in `plugin.manifest.yaml`). The default and release builds do **not** embed CRS, so `crs/...` includes require a CRS-enabled module: the operator rejects a RuleSet that uses them while the bundled module reports `crs_version: none`.
+
+Apply the [recommended `base-rules` manifest]({{< relref "/howto/creating-firewall-rules#start-with-the-recommended-configuration" >}})
+in `my-namespace`. It enables enforcement for the blocking checks below.
+Then reference the embedded tree in a separate RuleSource:
 
 ```yaml
 apiVersion: waf.k8s.coraza.io/v1alpha1
@@ -24,21 +28,6 @@ metadata:
   namespace: my-namespace
 spec:
   rules: |
-    SecRuleEngine On
-    SecRequestBodyAccess On
-    SecRequestBodyLimit 13107200
-    # CRS 4.30 parses a JSON body only when the request selects the JSON
-    # processor; without this rule the ARGS rules never see JSON payloads.
-    SecRule REQUEST_HEADERS:Content-Type "^(?:application(?:/soap\+|/)|text/)xml" \
-      "id:200000,phase:1,t:none,t:lowercase,pass,nolog,ctl:requestBodyProcessor=XML"
-    SecRule REQUEST_HEADERS:Content-Type "@rx ^application/json(?:\s*;|$)" \
-      "id:900,phase:1,t:none,t:lowercase,pass,nolog,ctl:requestBodyProcessor=JSON"
-    SecRule REQUEST_HEADERS:Content-Type "^application/[a-z0-9.-]+\+json" \
-      "id:200006,phase:1,t:none,t:lowercase,pass,nolog,ctl:requestBodyProcessor=JSON"
-    SecRule REQBODY_ERROR "!@eq 0" \
-      "id:200002,phase:2,t:none,log,deny,status:400,msg:'Failed to parse request body.'"
-    SecRule ARGUMENTS_LIMIT_REACHED "@eq 1" \
-      "id:200007,phase:2,t:none,log,deny,status:403,msg:'Request argument limit exceeded'"
     Include crs/crs-setup.conf
     Include crs/rules/*.conf
 ---
@@ -49,6 +38,7 @@ metadata:
   namespace: my-namespace
 spec:
   sources:
+    - name: base-rules
     - name: crs
 ```
 
@@ -84,9 +74,9 @@ The previous Go plugin's aliases are not all file references:
   with actual Includes under `crs/`, such as `Include crs/rules/*.conf` and
   `Include crs/crs-setup.conf`.
 - `@recommended-conf`, `@demo-conf`, and `@ftw-conf` are configuration aliases, not
-  CRS filenames. Do not rewrite them as `crs/...`. Use the generator to emit its
-  `base-rules` and per-file RuleSources/RuleData, or add the required base SecLang
-  directives explicitly to your own RuleSource.
+  CRS filenames. CKO rejects them; do not rewrite them as `crs/...`. If you use
+  the CRS generator, it emits its own `base-rules`. Replace that RuleSource
+  rather than adding a second base.
 
 ## Generate manifests for a different CRS release
 

@@ -124,10 +124,10 @@ a literal `crs/rules/<file>.conf` are accepted. Validation checks the operator i
 bundled module manifest; setting a custom `spec.driver.wasm.url` to a CRS-enabled module
 does not enable `crs/...` includes when the bundled release module reports
 `crs_version: none`. Use the generator to package rules as RuleSource/RuleData, or use an
-operator image bundled with CRS. Every other glob is rejected, and the Go
-plugin's `@` aliases (`@owasp_crs/...`, `@recommended-conf`, `@demo-conf`,
-`@ftw-conf`, `@crs-setup-conf`) are **not** supported by `envoy-coraza`. A
-literal `crs/<file>` must end in `.conf`: the `.conf.example` templates hold no
+operator image bundled with CRS. CKO rejects every other glob and all `@`
+include aliases. For `@recommended-conf`, use the
+[recommended `base-rules` manifest]({{< relref "/howto/creating-firewall-rules#start-with-the-recommended-configuration" >}})
+instead. A literal `crs/<file>` must end in `.conf`: the `.conf.example` templates hold no
 active rules, and the `.data` files are not SecLang, so including one would make
 the plugin NACK the push while the Engine reported `Ready`. An `Include` argument
 may be unquoted or wrapped in double quotes: Coraza strips every leading and

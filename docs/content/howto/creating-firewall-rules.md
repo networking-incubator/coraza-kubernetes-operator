@@ -7,6 +7,31 @@ description: "Write SecLang rules in RuleSource objects and aggregate them in a 
 
 Firewall rules in the Coraza Kubernetes Operator are written using [ModSecurity SecLang](https://github.com/owasp-modsecurity/ModSecurity/wiki/Reference-Manual-(v3.x)) syntax. Rule text is stored in **RuleSource** resources; a **RuleSet** lists RuleSource (and optional RuleData) names in order and drives compilation and ECDS publication.
 
+## Start with the recommended configuration
+
+Apply this `base-rules` RuleSource in the same namespace as your RuleSet, and
+list it first in `spec.sources`, before user overrides and application or CRS
+rules. Use it **instead of** another `base-rules` example.
+
+It selects JSON and XML body processors, adds rules for malformed URIs and
+request bodies and for requests that exceed the argument limit, sets a 12.5 MiB
+request-body limit, and enables response-body inspection and `RelevantOnly`
+auditing. It does not install the OWASP CoreRuleSet.
+
+{{< recommended-conf >}}
+
+The upstream configuration is copyright 2022 Juan Pablo Tosso and the OWASP
+Coraza contributors, licensed under Apache-2.0.
+
+The sample is generated from the pinned `coraza-rs` source. It follows the
+WASM build in omitting `SecDataDir` and `SecRequestBodyInMemoryLimit`.
+CKO uses explicit SecLang here because it does not accept `Include @recommended-conf`.
+The sample starts in `On` mode and blocks requests that match a deny rule.
+To observe without blocking, set `SecRuleEngine DetectionOnly` in your copy
+or in a later RuleSource. If cluster policy restricts body limits or response-body
+access, edit the base itself; a later override does not make a forbidden
+directive pass validation.
+
 ## Writing rules in RuleSources
 
 Each **RuleSource** has `spec.rules`: a string containing SecLang directives (use a `|` block scalar in YAML for multiline text).

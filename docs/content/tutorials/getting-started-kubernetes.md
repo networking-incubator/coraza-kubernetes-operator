@@ -177,21 +177,15 @@ kubectl wait -n waf-tutorial gateway/waf-gateway \
 
 ## Step 4: Define Firewall Rules
 
-Create **RuleSource** resources with SecLang. The first sets the base Coraza configuration; the second blocks requests whose query string contains the word "attack":
+Apply the recommended Coraza configuration as your `base-rules` **RuleSource**.
+It enables enforcement and adds JSON/XML parsing and rules for malformed requests.
+
+{{< recommended-conf kubectl >}}
+
+Add a second **RuleSource** that blocks requests whose query string contains the word "attack":
 
 ```bash
 kubectl apply -n waf-tutorial -f - <<EOF
-apiVersion: waf.k8s.coraza.io/v1alpha1
-kind: RuleSource
-metadata:
-  name: base-rules
-spec:
-  rules: |
-    SecRuleEngine On
-    SecRequestBodyAccess On
-    SecRequestBodyLimit 13107200
-    SecResponseBodyAccess Off
----
 apiVersion: waf.k8s.coraza.io/v1alpha1
 kind: RuleSource
 metadata:
