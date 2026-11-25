@@ -939,6 +939,76 @@ func TestEngineReconciler_AcceptsConfigurationAndAttachesEnvoyFilter(t *testing.
 	assert.Len(t, patches, 2, "asset cluster and HTTP filter patches")
 }
 
+func TestEngineReconciler_EnvoyFilterSSAReplacesWorkloadSelector(t *testing.T) {
+	ctx := context.Background()
+	ns := setupTestNamespace(t, ctx)
+	gatewayName := "targetrefs-gw"
+	createTestGateway(t, ctx, k8sClient, gatewayName, ns)
+
+	ruleSet := utils.NewTestRuleSet(utils.RuleSetOptions{
+		Name:      "targetrefs-ruleset",
+		Namespace: ns,
+	})
+	require.NoError(t, k8sClient.Create(ctx, ruleSet))
+	acceptTestRuleSet(t, ctx, ruleSet, testAcceptRuleText)
+
+	engine := utils.NewTestEngine(utils.EngineOptions{
+		Name:        "targetrefs-engine",
+		Namespace:   ns,
+		GatewayName: gatewayName,
+		RuleSetName: ruleSet.Name,
+		WasmURL:     utils.DefaultTestWasmURL,
+		WasmSHA256:  utils.DefaultTestWasmSHA256,
+	})
+	require.NoError(t, k8sClient.Create(ctx, engine))
+
+	legacyFilter := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "networking.istio.io/v1alpha3",
+		"kind":       "EnvoyFilter",
+		"metadata": map[string]any{
+			"name":      envoyFilterName(engine.Name),
+			"namespace": ns,
+		},
+		"spec": map[string]any{
+			"workloadSelector": map[string]any{
+				"labels": map[string]any{gatewayNameLabel: gatewayName},
+			},
+		},
+	}}
+	legacyFilter.SetGroupVersionKind(envoyFilterGVK)
+	// Seed the old field with the operator's SSA owner; a normal apply should
+	// relinquish it when the desired object switches to targetRefs.
+	require.NoError(t, serverSideApply(ctx, k8sClient, legacyFilter))
+	legacyFilter = requireEnvoyFilterExists(t, ctx, engine.Name, ns)
+	assert.Equal(t, map[string]any{
+		"labels": map[string]any{gatewayNameLabel: gatewayName},
+	}, nestedMap(t, legacyFilter.Object, "spec", "workloadSelector"))
+
+	reconciler := newAcceptedEngineTestReconciler()
+	reconcileEngine(t, ctx, reconciler, engine)
+
+	envoyFilter := requireEnvoyFilterExists(t, ctx, engine.Name, ns)
+	targetRefs, found, err := unstructured.NestedSlice(envoyFilter.Object, "spec", "targetRefs")
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, []any{
+		map[string]any{
+			"group": "gateway.networking.k8s.io",
+			"kind":  "Gateway",
+			"name":  gatewayName,
+		},
+	}, targetRefs)
+	_, found, err = unstructured.NestedFieldNoCopy(envoyFilter.Object, "spec", "workloadSelector")
+	require.NoError(t, err)
+	assert.False(t, found, "SSA should remove the prior selector owned by this controller")
+
+	resourceVersion := envoyFilter.GetResourceVersion()
+	_, err = reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(engine)})
+	require.NoError(t, err)
+	envoyFilter = requireEnvoyFilterExists(t, ctx, engine.Name, ns)
+	assert.Equal(t, resourceVersion, envoyFilter.GetResourceVersion(), "re-applying the same targetRefs should be idempotent")
+}
+
 func TestEngineReconciler_CleanupNotAcceptedDeletesEnvoyFilter(t *testing.T) {
 	ctx := context.Background()
 	ns := setupTestNamespace(t, ctx)

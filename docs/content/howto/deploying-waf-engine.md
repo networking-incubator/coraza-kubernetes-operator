@@ -27,7 +27,12 @@ spec:
 
 ## Selecting a Gateway
 
-The `target.name` identifies the Gateway resource in the same namespace. The operator derives the workload label selector using the GEP-1762 convention (`gateway.networking.k8s.io/gateway-name` label).
+The `target.name` identifies the Gateway resource in the same namespace. The
+generated Istio EnvoyFilter uses `spec.targetRefs` with group
+`gateway.networking.k8s.io`, kind `Gateway`, and that name, so attachment is to
+the Gateway resource rather than a matching pod label. See
+[Istio WASM Integration]({{< relref "/explanation/istio-wasm-integration" >}})
+for Istio revision compatibility guidance.
 
 Only one Engine resource may target a given Gateway. If multiple Engines reference the same Gateway, only the oldest one (by creation timestamp) is accepted; the others receive an `Accepted=False` condition with reason `TargetConflict`. See [Status Conditions]({{< relref "../reference/status-conditions" >}}) for details.
 

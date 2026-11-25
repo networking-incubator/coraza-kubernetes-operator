@@ -433,7 +433,7 @@ func TestEngineReconciler_NilTargetRef_MarksDegraded(t *testing.T) {
 
 	// Call provisionWasmDriver directly — it should detect the empty
 	// TargetRef and mark the Engine Degraded instead of creating an
-	// EnvoyFilter without a workload selector.
+	// EnvoyFilter without a valid Gateway target reference.
 	_, err := reconciler.provisionWasmDriver(ctx, ctrl.Log, engineReq, &fetched)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "target is required")

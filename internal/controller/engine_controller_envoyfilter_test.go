@@ -145,8 +145,14 @@ func TestBuildEnvoyFilterShape(t *testing.T) {
 			assert.Regexp(t, `^sha256:[0-9a-f]{64}$`, caHashAnnotation)
 			assert.Equal(t, caHash([]byte(envoyFilterTestCA)), caHashAnnotation)
 
-			assert.Equal(t, map[string]any{gatewayNameLabel: "gw"},
-				nestedMap(t, ef.Object, "spec", "workloadSelector", "labels"))
+			assert.Equal(t, []any{
+				map[string]any{
+					"group": "gateway.networking.k8s.io",
+					"kind":  "Gateway",
+					"name":  "gw",
+				},
+			}, nestedSlice(t, ef.Object, "spec", "targetRefs"))
+			assert.NotContains(t, asMap(t, ef.Object["spec"]), "workloadSelector")
 
 			patches := nestedSlice(t, ef.Object, "spec", "configPatches")
 			require.Len(t, patches, 2)
@@ -377,28 +383,28 @@ func TestBuildEnvoyFilterErrors(t *testing.T) {
 		require.Error(t, err)
 	})
 
-	t.Run("nil workload selector (non-gateway target)", func(t *testing.T) {
+	t.Run("invalid Gateway target type", func(t *testing.T) {
 		nonGateway := newEnvoyFilterTestEngine()
 		nonGateway.Spec.Target.Type = ""
 		_, err := buildEnvoyFilter(nonGateway, artifact, binary, valid, "fail")
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "no workload selector")
+		assert.Contains(t, err.Error(), "no Gateway target reference")
 	})
 
-	t.Run("nil workload selector (empty gateway name)", func(t *testing.T) {
+	t.Run("empty Gateway name", func(t *testing.T) {
 		unnamed := newEnvoyFilterTestEngine()
 		unnamed.Spec.Target.Name = ""
 		_, err := buildEnvoyFilter(unnamed, artifact, binary, valid, "fail")
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "no workload selector")
+		assert.Contains(t, err.Error(), "no Gateway target reference")
 	})
 
-	t.Run("nil workload selector (invalid gateway name)", func(t *testing.T) {
+	t.Run("invalid Gateway name", func(t *testing.T) {
 		invalid := newEnvoyFilterTestEngine()
 		invalid.Spec.Target.Name = "Invalid_Gateway"
 		_, err := buildEnvoyFilter(invalid, artifact, binary, valid, "fail")
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "no workload selector")
+		assert.Contains(t, err.Error(), "no Gateway target reference")
 	})
 }
 
