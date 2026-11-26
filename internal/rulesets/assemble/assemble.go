@@ -163,7 +163,11 @@ type inputIdentity struct {
 // Fingerprint returns a deterministic identity of the resolved inputs,
 // including object UIDs and generations. It changes when inputs are
 // re-resolved even if the effective content does not; use
-// render.RuleSetContentHash for content identity.
+// render.RuleSetContentHash for content identity. Cache reuse relies on
+// UID+generation pinning each RuleSource and RuleData spec: status and
+// metadata-only updates may change ResourceVersion without changing
+// generation, so identity metadata must come from the same object version
+// as its spec.
 func Fingerprint(in Inputs) string {
 	// Hash only the input identities, never the rule corpus: this runs on
 	// every publication reconcile, before coalescing can short-circuit, and

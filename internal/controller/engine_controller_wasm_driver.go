@@ -88,10 +88,13 @@ type engineRenderCacheKey struct {
 }
 
 type engineRenderCacheEntry struct {
-	key          engineRenderCacheKey
-	artifact     render.Artifact
-	payloadSize  int
-	resourceSize int
+	key              engineRenderCacheKey
+	inputFingerprint string
+	// contentLimits comes from content matching key.contentHash.
+	contentLimits contentLimitSummary
+	artifact      render.Artifact
+	payloadSize   int
+	resourceSize  int
 }
 
 // engineRenderCache reuses only successful renders with identical inputs and retains no ECDS payload.
@@ -120,25 +123,55 @@ func (c *engineRenderCache) set(engineKey types.NamespacedName, entry engineRend
 	c.entries[engineKey] = entry
 }
 
+func (c *engineRenderCache) rememberInputFingerprint(
+	engineKey types.NamespacedName,
+	key engineRenderCacheKey,
+	inputFingerprint string,
+	limits contentLimitSummary,
+) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	entry, ok := c.entries[engineKey]
+	if !ok || entry.key != key {
+		return
+	}
+	entry.inputFingerprint = inputFingerprint
+	entry.contentLimits = limits
+	c.entries[engineKey] = entry
+}
+
 // renderEngineArtifact returns metadata-only artifacts on misses and hits. It
 // measures payload/resource on misses, caches only their sizes, and rechecks
 // limits on every call.
 func (r *EngineReconciler) renderEngineArtifact(
 	engineKey types.NamespacedName,
 	input render.EngineInput,
+	contentLimits contentLimitSummary,
+	verifiedEntry *engineRenderCacheEntry,
 ) (render.Artifact, string, error) {
 	key := engineRenderCacheKeyFor(input)
-	entry, cacheHit := r.renderCache.get(engineKey, key)
+	var entry engineRenderCacheEntry
+	var cacheHit bool
+	if verifiedEntry != nil {
+		if verifiedEntry.key != key {
+			err := errors.New("verified render cache entry no longer matches Engine inputs")
+			return render.Artifact{}, fmt.Sprintf("Failed to render Engine configuration: %v", err), err
+		}
+		entry, cacheHit = *verifiedEntry, true
+	} else {
+		entry, cacheHit = r.renderCache.get(engineKey, key)
+	}
 	if !cacheHit {
 		artifact, err := render.Render(input)
 		if err != nil {
 			return render.Artifact{}, fmt.Sprintf("Failed to render Engine configuration: %v", err), err
 		}
 		entry = engineRenderCacheEntry{
-			key:          key,
-			artifact:     artifact,
-			payloadSize:  len(artifact.Payload),
-			resourceSize: proto.Size(artifact.Resource),
+			key:           key,
+			contentLimits: contentLimits,
+			artifact:      artifact,
+			payloadSize:   len(artifact.Payload),
+			resourceSize:  proto.Size(artifact.Resource),
 		}
 	}
 
@@ -160,6 +193,8 @@ func (c *engineRenderCache) delete(engineKey types.NamespacedName) {
 	delete(c.entries, engineKey)
 }
 
+// The key represents RuleSet content by its accepted hash, not rule text;
+// renderEngineArtifact rejects a verified entry whose key no longer matches.
 func engineRenderCacheKeyFor(in render.EngineInput) engineRenderCacheKey {
 	return engineRenderCacheKey{
 		namespace:             in.Namespace,
@@ -202,7 +237,7 @@ func (r *EngineReconciler) provisionWasmDriver(ctx context.Context, log logr.Log
 		return ctrl.Result{}, err
 	}
 
-	accepted, result, err := r.acceptedRuleSetContent(ctx, log, req, engine)
+	accepted, result, err := r.acceptedRuleSetContent(ctx, log, req, engine, binary)
 	if accepted == nil {
 		return result, err
 	}
@@ -213,20 +248,13 @@ func (r *EngineReconciler) provisionWasmDriver(ctx context.Context, log logr.Log
 
 	failurePolicy := engineFailurePolicy(engine)
 	logDebug(log, req, "Engine", "Rendering Engine configuration")
-	input := render.EngineInput{
-		Namespace:             engine.Namespace,
-		Name:                  engine.Name,
-		UID:                   engine.UID,
-		RuleSet:               render.RuleSetAccepted{UID: ruleSet.UID, ContentHash: contentHash},
-		Content:               content,
-		EmptyRulesPolicy:      string(ruleSet.Spec.EmptyRulesPolicy),
-		FailurePolicy:         failurePolicy,
-		EnableFilterStateLogs: observabilityEnabled(engine),
-		DriverType:            string(wafv1alpha1.DriverTypeWasm),
-		Binary:                binary,
-	}
+	input := engineRenderInput(engine, ruleSet, content, contentHash, binary)
 	engineKey := types.NamespacedName{Namespace: engine.Namespace, Name: engine.Name}
-	artifact, failureMessage, err := r.renderEngineArtifact(engineKey, input)
+	var verifiedEntry *engineRenderCacheEntry
+	if accepted.hasCachedRender {
+		verifiedEntry = &accepted.cachedRender
+	}
+	artifact, failureMessage, err := r.renderEngineArtifact(engineKey, input, accepted.contentLimits, verifiedEntry)
 	if err != nil {
 		if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "Engine", engine, &engine.Status.Conditions, engine.Generation, "RenderFailed", failureMessage); patchErr != nil {
 			return ctrl.Result{}, patchErr
@@ -242,6 +270,14 @@ func (r *EngineReconciler) provisionWasmDriver(ctx context.Context, log logr.Log
 		logInfo(log, req, "Engine", "Inputs changed before acceptance; requeueing")
 		return ctrl.Result{RequeueAfter: 100 * time.Millisecond}, nil
 	}
+	// The limit summary and input fingerprint are verified against this accepted
+	// content; remember them only after the final read-consistency check above.
+	r.renderCache.rememberInputFingerprint(
+		engineKey,
+		engineRenderCacheKeyFor(input),
+		accepted.inputFingerprint,
+		accepted.contentLimits,
+	)
 
 	// Apply NetworkPolicy first: the WAF must never be attached without its
 	// intended network restrictions.
@@ -294,18 +330,30 @@ func (r *EngineReconciler) provisionWasmDriver(ctx context.Context, log logr.Log
 	return result, nil
 }
 
-// acceptedRuleSet is the verified, deliverable content an Engine may render.
+// acceptedRuleSet has verified the RuleSet's accepted content for this Engine.
+// On the fast path, content is zero; inputs remain local for the final race check.
 type acceptedRuleSet struct {
-	ruleSet     wafv1alpha1.RuleSet
-	inputs      assemble.Inputs
-	content     assemble.Content
-	contentHash string
+	ruleSet          wafv1alpha1.RuleSet
+	inputs           assemble.Inputs
+	content          assemble.Content
+	contentHash      string
+	inputFingerprint string
+	contentLimits    contentLimitSummary
+	// A fast-path result must carry its verified cache entry through rendering.
+	cachedRender    engineRenderCacheEntry
+	hasCachedRender bool
 }
 
 // acceptedRuleSetContent waits for the referenced RuleSet to accept the current
 // content and verifies that this replica reconstructs the same, deliverable
 // configuration. A nil result means reconcile should return the given result.
-func (r *EngineReconciler) acceptedRuleSetContent(ctx context.Context, log logr.Logger, req ctrl.Request, engine *wafv1alpha1.Engine) (*acceptedRuleSet, ctrl.Result, error) {
+func (r *EngineReconciler) acceptedRuleSetContent(
+	ctx context.Context,
+	log logr.Logger,
+	req ctrl.Request,
+	engine *wafv1alpha1.Engine,
+	binary render.BinaryRef,
+) (*acceptedRuleSet, ctrl.Result, error) {
 	logDebug(log, req, "Engine", "Checking RuleSet acceptance")
 	var ruleSet wafv1alpha1.RuleSet
 	if err := r.Get(ctx, types.NamespacedName{Namespace: engine.Namespace, Name: engine.Spec.RuleSet.Name}, &ruleSet); err != nil {
@@ -326,23 +374,36 @@ func (r *EngineReconciler) acceptedRuleSetContent(ctx context.Context, log logr.
 	}
 	acceptedContentHash := ruleSet.Status.AcceptedContent.ContentHash
 
-	logDebug(log, req, "Engine", "Assembling accepted RuleSet content")
+	cacheKey := engineRenderCacheKeyFor(engineRenderInput(engine, &ruleSet, assemble.Content{}, acceptedContentHash, binary))
+	engineKey := types.NamespacedName{Namespace: engine.Namespace, Name: engine.Name}
+	entry, hasRenderEntry := r.renderCache.get(engineKey, cacheKey)
 	inputs, err := loadRuleSetInputs(ctx, r.Client, &ruleSet)
 	if err != nil {
-		var clear []func()
-		// A missing input is a wait state, like the RuleSet controller's: an
-		// Engine reconcile can run before the RuleSet reports the missing
-		// RuleData or RuleSource. Keep the last-known-good configuration
-		// unless the RuleSet no longer justifies it; the readiness deadline
-		// bounds a record that can never be reconstructed.
-		if acceptedRecordUnjustified(engine, &ruleSet) {
-			clear = append(clear, func() { clearAcceptedConfiguration(engine) })
-		}
-		if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "Engine", engine, &engine.Status.Conditions, engine.Generation, "RuleSetInputsUnavailable", fmt.Sprintf("Failed to load RuleSet inputs: %v", err), clear...); patchErr != nil {
-			return nil, ctrl.Result{}, patchErr
-		}
-		return nil, ctrl.Result{}, err
+		return r.ruleSetInputsUnavailable(ctx, log, req, engine, &ruleSet, err)
 	}
+	inputFingerprint := assemble.Fingerprint(inputs)
+	if hasRenderEntry && entry.inputFingerprint != "" && entry.inputFingerprint == inputFingerprint {
+		// ResourceVersion can change without changing the input spec. This shortcut
+		// relies on assemble.Fingerprint's precondition that each input's
+		// UID+generation matches the spec represented by cached content.
+		if err := validateContentLimitSummary(entry.contentLimits, r.Limits.WithDefaults()); err != nil {
+			if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "Engine", engine, &engine.Status.Conditions, engine.Generation, "InvalidRuleSet", fmt.Sprintf("RuleSet %s content exceeds delivery limits: %v", ruleSet.Name, err)); patchErr != nil {
+				return nil, ctrl.Result{}, patchErr
+			}
+			return nil, ctrl.Result{}, err
+		}
+		return &acceptedRuleSet{
+			ruleSet:          ruleSet,
+			inputs:           inputs,
+			contentHash:      acceptedContentHash,
+			inputFingerprint: inputFingerprint,
+			contentLimits:    entry.contentLimits,
+			cachedRender:     entry,
+			hasCachedRender:  true,
+		}, ctrl.Result{}, nil
+	}
+
+	logDebug(log, req, "Engine", "Assembling accepted RuleSet content")
 	if err := checkInputsSize(inputs); err != nil {
 		// Content past the limit was never accepted: an input grew after the
 		// RuleSet accepted its content. Wait as for any other unaccepted edit.
@@ -371,14 +432,66 @@ func (r *EngineReconciler) acceptedRuleSetContent(ctx context.Context, log logr.
 	// payloads silently. The RuleSet refuses such content too, so this is
 	// reached when the limits changed or the content changed after the RuleSet
 	// checked it; the accepted configuration keeps serving.
-	if err := validateContentLimits(content, r.Limits.WithDefaults()); err != nil {
+	contentLimits, err := summarizeAndValidateContentLimits(content, r.Limits.WithDefaults())
+	if err != nil {
 		if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "Engine", engine, &engine.Status.Conditions, engine.Generation, "InvalidRuleSet", fmt.Sprintf("RuleSet %s content exceeds delivery limits: %v", ruleSet.Name, err)); patchErr != nil {
 			return nil, ctrl.Result{}, patchErr
 		}
 		return nil, ctrl.Result{}, err
 	}
 
-	return &acceptedRuleSet{ruleSet: ruleSet, inputs: inputs, content: content, contentHash: contentHash}, ctrl.Result{}, nil
+	return &acceptedRuleSet{
+		ruleSet:          ruleSet,
+		inputs:           inputs,
+		content:          content,
+		contentHash:      contentHash,
+		inputFingerprint: inputFingerprint,
+		contentLimits:    contentLimits,
+	}, ctrl.Result{}, nil
+}
+
+func (r *EngineReconciler) ruleSetInputsUnavailable(
+	ctx context.Context,
+	log logr.Logger,
+	req ctrl.Request,
+	engine *wafv1alpha1.Engine,
+	ruleSet *wafv1alpha1.RuleSet,
+	err error,
+) (*acceptedRuleSet, ctrl.Result, error) {
+	var clear []func()
+	// A missing input is a wait state, like the RuleSet controller's: an
+	// Engine reconcile can run before the RuleSet reports the missing
+	// RuleData or RuleSource. Keep the last-known-good configuration
+	// unless the RuleSet no longer justifies it; the readiness deadline
+	// bounds a record that can never be reconstructed.
+	if acceptedRecordUnjustified(engine, ruleSet) {
+		clear = append(clear, func() { clearAcceptedConfiguration(engine) })
+	}
+	if patchErr := patchDegraded(ctx, r.Status(), r.Recorder, log, req, "Engine", engine, &engine.Status.Conditions, engine.Generation, "RuleSetInputsUnavailable", fmt.Sprintf("Failed to load RuleSet inputs: %v", err), clear...); patchErr != nil {
+		return nil, ctrl.Result{}, patchErr
+	}
+	return nil, ctrl.Result{}, err
+}
+
+func engineRenderInput(
+	engine *wafv1alpha1.Engine,
+	ruleSet *wafv1alpha1.RuleSet,
+	content assemble.Content,
+	contentHash string,
+	binary render.BinaryRef,
+) render.EngineInput {
+	return render.EngineInput{
+		Namespace:             engine.Namespace,
+		Name:                  engine.Name,
+		UID:                   engine.UID,
+		RuleSet:               render.RuleSetAccepted{UID: ruleSet.UID, ContentHash: contentHash},
+		Content:               content,
+		EmptyRulesPolicy:      string(ruleSet.Spec.EmptyRulesPolicy),
+		FailurePolicy:         engineFailurePolicy(engine),
+		EnableFilterStateLogs: observabilityEnabled(engine),
+		DriverType:            string(wafv1alpha1.DriverTypeWasm),
+		Binary:                binary,
+	}
 }
 
 // ruleSetAcceptancePending returns a message and false when the RuleSet has no

@@ -726,9 +726,9 @@ func TestPatchDegradedBoundsTheMessage(t *testing.T) {
 	assert.True(t, strings.HasSuffix(degraded.Message, "é..."))
 }
 
-// TestPublicationCoalescedReconcileSkipsTheSizeCheck grows the inputs of a
-// published Engine past the budget and records them as published: a reconcile
-// that has nothing to publish returns before scanning them.
+// TestPublicationCoalescedReconcileSkipsTheSizeCheck grows the inputs past the
+// budget, then seeds matching coalescing state to isolate the no-op size-check
+// bypass; real spec-generation changes take the full-content path.
 func TestPublicationCoalescedReconcileSkipsTheSizeCheck(t *testing.T) {
 	ctx := context.Background()
 	ns := setupTestNamespace(t, ctx)
@@ -770,6 +770,6 @@ func TestPublicationCoalescedReconcileSkipsTheSizeCheck(t *testing.T) {
 	require.NoError(t, err)
 	require.ErrorIs(t, checkInputsSize(inputs), errContentTooLarge, "a size check would refuse these inputs")
 
-	publication.remember(request.NamespacedName, assemble.Fingerprint(inputs), accepted.Version)
+	publication.remember(request.NamespacedName, assemble.Fingerprint(inputs), accepted.Version, engine.UID)
 	require.NoError(t, publication.reconstruct(ctx, request.NamespacedName, engine, accepted))
 }
