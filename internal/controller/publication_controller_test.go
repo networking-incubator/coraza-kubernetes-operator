@@ -47,6 +47,7 @@ import (
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/ecds/render"
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/rulesets/assemble"
 	"github.com/networking-incubator/coraza-kubernetes-operator/internal/xds"
+	"github.com/networking-incubator/coraza-kubernetes-operator/test/utils"
 )
 
 const publicationRules = "SecRuleEngine On\nSecRule REQUEST_URI \"@contains attack\" \"id:1001,phase:1,deny,status:403\""
@@ -397,6 +398,446 @@ func TestPublicationReconcilerMismatchKeepsPreviousSnapshot(t *testing.T) {
 	after, ok := reconciler.Store.Get(engineKey)
 	require.True(t, ok)
 	require.Equal(t, first.Version, after.Version, "a mismatch must keep the previous snapshot")
+}
+
+func TestPublicationReconciler_NoOpCoalescesWithoutAssembly(t *testing.T) {
+	fixture := newEngineNoopFixture(t, false)
+	request := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(fixture.engine)}
+	publication := newPublicationReconciler(t)
+	_, err := publication.Reconcile(fixture.ctx, request)
+	require.NoError(t, err)
+	before, found := publication.Store.Get(request.NamespacedName.String())
+	require.True(t, found)
+
+	contentless := &ruleSetInputTestClient{
+		Client:              k8sClient,
+		stripRuleSourceSpec: true,
+		stripRuleDataSpec:   true,
+	}
+	publication.Client = contentless
+	_, err = publication.Reconcile(fixture.ctx, request)
+	require.NoError(t, err)
+	require.Equal(t, 1, contentless.sourceGets)
+	require.Equal(t, 1, contentless.dataGets)
+
+	state := publication.states[request.NamespacedName]
+	require.NotNil(t, state)
+	require.True(t, state.mismatchSince.IsZero(), "the metadata-only no-op must remain a successful publication")
+	after, found := publication.Store.Get(request.NamespacedName.String())
+	require.True(t, found)
+	require.Equal(t, before.Version, after.Version)
+	require.Equal(t, before.EngineUID, after.EngineUID)
+}
+
+func TestPublicationReconciler_RuleSourceMetadataChangeKeepsSnapshot(t *testing.T) {
+	fixture := newEngineNoopFixture(t, false)
+	request := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(fixture.engine)}
+	publication := newPublicationReconciler(t)
+	_, err := publication.Reconcile(fixture.ctx, request)
+	require.NoError(t, err)
+	before, found := publication.Store.Get(request.NamespacedName.String())
+	require.True(t, found)
+
+	var source wafv1alpha1.RuleSource
+	require.NoError(t, k8sClient.Get(fixture.ctx, client.ObjectKeyFromObject(fixture.source), &source))
+	generation, resourceVersion := source.Generation, source.ResourceVersion
+	source.Annotations = map[string]string{wafv1alpha1.AnnotationSkipValidation: "false"}
+	require.NoError(t, k8sClient.Update(fixture.ctx, &source))
+	_, err = (&RuleSourceReconciler{Client: k8sClient, Recorder: utils.NewTestRecorder()}).
+		Reconcile(fixture.ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(&source)})
+	require.NoError(t, err)
+	require.NoError(t, k8sClient.Get(fixture.ctx, client.ObjectKeyFromObject(&source), &source))
+	require.Equal(t, generation, source.Generation)
+	require.NotEqual(t, resourceVersion, source.ResourceVersion)
+	require.True(t, isConditionCurrent(source.Status.Conditions, conditionReady, ruleSourceReadyReasonValidationSkipped, source.Generation))
+
+	counted := &ruleSetInputTestClient{
+		Client:              k8sClient,
+		stripRuleSourceSpec: true,
+		stripRuleDataSpec:   true,
+	}
+	publication.Client = counted
+	_, err = publication.Reconcile(fixture.ctx, request)
+	require.NoError(t, err)
+	require.Equal(t, 1, counted.sourceGets, "metadata-only changes must coalesce without assembling content")
+	require.Equal(t, 1, counted.dataGets)
+
+	state := publication.states[request.NamespacedName]
+	require.NotNil(t, state)
+	require.True(t, state.mismatchSince.IsZero())
+
+	after, found := publication.Store.Get(request.NamespacedName.String())
+	require.True(t, found)
+	require.Equal(t, before.Version, after.Version)
+	require.Equal(t, before.EngineUID, after.EngineUID)
+
+	// Repeated status or annotation updates must not require content assembly.
+	counted = &ruleSetInputTestClient{
+		Client:              k8sClient,
+		stripRuleSourceSpec: true,
+		stripRuleDataSpec:   true,
+	}
+	publication.Client = counted
+	_, err = publication.Reconcile(fixture.ctx, request)
+	require.NoError(t, err)
+	require.Equal(t, 1, counted.sourceGets)
+	require.Equal(t, 1, counted.dataGets)
+	after, found = publication.Store.Get(request.NamespacedName.String())
+	require.True(t, found)
+	require.Equal(t, before.Version, after.Version)
+}
+
+func TestPublicationReconcilerContentGenerationChangeReadsFullContent(t *testing.T) {
+	fixture := newEngineNoopFixture(t, false)
+	request := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(fixture.engine)}
+	publication := newPublicationReconciler(t)
+	_, err := publication.Reconcile(fixture.ctx, request)
+	require.NoError(t, err)
+	before, found := publication.Store.Get(request.NamespacedName.String())
+	require.True(t, found)
+
+	var source wafv1alpha1.RuleSource
+	require.NoError(t, k8sClient.Get(fixture.ctx, client.ObjectKeyFromObject(fixture.source), &source))
+	oldGeneration := source.Generation
+	source.Spec.Rules += "\nSecRule ARGS \"@contains changed\" \"id:1002,phase:1,deny,status:403\""
+	require.NoError(t, k8sClient.Update(fixture.ctx, &source))
+	require.NoError(t, k8sClient.Get(fixture.ctx, client.ObjectKeyFromObject(&source), &source))
+	require.Greater(t, source.Generation, oldGeneration)
+
+	counted := &ruleSetInputTestClient{Client: k8sClient}
+	publication.Client = counted
+	_, err = publication.Reconcile(fixture.ctx, request)
+	require.NoError(t, err)
+	require.Equal(t, 1, counted.sourceGets, "an input generation change must use the already-read input")
+	require.Equal(t, 1, counted.dataGets)
+
+	after, found := publication.Store.Get(request.NamespacedName.String())
+	require.True(t, found)
+	require.Equal(t, before.Version, after.Version, "unaccepted content must keep the last published snapshot")
+	state := publication.states[request.NamespacedName]
+	require.NotNil(t, state)
+	require.False(t, state.mismatchSince.IsZero(), "changed content must be reported as publication lag")
+}
+
+func TestPublicationReconciler_RebuildsWhenLocalSnapshotIsMissing(t *testing.T) {
+	fixture := newEngineNoopFixture(t, false)
+	request := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(fixture.engine)}
+	publication := newPublicationReconciler(t)
+	_, err := publication.Reconcile(fixture.ctx, request)
+	require.NoError(t, err)
+	before, found := publication.Store.Get(request.NamespacedName.String())
+	require.True(t, found)
+
+	publication.Store.DeleteEngine(request.Namespace, request.Name)
+	counted := &ruleSetInputTestClient{Client: k8sClient}
+	publication.Client = counted
+	_, err = publication.Reconcile(fixture.ctx, request)
+	require.NoError(t, err)
+	require.Equal(t, 1, counted.sourceGets, "a missing local snapshot must use one full-input read")
+	require.Equal(t, 1, counted.dataGets)
+
+	after, found := publication.Store.Get(request.NamespacedName.String())
+	require.True(t, found, "a replica with a missing local snapshot must reconstruct it")
+	require.Equal(t, before.Version, after.Version)
+	require.Equal(t, before.EngineUID, after.EngineUID)
+}
+
+func TestPublicationReconcilerEachReplicaReconstructsItsOwnSnapshot(t *testing.T) {
+	fixture := newEngineNoopFixture(t, false)
+	request := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(fixture.engine)}
+
+	first := newPublicationReconciler(t)
+	_, err := first.Reconcile(fixture.ctx, request)
+	require.NoError(t, err)
+	firstSnapshot, found := first.Store.Get(request.NamespacedName.String())
+	require.True(t, found)
+
+	second := newPublicationReconciler(t)
+	counted := &ruleSetInputTestClient{Client: k8sClient}
+	second.Client = counted
+	_, err = second.Reconcile(fixture.ctx, request)
+	require.NoError(t, err)
+	require.Equal(t, 1, counted.sourceGets, "a new replica has no local coalescing state")
+	require.Equal(t, 1, counted.dataGets)
+
+	secondSnapshot, found := second.Store.Get(request.NamespacedName.String())
+	require.True(t, found)
+	require.Equal(t, firstSnapshot.Version, secondSnapshot.Version)
+	require.Equal(t, firstSnapshot.EngineUID, secondSnapshot.EngineUID)
+}
+
+func TestPublicationReconcilerDoesNotCoalesceAcrossInputUIDOrGenerationChanges(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		mutate func(*testing.T, *engineNoopFixture)
+		strip  func(*ruleSetInputTestClient)
+	}{
+		{
+			name: "RuleSource recreated",
+			mutate: func(t *testing.T, fixture *engineNoopFixture) {
+				t.Helper()
+				old := fixture.source.DeepCopy()
+				require.NoError(t, k8sClient.Delete(fixture.ctx, old))
+				recreated := utils.NewTestRuleSource(old.Name, old.Namespace, old.Spec.Rules)
+				require.NoError(t, k8sClient.Create(fixture.ctx, recreated))
+				require.NotEqual(t, old.UID, recreated.UID)
+				require.Equal(t, old.Generation, recreated.Generation)
+				fixture.source = recreated
+			},
+			strip: func(c *ruleSetInputTestClient) { c.stripRuleSourceSpec = true },
+		},
+		{
+			name: "RuleData generation changed with same content",
+			mutate: func(t *testing.T, fixture *engineNoopFixture) {
+				t.Helper()
+				var data wafv1alpha1.RuleData
+				require.NoError(t, k8sClient.Get(fixture.ctx, client.ObjectKeyFromObject(fixture.data), &data))
+				original := data.Spec.Files["some.data"]
+				data.Spec.Files["some.data"] = "temporary\n"
+				require.NoError(t, k8sClient.Update(fixture.ctx, &data))
+				require.NoError(t, k8sClient.Get(fixture.ctx, client.ObjectKeyFromObject(&data), &data))
+				data.Spec.Files["some.data"] = original
+				require.NoError(t, k8sClient.Update(fixture.ctx, &data))
+				require.Greater(t, data.Generation, fixture.data.Generation)
+			},
+			strip: func(c *ruleSetInputTestClient) { c.stripRuleDataSpec = true },
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newEngineNoopFixture(t, false)
+			request := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(fixture.engine)}
+			publication := newPublicationReconciler(t)
+			_, err := publication.Reconcile(fixture.ctx, request)
+			require.NoError(t, err)
+			before, found := publication.Store.Get(request.NamespacedName.String())
+			require.True(t, found)
+			test.mutate(t, fixture)
+
+			contentless := &ruleSetInputTestClient{Client: k8sClient}
+			test.strip(contentless)
+			publication.Client = contentless
+			_, err = publication.Reconcile(fixture.ctx, request)
+			require.NoError(t, err, "unavailable input content is a retained-snapshot wait state")
+			require.Equal(t, 1, contentless.sourceGets)
+			require.Equal(t, 1, contentless.dataGets)
+			state := publication.states[request.NamespacedName]
+			require.NotNil(t, state)
+			require.False(t, state.mismatchSince.IsZero(), "changed input identity must not take the no-op path")
+			after, found := publication.Store.Get(request.NamespacedName.String())
+			require.True(t, found)
+			require.Equal(t, before.Version, after.Version, "an unverified input must not replace the accepted snapshot")
+
+			publication.Client = k8sClient
+			_, err = publication.Reconcile(fixture.ctx, request)
+			require.NoError(t, err)
+			state = publication.states[request.NamespacedName]
+			require.True(t, state.mismatchSince.IsZero(), "publication must recover once full content is available")
+			after, found = publication.Store.Get(request.NamespacedName.String())
+			require.True(t, found)
+			require.Equal(t, before.Version, after.Version, "same effective content preserves the accepted version")
+		})
+	}
+}
+
+func TestPublicationReconcilerRetriesInputReadErrorsBeforeCoalescing(t *testing.T) {
+	fixture := newEngineNoopFixture(t, false)
+	request := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(fixture.engine)}
+	publication := newPublicationReconciler(t)
+	_, err := publication.Reconcile(fixture.ctx, request)
+	require.NoError(t, err)
+	before, found := publication.Store.Get(request.NamespacedName.String())
+	require.True(t, found)
+
+	publication.Client = &ruleSetInputTestClient{
+		Client:            k8sClient,
+		failRuleSourceGet: errors.New("injected cached read failure"),
+	}
+	_, err = publication.Reconcile(fixture.ctx, request)
+	require.ErrorContains(t, err, "injected cached read failure")
+	after, found := publication.Store.Get(request.NamespacedName.String())
+	require.True(t, found)
+	require.Equal(t, before.Version, after.Version)
+}
+
+func TestPublicationReconcilerColdInputReadErrorsRemainTransient(t *testing.T) {
+	fixture := newEngineNoopFixture(t, false)
+	request := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(fixture.engine)}
+	publication := newPublicationReconciler(t)
+	counted := &ruleSetInputTestClient{
+		Client:          k8sClient,
+		failRuleDataGet: errors.New("injected cold RuleData read failure"),
+	}
+	publication.Client = counted
+
+	_, err := publication.Reconcile(fixture.ctx, request)
+	require.ErrorContains(t, err, "injected cold RuleData read failure")
+	require.Equal(t, 1, counted.sourceGets)
+	require.Equal(t, 1, counted.dataGets)
+	_, found := publication.Store.Get(request.NamespacedName.String())
+	require.False(t, found, "a transient cold read failure must not publish or create coalescing state")
+	require.Empty(t, publication.states)
+}
+
+func TestPublicationReconcilerMissingInputRetainsPublishedSnapshot(t *testing.T) {
+	fixture := newEngineNoopFixture(t, false)
+	request := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(fixture.engine)}
+	publication := newPublicationReconciler(t)
+	_, err := publication.Reconcile(fixture.ctx, request)
+	require.NoError(t, err)
+	before, found := publication.Store.Get(request.NamespacedName.String())
+	require.True(t, found)
+
+	require.NoError(t, k8sClient.Delete(fixture.ctx, fixture.source))
+	counted := &ruleSetInputTestClient{Client: k8sClient}
+	publication.Client = counted
+	_, err = publication.Reconcile(fixture.ctx, request)
+	require.NoError(t, err, "a missing input is a retained-snapshot wait state, not a transient API error")
+	require.Equal(t, 1, counted.sourceGets)
+	require.Zero(t, counted.dataGets, "RuleData reads must stop after the missing RuleSource")
+
+	after, found := publication.Store.Get(request.NamespacedName.String())
+	require.True(t, found)
+	require.Equal(t, before.Version, after.Version)
+	state := publication.states[request.NamespacedName]
+	require.NotNil(t, state)
+	require.False(t, state.mismatchSince.IsZero())
+}
+
+func TestPublicationCoalescingRequiresCurrentEngineUIDAndLocalSnapshot(t *testing.T) {
+	fixture := newEngineNoopFixture(t, false)
+	request := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(fixture.engine)}
+	publication := newPublicationReconciler(t)
+	_, err := publication.Reconcile(fixture.ctx, request)
+	require.NoError(t, err)
+	state := publication.states[request.NamespacedName]
+	require.NotNil(t, state)
+
+	_, ok := publication.coalescedState(request.NamespacedName, state.acceptedVersion, state.engineUID)
+	require.True(t, ok)
+	_, ok = publication.coalescedState(
+		request.NamespacedName,
+		state.acceptedVersion,
+		types.UID("recreated-engine"),
+	)
+	require.False(t, ok, "a snapshot for the deleted Engine UID cannot satisfy a recreated Engine")
+	_, ok = publication.coalescedState(
+		request.NamespacedName,
+		state.acceptedVersion+"-stale",
+		state.engineUID,
+	)
+	require.False(t, ok, "a snapshot for a different accepted version cannot coalesce")
+
+	publication.Store.DeleteEngine(request.Namespace, request.Name)
+	_, ok = publication.coalescedState(request.NamespacedName, state.acceptedVersion, state.engineUID)
+	require.False(t, ok, "the snapshot must exist locally before a reconcile can coalesce")
+}
+
+func TestPublicationReconcilerRecreatedEnginePublishesNewResourceIdentity(t *testing.T) {
+	ctx := context.Background()
+	namespace := setupTestNamespace(t, ctx)
+	createTestGateway(t, ctx, k8sClient, "recreated-gw", namespace)
+	ruleSet := createPublicationRuleSet(t, ctx, namespace, "recreated-rules")
+	createPublicationRuleSource(t, ctx, namespace, ruleSet.Name+"-source", publicationRules)
+
+	engineName := "recreated-engine"
+	engine := createPublicationEngine(t, ctx, namespace, engineName, ruleSet.Name, "recreated-gw")
+	inputs, err := loadRuleSetInputs(ctx, k8sClient, ruleSet)
+	require.NoError(t, err)
+	content, err := assemble.Assemble(inputs)
+	require.NoError(t, err)
+	writeAcceptedConfiguration(t, ctx, engine, acceptedConfigurationFor(t, engine, ruleSet, content, nil))
+
+	reconciler := newPublicationReconciler(t)
+	request := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(engine)}
+	_, err = reconciler.Reconcile(ctx, request)
+	require.NoError(t, err)
+	oldSnapshot, found := reconciler.Store.Get(request.NamespacedName.String())
+	require.True(t, found)
+	require.Equal(t, engine.UID, oldSnapshot.EngineUID)
+	require.Equal(t, xds.ResourceName(namespace, engine.Name, engine.UID), oldSnapshot.ResourceName)
+
+	require.NoError(t, k8sClient.Delete(ctx, engine))
+	require.Eventually(t, func() bool {
+		var current wafv1alpha1.Engine
+		return apierrors.IsNotFound(k8sClient.Get(ctx, request.NamespacedName, &current))
+	}, 5*time.Second, 10*time.Millisecond, "the old Engine must be deleted before name reuse")
+	_, err = reconciler.Reconcile(ctx, request)
+	require.NoError(t, err)
+	_, found = reconciler.Store.Get(request.NamespacedName.String())
+	require.False(t, found, "deleting the Engine must withdraw its UID-scoped snapshot")
+
+	recreated := createPublicationEngine(t, ctx, namespace, engineName, ruleSet.Name, "recreated-gw")
+	require.NotEqual(t, engine.UID, recreated.UID)
+	writeAcceptedConfiguration(t, ctx, recreated, acceptedConfigurationFor(t, recreated, ruleSet, content, nil))
+	_, err = reconciler.Reconcile(ctx, request)
+	require.NoError(t, err)
+
+	newSnapshot, found := reconciler.Store.Get(request.NamespacedName.String())
+	require.True(t, found)
+	require.Equal(t, recreated.UID, newSnapshot.EngineUID)
+	require.Equal(t, xds.ResourceName(namespace, recreated.Name, recreated.UID), newSnapshot.ResourceName)
+	require.NotEqual(t, oldSnapshot.ResourceName, newSnapshot.ResourceName)
+}
+
+func TestPublicationReconcilerConcurrentNoOpReconciles(t *testing.T) {
+	fixture := newEngineNoopFixture(t, false)
+	request := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(fixture.engine)}
+	publication := newPublicationReconciler(t)
+	_, err := publication.Reconcile(fixture.ctx, request)
+	require.NoError(t, err)
+
+	const concurrent = 8
+	var wg sync.WaitGroup
+	errs := make(chan error, concurrent)
+	for range concurrent {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := publication.Reconcile(fixture.ctx, request)
+			errs <- err
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		require.NoError(t, err)
+	}
+
+	state := publication.states[request.NamespacedName]
+	require.NotNil(t, state)
+	require.True(t, state.mismatchSince.IsZero())
+}
+
+func TestPublicationReconcilerConcurrentInputEditKeepsPreviousSnapshot(t *testing.T) {
+	fixture := newEngineNoopFixture(t, false)
+	request := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(fixture.engine)}
+	publication := newPublicationReconciler(t)
+	_, err := publication.Reconcile(fixture.ctx, request)
+	require.NoError(t, err)
+	before, found := publication.Store.Get(request.NamespacedName.String())
+	require.True(t, found)
+
+	var edited wafv1alpha1.RuleSource
+	require.NoError(t, k8sClient.Get(fixture.ctx, client.ObjectKeyFromObject(fixture.source), &edited))
+	edited.Spec.Rules += "\nSecRule ARGS \"@contains first-edit\" \"id:5,phase:2,deny\""
+	require.NoError(t, k8sClient.Update(fixture.ctx, &edited))
+
+	mutating := &mutateRuleSourceOnGetClient{
+		Client:    k8sClient,
+		sourceKey: client.ObjectKeyFromObject(fixture.source),
+		newRules:  testAcceptRuleText + "\nSecRule ARGS \"@contains concurrent\" \"id:4,phase:2,deny\"",
+		mutateAt:  1,
+	}
+	publication.Client = mutating
+	_, err = publication.Reconcile(fixture.ctx, request)
+	require.NoError(t, err, "a content mismatch is retained and reported through readiness, not returned as a transient API error")
+	require.Equal(t, 1, mutating.sourceGets, "fingerprint and content must come from the same full input read")
+
+	after, found := publication.Store.Get(request.NamespacedName.String())
+	require.True(t, found)
+	require.Equal(t, before.Version, after.Version)
+	state := publication.states[request.NamespacedName]
+	require.NotZero(t, state.mismatchSince, "the concurrent content divergence must be recorded")
 }
 
 // recordingRevoker records immediate stream revocations. It proves a reconcile
@@ -921,6 +1362,83 @@ func TestValidateContentLimitsRejectsPerFileOverPluginCap(t *testing.T) {
 	}}
 	err := validateContentLimits(content, xds.DefaultLimits())
 	require.ErrorContains(t, err, "per-file limit")
+}
+
+func TestContentLimitSummaryMatchesColdValidation(t *testing.T) {
+	largeFile := make([]byte, pluginMaxRuleDataFileBytes+1)
+	tests := []struct {
+		name    string
+		content assemble.Content
+		limits  xds.Limits
+		want    string
+	}{
+		{
+			name:    "rule text size",
+			content: assemble.Content{Rules: "four"},
+			limits:  xds.Limits{MaxMessageBytes: 3},
+			want:    "rule text size 4 exceeds the message limit of 3",
+		},
+		{
+			name: "RuleData file count",
+			content: assemble.Content{DataFiles: map[string][]byte{
+				"one.data": []byte("1"),
+				"two.data": []byte("2"),
+			}},
+			limits: xds.Limits{MaxMessageBytes: 10, MaxDataFiles: 1, MaxDecodedDataBytes: 10},
+			want:   "RuleData file count 2 exceeds the limit of 1",
+		},
+		{
+			name: "per-file RuleData size",
+			content: assemble.Content{DataFiles: map[string][]byte{
+				"big.data":   largeFile,
+				"small.data": []byte("aa"),
+			}},
+			limits: func() xds.Limits {
+				limits := xds.DefaultLimits()
+				limits.MaxDecodedDataBytes = 1
+				return limits
+			}(),
+			want: fmt.Sprintf("a RuleData file of %d bytes exceeds the plugin per-file limit of %d", len(largeFile), pluginMaxRuleDataFileBytes),
+		},
+		{
+			name: "total decoded RuleData size",
+			content: assemble.Content{DataFiles: map[string][]byte{
+				"one.data": []byte("aa"),
+				"two.data": []byte("bb"),
+			}},
+			limits: xds.Limits{MaxMessageBytes: 10, MaxDataFiles: 2, MaxDecodedDataBytes: 3},
+			want:   "decoded RuleData size 4 exceeds the limit of 3",
+		},
+		{
+			name: "rules precede file count",
+			content: assemble.Content{
+				Rules: "four",
+				DataFiles: map[string][]byte{
+					"one.data": []byte("1"),
+					"two.data": []byte("2"),
+				},
+			},
+			limits: xds.Limits{MaxMessageBytes: 3, MaxDataFiles: 1, MaxDecodedDataBytes: 10},
+			want:   "rule text size 4 exceeds the message limit of 3",
+		},
+		{
+			name: "file count precedes per-file size",
+			content: assemble.Content{DataFiles: map[string][]byte{
+				"big.data":   largeFile,
+				"small.data": []byte("1"),
+			}},
+			limits: xds.Limits{MaxMessageBytes: 10, MaxDataFiles: 1, MaxDecodedDataBytes: 10},
+			want:   "RuleData file count 2 exceeds the limit of 1",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			summary, coldErr := summarizeAndValidateContentLimits(test.content, test.limits)
+			require.EqualError(t, coldErr, test.want)
+			require.EqualError(t, validateContentLimitSummary(summary, test.limits), test.want)
+		})
+	}
 }
 
 // TestDefaultLimitsDeliverMaxDecodedData pins the arithmetic behind

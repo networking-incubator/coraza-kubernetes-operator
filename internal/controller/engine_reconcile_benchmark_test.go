@@ -48,6 +48,42 @@ import (
 // per-namespace Engine list. Treat it as a repeatable synthetic microbenchmark,
 // not total production reconcile cost.
 func BenchmarkEngineReconcileNoopEnvtest(b *testing.B) {
+	benchmarkEngineReconcileEnvtest(b, false, false, "")
+}
+
+// BenchmarkEngineReconcileColdEnvtest measures the content assembly and render
+// path after a process-local cache miss. The Kubernetes client cache stays warm.
+func BenchmarkEngineReconcileColdEnvtest(b *testing.B) {
+	benchmarkEngineReconcileEnvtest(b, true, false, "")
+}
+
+// BenchmarkEngineReconcileMetadataOnlyEnvtest measures metadata-only reconciles
+// with full RuleSource and RuleData objects. An untimed spec-stripped preflight
+// verifies the Engine coalescing path; timed GET counts alone cannot distinguish
+// it from full processing. The timed loop checks for two Gets per input (current
+// input read and final race check). Metadata writes and cache waits are untimed,
+// but wall-time may still include residual GC, apiserver, or informer activity;
+// this is not a perfectly isolated comparison.
+func BenchmarkEngineReconcileMetadataOnlyEnvtest(b *testing.B) {
+	benchmarkEngineReconcileEnvtest(b, false, true, "")
+}
+
+// BenchmarkEngineReconcileInputGenerationChangeEnvtest measures the acceptance
+// wait after a RuleSource or RuleData spec update while the RuleSet still accepts
+// the prior content. The changed input fingerprint misses the cached-input
+// shortcut, so reconcile reads and assembles the inputs, detects the accepted
+// hash mismatch, and requeues before rendering. It times that full-input read,
+// assembly, and hash check; the update, cache propagation, and first status
+// patch are excluded. Counters separate per-input cache Gets from live API Gets.
+func BenchmarkEngineReconcileInputGenerationChangeEnvtest(b *testing.B) {
+	for _, kind := range []string{"RuleSource", "RuleData"} {
+		b.Run(kind, func(b *testing.B) {
+			benchmarkEngineReconcileEnvtest(b, false, false, kind)
+		})
+	}
+}
+
+func benchmarkEngineReconcileEnvtest(b *testing.B, evictRenderCache, updateMetadata bool, inputGenerationChange string) {
 	ctx := context.Background()
 	namespace := "bench-" + strings.ReplaceAll(uuid.NewString(), "-", "")[:20]
 	gatewayName := "bench-gateway"
@@ -149,17 +185,91 @@ func BenchmarkEngineReconcileNoopEnvtest(b *testing.B) {
 	require.NoError(b, err)
 	require.Zero(b, result.RequeueAfter)
 	waitForEngineReady(b, cacheReader, engine)
+	if inputGenerationChange != "" {
+		updateBenchmarkInputSpec(b, ctx, cacheReader, namespace, inputGenerationChange)
+		result, err = reconciler.Reconcile(ctx, req)
+		require.NoError(b, err)
+		require.Equal(b, ruleSetAcceptanceRetryAfter, result.RequeueAfter)
+		waitForCachedObject(b, cacheReader, req.NamespacedName, &wafv1alpha1.Engine{}, func(obj client.Object) bool {
+			current := obj.(*wafv1alpha1.Engine)
+			return current.Status != nil &&
+				isConditionCurrent(current.Status.Conditions, conditionProgressing, reasonAwaitingRuleSetAcceptance, current.Generation)
+		})
+	}
+	if updateMetadata {
+		updateBenchmarkSourceMetadata(b, ctx, cacheReader, namespace, "preflight")
+
+		var engineBefore wafv1alpha1.Engine
+		require.NoError(b, k8sClient.Get(ctx, req.NamespacedName, &engineBefore))
+		require.NotNil(b, engineBefore.Status)
+		require.NotNil(b, engineBefore.Status.AcceptedConfiguration)
+		require.Equal(b, engineBefore.Generation, engineBefore.Status.AcceptedConfiguration.ObservedGeneration)
+		require.True(b, isConditionCurrent(engineBefore.Status.Conditions, conditionReady, reasonConfigurationAccepted, engineBefore.Generation))
+		engineContentless := &ruleSetInputTestClient{
+			Client:              measuredClient,
+			stripRuleSourceSpec: true,
+			stripRuleDataSpec:   true,
+		}
+		reconciler.Client = engineContentless
+		result, err = reconciler.Reconcile(ctx, req)
+		require.NoError(b, err)
+		require.Zero(b, result.RequeueAfter)
+		var engineAfter wafv1alpha1.Engine
+		require.NoError(b, k8sClient.Get(ctx, req.NamespacedName, &engineAfter))
+		require.NotNil(b, engineAfter.Status)
+		require.NotNil(b, engineAfter.Status.AcceptedConfiguration)
+		require.Equal(b, engineBefore.Status.AcceptedConfiguration, engineAfter.Status.AcceptedConfiguration)
+		require.True(b, isConditionCurrent(engineAfter.Status.Conditions, conditionReady, reasonConfigurationAccepted, engineAfter.Generation))
+		reconciler.Client = measuredClient
+	}
 	counts.reset()
 
 	b.ReportAllocs()
 	b.ResetTimer()
-	for range b.N {
-		result, err = reconciler.Reconcile(ctx, req)
-		if err != nil {
-			b.Fatalf("no-op reconcile: %v", err)
+	for i := range b.N {
+		sourceGetsBefore := counts.ruleSourceGets
+		dataGetsBefore := counts.ruleDataGets
+		if updateMetadata {
+			b.StopTimer()
+			updateBenchmarkSourceMetadata(b, ctx, cacheReader, namespace, fmt.Sprint(i))
+			b.StartTimer()
 		}
-		if result.RequeueAfter != 0 {
-			b.Fatalf("no-op reconcile requeued after %s", result.RequeueAfter)
+		if evictRenderCache {
+			reconciler.renderCache.delete(req.NamespacedName)
+		}
+		result, err = reconciler.Reconcile(ctx, req)
+		if updateMetadata {
+			b.StopTimer()
+		}
+		if err != nil {
+			b.Fatalf("engine reconcile: %v", err)
+		}
+		wantRequeueAfter := time.Duration(0)
+		if inputGenerationChange != "" {
+			wantRequeueAfter = ruleSetAcceptanceRetryAfter
+		}
+		if result.RequeueAfter != wantRequeueAfter {
+			b.Fatalf("engine reconcile requeued after %s; want %s", result.RequeueAfter, wantRequeueAfter)
+		}
+		if updateMetadata {
+			wantSourceGets := int64(2 * len(sources))
+			wantDataGets := int64(2 * len(ruleSet.Spec.Data))
+			if got := counts.ruleSourceGets - sourceGetsBefore; got != wantSourceGets {
+				b.Fatalf("metadata-only reconcile performed %d RuleSource Gets; want %d (identity and race check)", got, wantSourceGets)
+			}
+			if got := counts.ruleDataGets - dataGetsBefore; got != wantDataGets {
+				b.Fatalf("metadata-only reconcile performed %d RuleData Gets; want %d (identity and race check)", got, wantDataGets)
+			}
+		}
+		if inputGenerationChange != "" {
+			wantSourceGets := int64(len(sources))
+			wantDataGets := int64(len(ruleSet.Spec.Data))
+			if got := counts.ruleSourceGets - sourceGetsBefore; got != wantSourceGets {
+				b.Fatalf("input-generation reconcile performed %d RuleSource Gets; want %d (one full-input read)", got, wantSourceGets)
+			}
+			if got := counts.ruleDataGets - dataGetsBefore; got != wantDataGets {
+				b.Fatalf("input-generation reconcile performed %d RuleData Gets; want %d (one full-input read)", got, wantDataGets)
+			}
 		}
 	}
 	b.StopTimer()
@@ -167,6 +277,63 @@ func BenchmarkEngineReconcileNoopEnvtest(b *testing.B) {
 	counts.report(b, b.N)
 	b.ReportMetric(float64(len(content.Rules)), "rule_bytes")
 	b.ReportMetric(float64(len(dataValue)), "data_bytes")
+}
+
+func updateBenchmarkInputSpec(b *testing.B, ctx context.Context, cacheReader client.Reader, namespace, kind string) {
+	b.Helper()
+	switch kind {
+	case "RuleSource":
+		key := client.ObjectKey{Namespace: namespace, Name: "source-00"}
+		var source wafv1alpha1.RuleSource
+		require.NoError(b, k8sClient.Get(ctx, key, &source))
+		generation := source.Generation
+		source.Spec.Rules += "\nSecRule ARGS \"@contains generation-change\" \"id:9999999,phase:2,deny,status:403\""
+		require.NoError(b, k8sClient.Update(ctx, &source))
+		var updated wafv1alpha1.RuleSource
+		require.NoError(b, k8sClient.Get(ctx, key, &updated))
+		require.Greater(b, updated.Generation, generation)
+		resourceVersion, generation := updated.ResourceVersion, updated.Generation
+		waitForCachedObject(b, cacheReader, key, &wafv1alpha1.RuleSource{}, func(obj client.Object) bool {
+			current := obj.(*wafv1alpha1.RuleSource)
+			return current.ResourceVersion == resourceVersion && current.Generation == generation
+		})
+	case "RuleData":
+		key := client.ObjectKey{Namespace: namespace, Name: "bench-data"}
+		var data wafv1alpha1.RuleData
+		require.NoError(b, k8sClient.Get(ctx, key, &data))
+		require.Contains(b, data.Spec.Files, "blocked.data")
+		generation := data.Generation
+		data.Spec.Files["blocked.data"] += "generation-change.example\n"
+		require.NoError(b, k8sClient.Update(ctx, &data))
+		var updated wafv1alpha1.RuleData
+		require.NoError(b, k8sClient.Get(ctx, key, &updated))
+		require.Greater(b, updated.Generation, generation)
+		resourceVersion, generation := updated.ResourceVersion, updated.Generation
+		waitForCachedObject(b, cacheReader, key, &wafv1alpha1.RuleData{}, func(obj client.Object) bool {
+			current := obj.(*wafv1alpha1.RuleData)
+			return current.ResourceVersion == resourceVersion && current.Generation == generation
+		})
+	default:
+		b.Fatalf("unknown input kind %q", kind)
+	}
+}
+
+func updateBenchmarkSourceMetadata(b *testing.B, ctx context.Context, cacheReader client.Reader, namespace, iteration string) {
+	b.Helper()
+	sourceKey := client.ObjectKey{Namespace: namespace, Name: "source-00"}
+	var source wafv1alpha1.RuleSource
+	require.NoError(b, k8sClient.Get(ctx, sourceKey, &source))
+	generation := source.Generation
+	if source.Annotations == nil {
+		source.Annotations = make(map[string]string)
+	}
+	source.Annotations["benchmark.coraza.io/iteration"] = iteration
+	require.NoError(b, k8sClient.Update(ctx, &source))
+	resourceVersion := source.ResourceVersion
+	waitForCachedObject(b, cacheReader, sourceKey, &wafv1alpha1.RuleSource{}, func(obj client.Object) bool {
+		current := obj.(*wafv1alpha1.RuleSource)
+		return current.ResourceVersion == resourceVersion && current.Generation == generation
+	})
 }
 
 func createBenchmarkNamespace(b *testing.B, ctx context.Context, name string) {
@@ -245,14 +412,16 @@ func waitForCachedObject(
 }
 
 type engineClientOperationCounts struct {
-	cacheGets     int64
-	cacheLists    int64
-	apiGets       int64
-	apiCreates    int64
-	apiUpdates    int64
-	apiPatches    int64
-	apiDeletes    int64
-	statusPatches int64
+	cacheGets      int64
+	cacheLists     int64
+	ruleSourceGets int64
+	ruleDataGets   int64
+	apiGets        int64
+	apiCreates     int64
+	apiUpdates     int64
+	apiPatches     int64
+	apiDeletes     int64
+	statusPatches  int64
 }
 
 func (c *engineClientOperationCounts) reset() {
@@ -262,6 +431,8 @@ func (c *engineClientOperationCounts) reset() {
 func (c *engineClientOperationCounts) report(b *testing.B, iterations int) {
 	b.ReportMetric(float64(c.cacheGets)/float64(iterations), "cache_gets/op")
 	b.ReportMetric(float64(c.cacheLists)/float64(iterations), "cache_lists/op")
+	b.ReportMetric(float64(c.ruleSourceGets)/float64(iterations), "rule_source_gets/op")
+	b.ReportMetric(float64(c.ruleDataGets)/float64(iterations), "rule_data_gets/op")
 	b.ReportMetric(float64(c.apiGets)/float64(iterations), "api_gets/op")
 	b.ReportMetric(float64(c.apiCreates)/float64(iterations), "api_creates/op")
 	b.ReportMetric(float64(c.apiUpdates)/float64(iterations), "api_updates/op")
@@ -283,6 +454,12 @@ func (c *engineBenchmarkClient) Get(ctx context.Context, key client.ObjectKey, o
 		return c.Client.Get(ctx, key, obj, opts...)
 	}
 	c.counts.cacheGets++
+	switch obj.(type) {
+	case *wafv1alpha1.RuleSource:
+		c.counts.ruleSourceGets++
+	case *wafv1alpha1.RuleData:
+		c.counts.ruleDataGets++
+	}
 	return c.cache.Get(ctx, key, obj, opts...)
 }
 

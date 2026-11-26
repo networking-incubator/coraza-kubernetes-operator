@@ -72,6 +72,7 @@ type PublicationReconciler struct {
 type publicationState struct {
 	fingerprint     string
 	acceptedVersion string
+	engineUID       types.UID
 	mismatchSince   time.Time
 }
 
@@ -200,14 +201,10 @@ func (r *PublicationReconciler) reconstruct(ctx context.Context, key types.Names
 
 	inputs, err := loadRuleSetInputs(ctx, r.Client, &ruleset)
 	if err != nil {
-		if apierrors.IsNotFound(err) {
-			return fmt.Errorf("a referenced RuleSet input is not available")
-		}
-		return &transientError{err: err}
+		return publicationInputReadError(err)
 	}
-
 	fingerprint := assemble.Fingerprint(inputs)
-	if r.coalesced(key, fingerprint, accepted.Version) {
+	if state, ok := r.coalescedState(key, accepted.Version, engine.UID); ok && state.fingerprint == fingerprint {
 		return nil
 	}
 	if err := checkInputsSize(inputs); err != nil {
@@ -284,8 +281,15 @@ func (r *PublicationReconciler) reconstruct(ctx context.Context, key types.Names
 		"dataFiles", len(content.DataFiles),
 	)
 	r.Metrics.SetSnapshotVersion(engine.Namespace, engine.Name)
-	r.remember(key, fingerprint, accepted.Version)
+	r.remember(key, fingerprint, accepted.Version, engine.UID)
 	return nil
+}
+
+func publicationInputReadError(err error) error {
+	if apierrors.IsNotFound(err) {
+		return fmt.Errorf("a referenced RuleSet input is not available")
+	}
+	return &transientError{err: err}
 }
 
 // acceptedRenderingInputs validates that the accepted record carries every
@@ -314,29 +318,43 @@ func acceptedRenderingInputs(accepted *wafv1alpha1.EngineAcceptedConfiguration) 
 	}, nil
 }
 
-func (r *PublicationReconciler) coalesced(key types.NamespacedName, fingerprint, acceptedVersion string) bool {
+// coalescedState checks accepted-version, Engine UID, and local snapshot
+// ownership. The caller must compare the ordered input-identity fingerprint.
+func (r *PublicationReconciler) coalescedState(
+	key types.NamespacedName,
+	acceptedVersion string,
+	engineUID types.UID,
+) (publicationState, bool) {
 	r.mu.Lock()
-	state, ok := r.states[key]
+	current, ok := r.states[key]
+	var state publicationState
+	if ok {
+		state = *current
+	}
 	r.mu.Unlock()
-	if !ok || state.fingerprint != fingerprint || state.acceptedVersion != acceptedVersion {
-		return false
+	if !ok || state.acceptedVersion != acceptedVersion || state.engineUID != engineUID {
+		return state, false
 	}
 
-	// The inputs and accepted record are unchanged. Skip rendering only when
-	// the store already holds the accepted version.
+	// A matching state can skip rendering only while this Engine UID's store
+	// already holds the accepted version.
 	if snapshot, exists := r.Store.Get(key.String()); exists {
-		return snapshot.Version == acceptedVersion
+		return state, snapshot.EngineUID == engineUID && snapshot.Version == acceptedVersion
 	}
-	return false
+	return state, false
 }
 
-func (r *PublicationReconciler) remember(key types.NamespacedName, fingerprint, acceptedVersion string) {
+func (r *PublicationReconciler) remember(
+	key types.NamespacedName,
+	fingerprint, acceptedVersion string,
+	engineUID types.UID,
+) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.states == nil {
 		r.states = make(map[types.NamespacedName]*publicationState)
 	}
-	r.states[key] = &publicationState{fingerprint: fingerprint, acceptedVersion: acceptedVersion}
+	r.states[key] = &publicationState{fingerprint: fingerprint, acceptedVersion: acceptedVersion, engineUID: engineUID}
 }
 
 // clearMismatch keeps the coalescing fingerprint after a successful publish,
@@ -434,22 +452,48 @@ const messageEnvelopeBytes = xds.MessageEnvelopeBytes
 // and publication here; the total-byte check alone does not catch it.
 const pluginMaxRuleDataFileBytes = 1 << 20
 
+type contentLimitSummary struct {
+	ruleBytes            int
+	dataFiles            int
+	decodedDataBytes     int
+	largestDataFileBytes int
+}
+
 func validateContentLimits(content assemble.Content, limits xds.Limits) error {
-	if len(content.Rules) > limits.MaxMessageBytes {
-		return fmt.Errorf("rule text size %d exceeds the message limit of %d", len(content.Rules), limits.MaxMessageBytes)
+	_, err := summarizeAndValidateContentLimits(content, limits)
+	return err
+}
+
+func summarizeAndValidateContentLimits(content assemble.Content, limits xds.Limits) (contentLimitSummary, error) {
+	summary := contentLimitSummary{ruleBytes: len(content.Rules), dataFiles: len(content.DataFiles)}
+	if err := validateContentLimitSummary(summary, limits); err != nil {
+		return summary, err
 	}
-	if len(content.DataFiles) > limits.MaxDataFiles {
-		return fmt.Errorf("RuleData file count %d exceeds the limit of %d", len(content.DataFiles), limits.MaxDataFiles)
-	}
-	total := 0
 	for _, data := range content.DataFiles {
 		if len(data) > pluginMaxRuleDataFileBytes {
-			return fmt.Errorf("a RuleData file of %d bytes exceeds the plugin per-file limit of %d", len(data), pluginMaxRuleDataFileBytes)
+			summary.largestDataFileBytes = len(data)
+			return summary, validateContentLimitSummary(summary, limits)
 		}
-		total += len(data)
+		summary.decodedDataBytes += len(data)
+		if len(data) > summary.largestDataFileBytes {
+			summary.largestDataFileBytes = len(data)
+		}
 	}
-	if total > limits.MaxDecodedDataBytes {
-		return fmt.Errorf("decoded RuleData size %d exceeds the limit of %d", total, limits.MaxDecodedDataBytes)
+	return summary, validateContentLimitSummary(summary, limits)
+}
+
+func validateContentLimitSummary(summary contentLimitSummary, limits xds.Limits) error {
+	if summary.ruleBytes > limits.MaxMessageBytes {
+		return fmt.Errorf("rule text size %d exceeds the message limit of %d", summary.ruleBytes, limits.MaxMessageBytes)
+	}
+	if summary.dataFiles > limits.MaxDataFiles {
+		return fmt.Errorf("RuleData file count %d exceeds the limit of %d", summary.dataFiles, limits.MaxDataFiles)
+	}
+	if summary.largestDataFileBytes > pluginMaxRuleDataFileBytes {
+		return fmt.Errorf("a RuleData file of %d bytes exceeds the plugin per-file limit of %d", summary.largestDataFileBytes, pluginMaxRuleDataFileBytes)
+	}
+	if summary.decodedDataBytes > limits.MaxDecodedDataBytes {
+		return fmt.Errorf("decoded RuleData size %d exceeds the limit of %d", summary.decodedDataBytes, limits.MaxDecodedDataBytes)
 	}
 	return nil
 }

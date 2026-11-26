@@ -293,6 +293,22 @@ func TestFingerprint(t *testing.T) {
 	policyChanged := base
 	policyChanged.EmptyRulesPolicy = assemble.EmptyRulesPolicyAllow
 	assert.NotEqual(t, first, assemble.Fingerprint(policyChanged), "the empty rules policy is part of the identity")
+
+	twoSources := base
+	twoSources.Sources = append(append([]assemble.SourceInput(nil), base.Sources...),
+		assemble.SourceInput{Name: "b", UID: types.UID("b-uid"), Generation: 1})
+	reorderedSources := twoSources
+	reorderedSources.Sources = []assemble.SourceInput{twoSources.Sources[1], twoSources.Sources[0]}
+	assert.NotEqual(t, assemble.Fingerprint(twoSources), assemble.Fingerprint(reorderedSources),
+		"source reference order is part of the identity")
+
+	twoData := base
+	twoData.Data = append(append([]assemble.DataInput(nil), base.Data...),
+		assemble.DataInput{Name: "other", UID: types.UID("other-uid"), Generation: 1})
+	reorderedData := twoData
+	reorderedData.Data = []assemble.DataInput{twoData.Data[1], twoData.Data[0]}
+	assert.NotEqual(t, assemble.Fingerprint(twoData), assemble.Fingerprint(reorderedData),
+		"RuleData reference order is part of the identity")
 }
 
 func TestAssembleRejectsReservedDataFileNames(t *testing.T) {

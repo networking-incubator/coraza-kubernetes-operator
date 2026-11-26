@@ -245,15 +245,17 @@ func TestRenderEngineArtifactReturnsMetadataOnlyAndRechecksSizes(t *testing.T) {
 	}
 	engineKey := types.NamespacedName{Namespace: engine.Namespace, Name: engine.Name}
 	reconciler := &EngineReconciler{Limits: xds.Limits{MaxMessageBytes: 1}}
+	contentLimits, err := summarizeAndValidateContentLimits(content, xds.DefaultLimits())
+	require.NoError(t, err)
 
-	_, failureMessage, err := reconciler.renderEngineArtifact(engineKey, input)
+	_, failureMessage, err := reconciler.renderEngineArtifact(engineKey, input, contentLimits, nil)
 	require.Error(t, err)
 	assert.Contains(t, failureMessage, "ECDS response size")
 	_, cached := reconciler.renderCache.get(engineKey, engineRenderCacheKeyFor(input))
 	assert.False(t, cached, "an oversized miss must not populate the cache")
 
 	reconciler.Limits = xds.Limits{}
-	first, failureMessage, err := reconciler.renderEngineArtifact(engineKey, input)
+	first, failureMessage, err := reconciler.renderEngineArtifact(engineKey, input, contentLimits, nil)
 	require.NoError(t, err, failureMessage)
 	assert.Nil(t, first.Payload)
 	assert.Nil(t, first.Resource)
@@ -266,16 +268,51 @@ func TestRenderEngineArtifactReturnsMetadataOnlyAndRechecksSizes(t *testing.T) {
 	assert.Nil(t, entry.artifact.Resource)
 
 	reconciler.Limits = xds.Limits{MaxMessageBytes: 1}
-	_, failureMessage, err = reconciler.renderEngineArtifact(engineKey, input)
+	_, failureMessage, err = reconciler.renderEngineArtifact(engineKey, input, contentLimits, nil)
 	require.Error(t, err)
 	assert.Contains(t, failureMessage, "ECDS response size")
 
 	reconciler.Limits = xds.Limits{}
-	cachedArtifact, failureMessage, err := reconciler.renderEngineArtifact(engineKey, input)
+	cachedArtifact, failureMessage, err := reconciler.renderEngineArtifact(engineKey, input, contentLimits, nil)
 	require.NoError(t, err, failureMessage)
 	assert.Nil(t, cachedArtifact.Payload)
 	assert.Nil(t, cachedArtifact.Resource)
 	assert.Equal(t, first.Version, cachedArtifact.Version)
+}
+
+func TestRenderEngineArtifactRejectsMismatchedVerifiedEntry(t *testing.T) {
+	engine := newEnvoyFilterTestEngine()
+	input := render.EngineInput{
+		Namespace: engine.Namespace,
+		Name:      engine.Name,
+		UID:       engine.UID,
+		RuleSet: render.RuleSetAccepted{
+			UID:         types.UID("22222222-2222-4222-8222-222222222222"),
+			ContentHash: "sha256:" + strings.Repeat("a", 64),
+		},
+		FailurePolicy: "deny",
+	}
+	engineKey := types.NamespacedName{Namespace: engine.Namespace, Name: engine.Name}
+	entry := engineRenderCacheEntry{
+		key:              engineRenderCacheKeyFor(input),
+		inputFingerprint: "sha256:verified-input",
+		artifact:         render.Artifact{Version: "cached-version"},
+		payloadSize:      10,
+		resourceSize:     20,
+	}
+	reconciler := &EngineReconciler{}
+	reconciler.renderCache.set(engineKey, entry)
+	verifiedEntry, found := reconciler.renderCache.get(engineKey, entry.key)
+	require.True(t, found)
+
+	input.FailurePolicy = "allow"
+	_, failureMessage, err := reconciler.renderEngineArtifact(engineKey, input, contentLimitSummary{}, &verifiedEntry)
+	require.ErrorContains(t, err, "verified render cache entry no longer matches Engine inputs")
+	assert.Contains(t, failureMessage, "Failed to render Engine configuration")
+
+	cachedAfter, found := reconciler.renderCache.get(engineKey, entry.key)
+	require.True(t, found)
+	assert.Equal(t, verifiedEntry, cachedAfter, "a rejected verified entry must not mutate the cache")
 }
 
 func TestEngineRenderCacheKeyInvalidatesRenderingInputs(t *testing.T) {
