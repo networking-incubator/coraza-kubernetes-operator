@@ -275,7 +275,7 @@ wasm.verify: ## Verify the bundle digest; use WASM_VERIFY_RELEASE=1 for release 
 # the pinned Binaryen release; Envoy 1.40+ ignores the stubs.
 CORAZA_RS_REPO ?= https://github.com/networking-incubator/coraza-rs
 # Coraza-rs commit used by source builds and the release tag parity check.
-CORAZA_RS_VERSION ?= 1caf0a5ae9f7ee0cf83899bb58daa6a33a98bff1
+CORAZA_RS_VERSION ?= dd049d20ebe9cf8f6697ea7d43f6ab2ade1000ab
 CORAZA_RS_DIR ?= $(CURDIR)/.cache/coraza-rs
 # Raw module produced by wasm.plugin (ignored by git, outside the source repo).
 WASM_MODULE_OUT ?= $(CURDIR)/.cache/wasm/envoy_coraza.wasm
@@ -315,14 +315,14 @@ wasm.crs: ## Build and bundle a CRS-enabled module from source (demo only; the r
 # and demo download these instead of compiling Rust; source-build targets remain
 # available for CI and development. Digests are pinned so a re-uploaded asset
 # fails instead of shipping bytes the release did not publish.
-WASM_RELEASE_VERSION ?= v0.0.3-rc.2
+WASM_RELEASE_VERSION ?= v0.0.3-rc.3
 # Developer override for testing an artifact built from another commit;
 # release verification still requires CORAZA_RS_VERSION.
 WASM_RELEASE_GIT_SHA ?= $(CORAZA_RS_VERSION)
 WASM_RELEASE_BASE ?= https://github.com/networking-incubator/coraza-rs/releases/download/$(WASM_RELEASE_VERSION)
 WASM_RELEASE_DIR ?= $(CURDIR)/.cache/coraza-rs-release/$(WASM_RELEASE_VERSION)
 WASM_RELEASE_ASSET ?= $(if $(filter 1,$(WASM_CRS)),coraza-rs-crs.wasm,coraza-rs.wasm)
-WASM_RELEASE_SHA256 ?= $(if $(filter 1,$(WASM_CRS)),2a4eb39b390439e4ba68c6c57788c9b12113f2a4ba45aa6ae8148e50d93c6dab,40968f7d237065192819b7984cbf0790374e87321caca448154b124f6b3f97d2)
+WASM_RELEASE_SHA256 ?= $(if $(filter 1,$(WASM_CRS)),5a7d8f6742f55197567165c6aaeb88e55aee6a91f6986ca6c3d804bce14428f6,38aee6fe5eaad07b94a8ff976f2c0488c82c3c1f0458b5fc624e606ddf697d20)
 WASM_RELEASE_CRS_VERSION ?= v4.30.0
 
 .PHONY: wasm.release
